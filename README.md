@@ -1,61 +1,68 @@
 # Fractured Realms Companion
 
-Fractured Realms Companion adds a local browser companion to **Fractured Realms**: an item wiki with sources, uses, stats, and artwork, plus a dependency-aware action planner. It discovers a Steam installation, extracts the current game data, patches the game safely, and launches the companion alongside the game.
+Fractured Realms Companion adds a build-matched item wiki and direct-action planner to **Fractured Realms**. It reads live inventory and skill state, explains dependencies, and runs one game action at a time from a local companion window.
 
-The companion runs on the same machine as the game. It reads the live game store for planning and executes one direct game action at a time. It does **not** read or write the game's native `actionQueue`.
+Everything stays on the same machine and is matched to the installed game build. The companion never reads, writes, or depends on the game's native `actionQueue`.
 
-## Companion preview
+## What it does
 
-### Build-matched item wiki
+- **Items:** Search the current build by item name, then inspect descriptions, values, healing data, artwork, deterministic and rare sources, requirements, and downstream uses.
+- **Skills:** Browse extracted skill actions with levels, intervals, tools, inputs, outputs, rare outputs, and locations. Available actions can be started directly from their table row.
+- **Planner:** Choose an item with the searchable combobox, then set `Until` to `In bag`, `New items`, `Skill level`, or `Minutes`. Goals resolve against live inventory and deterministic projected outputs from earlier runnable plans. Already-held prerequisite quantities remain visible. Blocked goals stay queued and are retried at plan boundaries.
+- **Live queue:** The running plan is immutable. Pending goals can still be added, edited, reordered, removed, or promoted. Choosing `Run now` for the first pending goal stops the current action and starts the promoted goal immediately.
+- **Rare targets:** The planner estimates attempts from drop chance and provisions inputs for each run. If those inputs run out, the executor replans the live remainder until the inventory target is reached. Estimates are probabilistic, and multi-quantity drops may overshoot by one drop batch. Eight consecutive restocks with no target gain mark the goal `rare drops stalled` and skip it so later queued goals can continue.
+- **Executor:** Run, resume, or stop queued steps through the game's direct start and stop controls. The executor verifies starts, reports progress and remaining time, detects game-side action changes, and surfaces refusals and stalls. Required Shop tools are permanent prerequisites and are never auto-crafted.
+- **Local data:** `refresh` extracts the installed build's item, action, skill, XP, building, dig-site, string, and item-art data before applying the companion patch.
 
-Search the current game build for an item, then inspect its guaranteed and rare sources, requirements, and downstream uses.
+### Companion preview
 
-![Ancient Spore item details with sources and uses](docs/screenshots/item-wiki.webp)
-
-### Planner and extracted skill actions
-
-| State-aware action planning | Build-matched skill data |
+| Build-matched item wiki | Extracted skill actions |
 | --- | --- |
-| Queue multiple dependency-aware goals, reorder them, and follow live step progress with remaining-time estimates. | Skill tables expose levels, timings, tools, outputs, and drop rates. |
-| ![Four-action plan for crafting a Minor Fire Rune](docs/screenshots/action-planner.webp) | ![Archaeology actions with levels, intervals, outputs, and tools](docs/screenshots/skill-actions.webp) |
+| Search an item, then inspect its sources, uses, stats, and artwork. | Compare action levels, timings, tools, outputs, and drop rates. |
+| ![Ancient Spore item details with sources and uses](docs/screenshots/item-wiki.webp) | ![Archaeology actions with levels, intervals, outputs, and tools](docs/screenshots/skill-actions.webp) |
 
-## Supported systems and discovery
+### Planner preview
 
-| System | Steam installation searched |
-| --- | --- |
-| Windows | `%ProgramFiles(x86)%\Steam`, `%ProgramFiles%\Steam`, then the per-user Steam registry path |
-| Linux | `~/.local/share/Steam`, `~/.steam/steam`, and Flatpak Steam under `~/.var/app/com.valvesoftware.Steam/.local/share/Steam` |
-| macOS | CrossOver bottle `Steam` by default: `~/Library/Application Support/CrossOver/Bottles/<bottle>/drive_c/Program Files (x86)/Steam` |
+![Minor Fire Rune plan with active Earthwort gathering and queued Copper Vein, Practice Inscription, and rune crafting steps](docs/screenshots/action-planner.webp)
 
-Steam library folders are also read from `libraryfolders.vdf`, so the game may live in an additional library. Use `--steam-root PATH` to select an explicit Steam root (useful for a non-standard installation or a fixture), and `--bottle NAME` to select a different CrossOver bottle on macOS.
+## Requirements
+
+- Fractured Realms Steam app `3789070` must be installed in a Steam library the companion can discover.
+- The npm and npx paths require Node.js 20 or newer.
+- Standalone release binaries include their runtime and require neither Node.js nor Bun.
+- Linux launch support requires the `steam` command or a detected Flatpak Steam installation.
+- macOS discovery targets Steam in a CrossOver bottle and expects the CrossOver `wine` launcher at `/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/bin/wine`. Native macOS Fractured Realms installations are not a discovery target.
 
 ## Installation
 
-Choose either the npm package or the standalone binary. The npm path requires Node.js 20 or newer. The release binaries include their runtime and do not require Node.js or Bun.
+Choose the npm package, npx, or one standalone release binary.
 
-| Path | Install / download | Run |
+| Path | Install or download | Run |
 | --- | --- | --- |
-| npm (global) | `npm install --global fractured-realms-companion` | `fractured-companion <command>` |
-| npx (one-off) | no installation | `npx --yes fractured-realms-companion <command>` |
+| npm, global | `npm install --global fractured-realms-companion` | `fractured-companion <command>` |
+| npx, one-off | No installation | `npx --yes fractured-realms-companion <command>` |
 | Windows x64 | Download [`fractured-companion-windows-x64`](https://github.com/glockyco/fractured-realms-companion/releases/latest) | `fractured-companion-windows-x64.exe <command>` |
-| Linux x64 | Download [`fractured-companion-linux-x64`](https://github.com/glockyco/fractured-realms-companion/releases/latest) | `chmod +x ./fractured-companion-linux-x64 && ./fractured-companion-linux-x64 <command>` |
-| macOS Apple silicon | Download [`fractured-companion-darwin-arm64`](https://github.com/glockyco/fractured-realms-companion/releases/latest) | `chmod +x ./fractured-companion-darwin-arm64 && ./fractured-companion-darwin-arm64 <command>` |
-| macOS Intel | Download [`fractured-companion-darwin-x64`](https://github.com/glockyco/fractured-realms-companion/releases/latest) | `chmod +x ./fractured-companion-darwin-x64 && ./fractured-companion-darwin-x64 <command>` |
+| Linux x64 | Download [`fractured-companion-linux-x64`](https://github.com/glockyco/fractured-realms-companion/releases/latest) | `chmod +x ./fractured-companion-linux-x64` then `./fractured-companion-linux-x64 <command>` |
+| macOS Apple silicon | Download [`fractured-companion-darwin-arm64`](https://github.com/glockyco/fractured-realms-companion/releases/latest) | `chmod +x ./fractured-companion-darwin-arm64` then `./fractured-companion-darwin-arm64 <command>` |
+| macOS Intel | Download [`fractured-companion-darwin-x64`](https://github.com/glockyco/fractured-realms-companion/releases/latest) | `chmod +x ./fractured-companion-darwin-x64` then `./fractured-companion-darwin-x64 <command>` |
 
-The macOS binaries are unsigned. If macOS blocks a binary, try launching it once and approve that specific app in **System Settings → Privacy & Security → Open Anyway**. Do not disable Gatekeeper globally or use a permanent bypass. If your security policy does not allow an unsigned executable, use the npm or npx path instead.
-
-Every release includes `SHA256SUMS`. Verify a downloaded binary before running it:
+Every release includes `SHA256SUMS`. Download it beside the binary, then verify before running:
 
 ```sh
 # Linux
 sha256sum -c SHA256SUMS
+
 # macOS
 shasum -a 256 -c SHA256SUMS
 ```
 
+The macOS binaries are unsigned. If macOS blocks one, try launching it once, open **System Settings → Privacy & Security**, and choose **Open Anyway** for that specific binary. Do not disable Gatekeeper globally or apply a permanent bypass. If local policy prohibits unsigned executables, use npm or npx instead.
+
 ## Quickstart
 
-Run these commands from any directory. `doctor` is read-only and reports the checks that would block launch. `--json` emits parseable rows for scripts.
+These examples use the globally installed command. An installed package, an npx invocation, or a downloaded binary invoked from `PATH` or by absolute path can be run from any directory.
+
+Treat the first check as a diagnostic sequence:
 
 ```sh
 fractured-companion doctor --json
@@ -64,21 +71,26 @@ fractured-companion doctor
 fractured-companion launch
 ```
 
-`launch` starts Fractured Realms with the companion flag, waits for the local host to become healthy, and opens `http://127.0.0.1:48766/`. To launch without opening a browser automatically:
+The first `doctor --json` is read-only. Before the first refresh it may report expected failures for missing extracted data, patch metadata, or companion state. `refresh` then extracts the current game data and patches the archive by default. Run `doctor` again and proceed to `launch` only when it reports no blocking failures.
 
-```sh
-fractured-companion launch --no-open
-```
+`launch` runs the already-refreshed companion. It starts Fractured Realms with the companion flag, waits for the local host to become healthy, and opens `http://127.0.0.1:48766/`. It does not perform a refresh.
 
-Launching is idempotent: if a companion on the current revision is already running, `launch` reuses it instead of starting a second copy. When the game is running an outdated payload, cycle it onto a fresh build with:
+## Commands and options
 
-```sh
-fractured-companion relaunch
-```
+| Command | Behavior | Command-specific option |
+| --- | --- | --- |
+| `doctor` | Read-only diagnostics for the install, state, patch, and local host | `--json` emits diagnostic rows as JSON |
+| `refresh` | Extract current game data and update the companion patch | `--no-patch` extracts and validates without changing the archive |
+| `restore` | Restore the verified original game archive | None |
+| `launch` | Run the already-refreshed companion | `--no-open` leaves the browser closed |
+| `relaunch` | Quit the project-owned running companion, refresh, and launch | `--no-open` leaves the browser closed |
 
-`relaunch` quits the running companion, refreshes the data pack and patch, and launches again. It accepts the same options as `launch`, including `--no-open`.
+Common options must follow the command:
 
-Useful options must follow their command:
+- `--steam-root PATH` selects an explicit Steam root.
+- `--bottle NAME` selects a CrossOver bottle on macOS. The default is `Steam`.
+
+Examples:
 
 ```sh
 fractured-companion doctor --steam-root "/path/to/Steam" --json
@@ -86,50 +98,36 @@ fractured-companion refresh --steam-root "/path/to/Steam" --no-patch
 fractured-companion launch --bottle MySteam --no-open
 ```
 
-`refresh --no-patch` extracts and validates the data pack without changing the game archive. To undo a companion patch and restore the verified original archive:
+Global help and version output are also available:
 
 ```sh
-fractured-companion restore
-```
-
-`--version` and `--help` are also available:
-
-```sh
-fractured-companion --version
 fractured-companion --help
+fractured-companion --version
 ```
 
-## What the companion does
+## Steam discovery
 
-- **Items:** search by item name, then view descriptions, values, healing data, icons, deterministic and rare sources, and uses.
-- **Skills:** browse extracted skill actions and their requirements, intervals, inputs, outputs, and locations. Start an available action directly from its table row without building a plan.
-- **Planner:** find targets with the searchable item picker, add multiple quantity goals, and reorder or remove them before starting. Each queued plan resolves against current inventory plus deterministic output from earlier plans. The queue keeps already-satisfied prerequisites visible alongside required actions, estimated duration, and live produced/target progress while running. It checks skill levels, permanent Shop tool unlocks, learned recipes, glyph patterns, Prayer requirements, charted maps, and bag capacity, then explains anything that blocks a plan.
-- **Executor:** runs queued steps directly through the game's own start/stop action controls, one action at a time. It verifies starts, detects outside action changes, supports resume, reports queue and step progress with time remaining, and stops on a stalled action or completion. Stopping keeps the queue available to restart. Rare outputs are never treated as guaranteed production, and tools are not auto-crafted.
-- **Layout:** drag the companion window by its title and drag the Companion button itself. Positions persist locally and are clamped back inside the viewport after a resize.
-- **Game data:** `refresh` re-extracts the current build's item, action, skill, XP, building, dig-site, string, and item-art data before patching.
+The companion checks these default Steam roots, then follows additional libraries from `steamapps/libraryfolders.vdf`.
 
-## Safety model and local state
+| System | Steam installation searched |
+| --- | --- |
+| Windows | `%ProgramFiles(x86)%\Steam`, `%ProgramFiles%\Steam`, then the current user's Steam registry path |
+| Linux | `~/.local/share/Steam`, `~/.steam/steam`, and `~/.var/app/com.valvesoftware.Steam/.local/share/Steam` |
+| macOS | `~/Library/Application Support/CrossOver/Bottles/<bottle>/drive_c/Program Files (x86)/Steam` |
 
-- The browser host binds only to `127.0.0.1:48766`. API requests require the per-process token plus matching `Host`/`Origin` headers, and request bodies are bounded to 64 KiB. A port occupied by another service is a blocking doctor failure.
-- Patching is fail-closed. The tool fingerprints the archive, refuses the predecessor `crossover-electron-bridge` marker, rejects unexpected source anchors, stages changes, and verifies the installed bytes before recording success. Concurrent archive changes, unknown state, and metadata mismatches stop the operation rather than overwriting them.
-- State is kept separately from the game install: `$XDG_STATE_HOME/fractured-realms-companion` (or `~/.local/state/fractured-realms-companion`) on macOS/Linux, and `%LOCALAPPDATA%\fractured-realms-companion` on Windows. It contains the extracted pack, patch metadata, and a hash-named immutable original archive backup.
-- `restore` requires matching Steam build metadata, the companion marker, the installed patched fingerprint, and a verified original backup. Metadata and the backup are retained after restore so the state remains auditable.
-- The achievement route is local and token-authenticated. It delegates to the native Steamworks client, rejects non-string achievement names, and reports `no-client` or native errors instead of pretending an achievement was activated. It does not replace Steam or fabricate achievement state.
+Use `--steam-root PATH` for a non-standard root. On macOS, use `--bottle NAME` when Steam is not in the default `Steam` bottle.
 
-### Migrating from crossover-electron-bridge
+## Updating, relaunching, and restoring
 
-If the old bridge patched Fractured Realms, restore its archive before using this tool. Run the old command from the `crossover-browser-games` checkout:
+If `launch` reports that a companion with an outdated revision is running, use:
 
 ```sh
-cd ~/Projects/crossover-browser-games
-PYTHONPATH=src python3 -m crossover_electron_bridge restore fractured-realms
+fractured-companion relaunch
 ```
 
-Then return to this tool and run `fractured-companion refresh`. The companion intentionally refuses to migrate or overwrite an archive carrying the old bridge marker.
+`relaunch` requests shutdown only from the project-owned companion, waits up to 30 seconds, refreshes, and launches. If the game does not exit within that shutdown window, close it manually and retry.
 
-### After a Steam game update
-
-Steam updates replace the game archive and its build ID. After every update, run:
+After a Steam update replaces the archive or build ID, run:
 
 ```sh
 fractured-companion refresh
@@ -137,11 +135,48 @@ fractured-companion doctor
 fractured-companion launch
 ```
 
-The refresh extracts the new data, publishes a validated pack, and patches the new archive. If the game's source anchors changed, it stops before writing an unsafe patch. Do not force the patch against that build.
+If changed source anchors make the new build unsafe to patch, `refresh` stops before writing. Do not force the patch.
+
+To restore the original archive:
+
+```sh
+fractured-companion restore
+```
+
+Restore is guarded by the Steam build metadata, companion marker, installed patched fingerprint, and verified immutable backup. It refuses mismatched or unknown state.
+
+### External legacy prerequisite
+
+If the separate `crossover-electron-bridge` project previously patched Fractured Realms, restore that archive from its own `crossover-browser-games` checkout before using this package:
+
+```sh
+cd ~/Projects/crossover-browser-games
+PYTHONPATH=src python3 -m crossover_electron_bridge restore fractured-realms
+```
+
+Then return to this package and run `fractured-companion refresh`. This package does not own the legacy command and intentionally refuses to overwrite an archive carrying the old bridge marker.
+
+## Safety and local state
+
+- The browser host binds only to `127.0.0.1:48766`. API requests require a per-process token and matching `Host` and `Origin` headers. Request bodies are limited to 64 KiB. A foreign service on that port is a blocking diagnostic failure.
+- Patching fails closed. The companion fingerprints the archive, rejects foreign markers and unexpected or ambiguous source anchors, stages changes, verifies installed bytes, and records exact metadata. Concurrent changes or metadata mismatches stop the operation.
+- The original archive backup is immutable and hash-named. `restore` revalidates metadata, fingerprints, marker ownership, Steam build identity, and backup bytes before writing.
+- State is separate from the game install. Windows uses `%LOCALAPPDATA%\fractured-realms-companion`. Other platforms use `$XDG_STATE_HOME/fractured-realms-companion` or `~/.local/state/fractured-realms-companion`.
+- The local achievement route delegates to the native Steamworks client. It validates achievement names and reports missing-client or native failures instead of fabricating achievement state.
+- Direct execution uses only the game's current action controls. It never reads, writes, displays, or depends on the native `actionQueue`.
+
+## Limitations
+
+- Extraction and patching are build-sensitive. A changed game bundle or entrypoint anchor requires a compatibility update before that build can be patched.
+- Rare-attempt counts and completion times are estimates, not guarantees. A multi-quantity rare drop may exceed the requested inventory target by one drop batch.
+- Required Shop tools are permanent unlocks and must already be purchased. The planner does not auto-craft them.
+- A new item plan may be blocked when the bag has no free slot. A direct action may also be refused by the game. A persistent outside action pauses execution, and an ordinary action with no progress reports a stall. The companion surfaces these states rather than bypassing game checks.
+- Starting a planned action stops active combat.
+- macOS support targets Steam in CrossOver. The standalone macOS binaries are unsigned.
 
 ## Development
 
-Use Node.js 24 for the development workflow (the CI matrix runs Node 24). Runtime npm dependencies are intentionally zero. TypeScript and Node type definitions are development-only.
+Use Node.js 24 for development, matching CI:
 
 ```sh
 npm ci
@@ -150,19 +185,9 @@ npm run build
 npx tsc --noEmit
 ```
 
-`npm test` embeds the runtime assets before running the Node test suite. `npm run build` emits the npm package under `dist/`. Release binaries are compiled from the same CLI sources with Bun in the release workflow.
+`npm test` and `npm run build` run `scripts/embed-runtime.mjs` first, which embeds the runtime and overlay sources. Runtime npm dependencies are intentionally absent. See [AGENTS.md](AGENTS.md) for the scoped coding-agent workflow and repository safety boundaries.
 
-### Maintainer release note
-
-Tagging a release as `v*` builds the four platform binaries, generates `SHA256SUMS`, and publishes the GitHub Release. The separate npm job uses provenance and public access. Configure the repository's `NPM_TOKEN` secret once to enable npm publishing. When it is absent, the release job skips npm publishing with a clear notice.
-
-## Limitations
-
-- Game data extraction is build-sensitive. A changed game bundle or entrypoint anchor requires a compatibility update before that build can be patched.
-- The planner uses deterministic outputs only. Rare drops are shown as information and can block deterministic planning. Required Shop tools are permanent unlocks and must already be purchased.
-- Starting a planned action stops active combat. Dungeons, raids, and a full bag can refuse training. The executor surfaces the refusal and never bypasses those game checks.
-- macOS support targets Steam running in CrossOver and uses the named bottle. Native macOS Fractured Realms installation is not a discovery target.
-- Standalone macOS binaries are unsigned. npm/npx remains the supported alternative when local security policy blocks them.
+The source of truth for releases is [`.github/workflows/release.yml`](.github/workflows/release.yml). `v*` tags build four standalone targets and `SHA256SUMS`. npm publishing is conditional on `NPM_TOKEN` and uses provenance.
 
 ## License
 

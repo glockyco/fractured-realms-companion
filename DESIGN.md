@@ -85,7 +85,7 @@ The panel is flat internally: dividers and three neutral tones establish hierarc
 - **Search:** native search input with a 140 ms debounce, label/ID matching, visible result count, and a 120-row initial cap.
 - **Item browser:** selected row and complete detail show description, value, healing, icon only when art exists, deterministic and rare sources, and action/building uses.
 - **Skill table:** native skill selector plus semantic captioned table for action level, interval, inputs, outputs, rare outputs, and tool requirements.
-- **Planner:** native item and quantity controls lead to ordered steps with blockers and tool warnings. During starting, running, and paused execution, those controls, Resolve, and every per-item Plan control remain disabled so the visible plan and executor status stay authoritative. Run, Resume, and Stop call the direct executor; live phase, current step, and message use a polite atomic status region.
+- **Planner:** the item combobox and `Until` selector lead to ordered goals using `In bag`, `New items`, `Skill level`, or `Minutes`, with queued prerequisites, blockers, and live progress visible. The current running plan is immutable, while pending goals may be added, edited, reordered, removed, or promoted during execution. `Run now` promotion interrupts the current action and starts the promoted goal. Run, Resume, and Stop call the direct executor; live phase, current step, and message use a polite atomic status region.
 - **Buttons and controls:** one radius, height, border, focus ring, hover, active, disabled, and error vocabulary. Icons are stroked inline SVGs; no emoji or ornamental assets are used.
 
 No component reads, writes, displays, or depends on the game's native queued-action system.
