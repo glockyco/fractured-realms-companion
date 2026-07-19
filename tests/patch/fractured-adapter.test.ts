@@ -75,7 +75,8 @@ const host = { start(config) { events.push('hostStart'); global.hostConfig = con
 const originalLoad = Module._load;
 Module._load = function(request, parent, isMain) {
   if (request === 'electron') return { app, BrowserWindow, ipcMain, shell };
-  if (request === 'steamworks.js' || request.includes('companion-steamworks-0.4.0-v1/index.js')) return steamworks;
+  const normalizedRequest = request.split(path.sep).join('/');
+  if (request === 'steamworks.js' || normalizedRequest.includes('companion-steamworks-0.4.0-v1/index.js')) return steamworks;
   if (request === './companion-host.cjs') return host;
   if (request === './companion-adapter.cjs') return {};
   return originalLoad.call(this, request, parent, isMain);

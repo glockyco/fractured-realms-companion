@@ -3,7 +3,6 @@ import { createServer, request } from 'node:http';
 import { createRequire } from 'node:module';
 import * as fs from 'node:fs';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
@@ -97,7 +96,7 @@ function createConfig(root: string, port: number, companion: unknown = OMIT_COMP
 }
 
 function createAssets(): string {
-  const root = mkdtempSync(path.join(tmpdir(), 'fractured-companion-host-'));
+  const root = mkdtempSync(path.join(runtimeDirectory, 'fractured-companion-host-'));
   writeFileSync(
     path.join(root, 'index.html'),
     '<!doctype html><html><head><script type="module" src="/app.js"></script></head><body></body></html>',

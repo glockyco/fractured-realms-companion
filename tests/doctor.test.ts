@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -147,8 +147,14 @@ test('macOS requires a regular executable CrossOver wine binary', async () => {
   const f = fixture();
   const wine = join(f.root, 'wine');
   writeFileSync(wine, '#!/bin/sh\n');
-  chmodSync(wine, 0o755);
-  const result = await runDoctor(base(f, { platform: 'darwin', discoverInstall: () => ({ ...f.install, platform: 'darwin', winePath: wine }) }));
+  const fileSystem = {
+    lstatSync(path: string) {
+      const stat = lstatSync(path);
+      if (path === wine) stat.mode |= 0o111;
+      return stat;
+    },
+  };
+  const result = await runDoctor(base(f, { platform: 'darwin', fileSystem, discoverInstall: () => ({ ...f.install, platform: 'darwin', winePath: wine }) }));
   assert.equal(result.rows.find((value) => value.check === 'wine')?.status, 'PASS');
   const missing = await runDoctor(base(f, { platform: 'darwin', discoverInstall: () => ({ ...f.install, platform: 'darwin', winePath: join(f.root, 'missing-wine') }) }));
   assert.equal(missing.rows.find((value) => value.check === 'wine')?.status, 'FAIL');

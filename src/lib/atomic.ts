@@ -72,10 +72,20 @@ export function atomicWriteText(path: string, text: string, mode = 0o600): void 
 function copyToTemporary(source: string, temporary: string): void {
   copyFileSync(source, temporary);
   const sourceStat = statSync(source);
-  chmodSync(temporary, sourceStat.mode & 0o7777);
-  try { utimesSync(temporary, sourceStat.atime, sourceStat.mtime); } catch { /* unsupported timestamp precision */ }
-  const fd = openSync(temporary, O_RDONLY);
-  try { flushFd(fd); } finally { closeSync(fd); }
+  const sourceMode = sourceStat.mode & 0o7777;
+  // copyFileSync may carry a read-only attribute to the temporary path. Make
+  // it writable before opening the handle, then restore the source mode below.
+  chmodSync(temporary, sourceMode | 0o200);
+  // Windows requires a writable handle for fsyncSync. Open before restoring the
+  // source mode so read-only sources still copy successfully on every platform.
+  const fd = openSync(temporary, O_WRONLY);
+  try {
+    chmodSync(temporary, sourceMode);
+    try { utimesSync(temporary, sourceStat.atime, sourceStat.mtime); } catch { /* unsupported timestamp precision */ }
+    flushFd(fd);
+  } finally {
+    closeSync(fd);
+  }
 }
 
 /** Copy a file through a durable same-directory replacement. */

@@ -114,7 +114,7 @@ test('atomically copies with source metadata and replaces destination', () => {
   const source = join(directory, 'source');
   const destination = join(directory, 'destination');
   writeFileSync(source, 'source bytes');
-  chmodSync(source, 0o640);
+  chmodSync(source, 0o440);
   const timestamp = new Date(1_700_000_000_000);
   utimesSync(source, timestamp, timestamp);
   writeFileSync(destination, 'old bytes');
