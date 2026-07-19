@@ -34,6 +34,7 @@ const ICONS = Object.freeze({
   remove: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>',
   edit: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19.5 8.5a2.1 2.1 0 0 0-3-3L5 17Z"/><path d="m13.5 6.5 3 3"/></svg>',
   chevron: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg>',
+  clear: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"/><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/><path d="m6 7 1 13h10l1-13"/></svg>',
 });
 
 const CSS = `
@@ -174,6 +175,11 @@ svg {
   transition: color 180ms var(--fr-ease-out), background-color 180ms var(--fr-ease-out);
 }
 .icon-button:hover { background: var(--fr-neutral-900); color: var(--fr-neutral-100); }
+.tab-actions { display: flex; gap: var(--fr-s1); align-items: center; margin-left: auto; padding-bottom: 2px; }
+.icon-button.accent:not(:disabled) { color: var(--fr-harbor-400); }
+.icon-button.danger:not(:disabled) { color: var(--fr-danger-400); }
+.icon-button.attention { color: var(--fr-harbor-400); animation: attention 1.6s ease-in-out infinite; }
+@keyframes attention { 50% { transform: scale(1.15); } }
 .banner {
   display: flex;
   align-items: flex-start;
@@ -363,7 +369,7 @@ tbody tr:last-child td { border-bottom: 0; }
 .step-note svg { margin-top: 0.1rem; }
 .queue-header { display: flex; align-items: center; justify-content: space-between; gap: var(--fr-s3); margin-top: var(--fr-s5); }
 .queue-header h3 { margin: 0; }
-.queue-total { color: var(--fr-neutral-300); font-size: 0.75rem; }
+.queue-total { color: var(--fr-neutral-300); font-size: 0.75rem; white-space: normal; text-align: right; }
 .queue-list { margin: var(--fr-s2) 0 0; padding: 0; list-style: none; border-top: 1px solid var(--fr-neutral-700); }
 .queue-plan { padding: var(--fr-s3) 0; border-bottom: 1px solid var(--fr-neutral-700); }
 .queue-plan[data-state="active"] { background: var(--fr-harbor-950); margin-inline: calc(-1 * var(--fr-s2)); padding-inline: var(--fr-s2); }
@@ -394,10 +400,6 @@ tbody tr:last-child td { border-bottom: 0; }
 .executor {
   position: sticky;
   bottom: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: var(--fr-s3);
   margin: var(--fr-s4) calc(-1 * var(--fr-s4)) calc(-1 * var(--fr-s4));
   padding: var(--fr-s3) var(--fr-s4);
   border-top: 1px solid var(--fr-neutral-700);
@@ -406,8 +408,6 @@ tbody tr:last-child td { border-bottom: 0; }
 .executor-status { min-width: 0; }
 .executor-status strong { display: block; }
 .executor-status p { margin: var(--fr-s1) 0 0; overflow: hidden; color: var(--fr-neutral-300); font-size: 0.75rem; text-overflow: ellipsis; white-space: nowrap; }
-.executor-note { margin-top: var(--fr-s2) !important; white-space: normal !important; }
-.executor-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--fr-s2); }
 .loading-line { height: 0.25rem; overflow: hidden; background: var(--fr-neutral-900); }
 .compact-strip { display: none; }
 .panel[data-compact="true"] {
@@ -422,7 +422,7 @@ tbody tr:last-child td { border-bottom: 0; }
 .panel[data-compact="true"] .loading-line { display: none; }
 .panel[data-compact="true"] .compact-strip {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
   gap: var(--fr-s2);
   padding: var(--fr-s3) var(--fr-s4);
@@ -439,14 +439,12 @@ tbody tr:last-child td { border-bottom: 0; }
   .detail { height: 52%; }
   .plan-form { grid-template-columns: minmax(0, 1fr) 5rem; }
   .plan-form .button { grid-column: 1 / -1; }
-  .executor { grid-template-columns: 1fr; }
-  .executor-actions { justify-content: stretch; }
-  .executor-actions .button { flex: 1 1 auto; }
   .skills-view, .plan-view, .detail { padding: var(--fr-s3); }
 }
 @media (max-width: 22rem) {
   .panel { border-radius: var(--fr-radius-md); }
   .tab { flex: 1 1 0; padding-inline: var(--fr-s2); }
+  .tab-actions { flex: 0 0 auto; }
   .toolbar { padding: var(--fr-s2); }
   .launcher-label { max-width: 12rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 }
@@ -806,6 +804,14 @@ export function createOverlayShell(documentRef) {
     return button;
   });
 
+  const queueControls = makeElement(documentRef, 'div', {
+    class: 'tab-actions', role: 'group', 'aria-label': 'Queue controls',
+    html: `<button class="icon-button accent" id="fr-run" type="button" title="Start queue — stops your current game action" aria-label="Start queue" disabled>${ICONS.play}</button>`
+      + `<button class="icon-button" id="fr-resume" type="button" title="Resume queue" aria-label="Resume queue" hidden>${ICONS.resume}</button>`
+      + `<button class="icon-button danger" id="fr-stop" type="button" title="Stop queue" aria-label="Stop queue" disabled>${ICONS.stop}</button>`
+      + `<button class="icon-button" id="fr-clear" type="button" title="Clear queue" aria-label="Clear queue" disabled>${ICONS.clear}</button>`,
+  });
+  tabs.append(queueControls);
   const tabpanels = makeElement(documentRef, 'div', { class: 'tabpanels' });
   const panels = Object.fromEntries(TAB_IDS.map((tabId, index) => {
     const region = makeElement(documentRef, 'div', {
@@ -818,7 +824,7 @@ export function createOverlayShell(documentRef) {
   }));
   const compactStrip = makeElement(documentRef, 'div', {
     class: 'compact-strip',
-    html: '<strong id="fr-compact-phase"></strong><p id="fr-compact-message"></p><progress class="executor-progress" id="fr-compact-progress" max="1" value="0"></progress><button class="button danger" id="fr-compact-stop" type="button">Stop</button>',
+    html: '<strong id="fr-compact-phase"></strong><p id="fr-compact-message"></p><progress class="executor-progress" id="fr-compact-progress" max="1" value="0"></progress><button class="icon-button" id="fr-compact-resume" type="button" title="Resume queue" aria-label="Resume queue" hidden>' + ICONS.resume + '</button><button class="button danger" id="fr-compact-stop" type="button">Stop</button>',
   });
   panel.append(header, loading, error, tabs, tabpanels, compactStrip);
   shadow.append(style, launcher, panel);
@@ -949,7 +955,7 @@ export function createOverlayShell(documentRef) {
     if (!panel.hidden) fitPanel();
   });
 
-  return { host, shadow, launcher, panel, header, identity, compactToggle, compactStrip, close, loading, error, tabs, tabButtons, panels, setOpen, setCompact, selectTab, showError };
+  return { host, shadow, launcher, panel, header, identity, compactToggle, compactStrip, close, loading, error, tabs, tabButtons, queueControls, panels, setOpen, setCompact, selectTab, showError };
 }
 
 function blockedText(blocked) {
@@ -1020,6 +1026,7 @@ function createApplication(shell, datasets, api) {
   const compactPhase = shell.compactStrip?.querySelector?.('#fr-compact-phase');
   const compactMessage = shell.compactStrip?.querySelector?.('#fr-compact-message');
   const compactProgress = shell.compactStrip?.querySelector?.('#fr-compact-progress');
+  const compactResume = shell.compactStrip?.querySelector?.('#fr-compact-resume');
   const compactStop = shell.compactStrip?.querySelector?.('#fr-compact-stop');
 
   shell.loading.hidden = true;
@@ -1191,10 +1198,7 @@ function createApplication(shell, datasets, api) {
       </form>
       <div class="combobox-popover" id="fr-plan-options" role="listbox" aria-label="Matching items" hidden></div>
       <div id="fr-plan-result"><div class="empty">Add an item to begin a queue. Each plan is resolved against the output of plans before it.</div></div>
-      <div class="executor" aria-label="Queued action controls">
-        <div class="executor-status" role="status" aria-live="polite" aria-atomic="true"><strong id="fr-executor-phase">Queue ready</strong><p id="fr-executor-message">Add one or more plans to the queue.</p><progress class="executor-progress" id="fr-executor-progress" max="1" value="0" aria-label="Queue progress"></progress><p class="executor-note" id="fr-executor-note">Starting the queue stops active combat. The companion runs one direct action at a time.</p></div>
-        <div class="executor-actions"><button class="button primary" id="fr-run" type="button" disabled>${ICONS.play}Start queue</button><button class="button" id="fr-resume" type="button" hidden>${ICONS.resume}Resume</button><button class="button danger" id="fr-stop" type="button" disabled>${ICONS.stop}Stop queue</button><button class="button" id="fr-clear" type="button" disabled>Clear</button></div>
-      </div>
+      <div class="executor" aria-label="Queue status"><div class="executor-status" role="status" aria-live="polite" aria-atomic="true"><strong id="fr-executor-phase">Ready</strong><p id="fr-executor-message">Add one or more plans to the queue.</p><progress class="executor-progress" id="fr-executor-progress" max="1" value="0" aria-label="Queue progress"></progress></div></div>
     </div>`;
   const planForm = planPanel.querySelector('#fr-plan-form');
   const planItem = planPanel.querySelector('#fr-plan-item');
@@ -1203,11 +1207,10 @@ function createApplication(shell, datasets, api) {
   const executorPhase = planPanel.querySelector('#fr-executor-phase');
   const executorMessage = planPanel.querySelector('#fr-executor-message');
   const executorProgress = planPanel.querySelector('#fr-executor-progress');
-  const executorNote = planPanel.querySelector('#fr-executor-note');
-  const runButton = planPanel.querySelector('#fr-run');
-  const resumeButton = planPanel.querySelector('#fr-resume');
-  const stopButton = planPanel.querySelector('#fr-stop');
-  const clearButton = planPanel.querySelector('#fr-clear');
+  const runButton = shell.queueControls.querySelector('#fr-run');
+  const resumeButton = shell.queueControls.querySelector('#fr-resume');
+  const stopButton = shell.queueControls.querySelector('#fr-stop');
+  const clearButton = shell.queueControls.querySelector('#fr-clear');
   const planOptions = planPanel.querySelector('#fr-plan-options');
   shell.shadow.append(planOptions);
   let planTargetResults = [];
@@ -1514,14 +1517,13 @@ function createApplication(shell, datasets, api) {
     for (const control of skillTable.querySelectorAll?.('[data-start-action]') || []) control.disabled = locked;
     if (locked) closePlanTargets();
     runButton.disabled = locked || status.phase === 'complete' || !queueIsRunnable();
-    runButton.innerHTML = `${ICONS.play}Start ${state.planQueue.length > 1 ? `${state.planQueue.length}-plan ` : ''}queue`;
     resumeButton.hidden = status.phase !== 'paused';
+    resumeButton.classList?.toggle?.('attention', status.phase === 'paused');
     stopButton.disabled = !locked;
     clearButton.disabled = locked ? !view.hasPending : !state.planQueue.length;
-    clearButton.textContent = locked ? 'Clear pending' : 'Clear';
-    executorNote.textContent = locked
-      ? 'Stop ends the current game action and keeps this queue available to restart.'
-      : 'Starting the queue stops active combat. The companion runs one direct action at a time.';
+    const clearLabel = locked ? 'Clear pending plans' : 'Clear queue';
+    clearButton.title = clearLabel;
+    clearButton.setAttribute('aria-label', clearLabel);
     const label = shell.launcher.querySelector?.('#fr-launcher-label') ?? shell.shadow.querySelector?.('#fr-launcher-label');
     if (label) label.textContent = described.launcherText;
     if (compactPhase) compactPhase.textContent = described.phaseText;
@@ -1530,6 +1532,7 @@ function createApplication(shell, datasets, api) {
       compactProgress.max = executorProgress.max;
       compactProgress.value = executorProgress.value;
     }
+    if (compactResume) compactResume.hidden = status.phase !== 'paused';
     if (compactStop) compactStop.disabled = !locked;
   }
 
@@ -1583,7 +1586,11 @@ function createApplication(shell, datasets, api) {
       const upDisabled = !mutable || planIndex === 0 || (locked && planIndex - 1 <= currentPlanIndex);
       const downDisabled = !mutable || planIndex === state.planQueue.length - 1;
       const editDisabled = !mutable;
-      return `<li class="queue-plan" data-state="${planState}" data-plan-id="${escapeHtml(entry.id)}"><div class="queue-plan-top"><span class="queue-plan-index data">${planIndex + 1}</span><span class="queue-plan-title">${escapeHtml(label)} <span class="data">×${escapeHtml(entry.qty)}</span></span><span class="queue-plan-meta">${steps.length} ${steps.length === 1 ? 'action' : 'actions'}${prerequisites.length ? ` · ${prerequisites.length} ready` : ''} · about ${escapeHtml(formatDuration(entry.estimateMs))}</span><span class="queue-plan-actions"><button class="icon-button" type="button" data-queue-action="up" data-plan-id="${escapeHtml(entry.id)}" aria-label="Move ${escapeHtml(label)} up" title="Move up"${upDisabled ? ' disabled' : ''}>${ICONS.up}</button><button class="icon-button" type="button" data-queue-action="down" data-plan-id="${escapeHtml(entry.id)}" aria-label="Move ${escapeHtml(label)} down" title="Move down"${downDisabled ? ' disabled' : ''}>${ICONS.down}</button><button class="icon-button" type="button" data-queue-action="remove" data-plan-id="${escapeHtml(entry.id)}" aria-label="Remove ${escapeHtml(label)}" title="Remove"${editDisabled ? ' disabled' : ''}>${ICONS.remove}</button><button class="icon-button" type="button" data-queue-action="edit" data-plan-id="${escapeHtml(entry.id)}" aria-label="Edit ${escapeHtml(label)}" title="Edit"${editDisabled ? ' disabled' : ''}>${ICONS.edit}</button></span></div><ol class="queue-steps">${prerequisiteRows}${stepRows || (!prerequisiteRows ? '<li class="queue-step" data-state="complete"><span class="queue-step-marker">✓</span><span>Already satisfied by current inventory</span><span></span></li>' : '')}</ol></li>`;
+      const actionLabel = `${steps.length} ${steps.length === 1 ? 'action' : 'actions'}`;
+      const planMeta = planState === 'complete'
+        ? `${actionLabel} · done`
+        : `${actionLabel}${prerequisites.length ? ` · ${prerequisites.length} ready` : ''} · about ${escapeHtml(formatDuration(entry.estimateMs))}`;
+      return `<li class="queue-plan" data-state="${planState}" data-plan-id="${escapeHtml(entry.id)}"><div class="queue-plan-top"><span class="queue-plan-index data">${planIndex + 1}</span><span class="queue-plan-title">${escapeHtml(label)} <span class="data">×${escapeHtml(entry.qty)}</span></span><span class="queue-plan-meta">${planMeta}</span><span class="queue-plan-actions"><button class="icon-button" type="button" data-queue-action="up" data-plan-id="${escapeHtml(entry.id)}" aria-label="Move ${escapeHtml(label)} up" title="Move up"${upDisabled ? ' disabled' : ''}>${ICONS.up}</button><button class="icon-button" type="button" data-queue-action="down" data-plan-id="${escapeHtml(entry.id)}" aria-label="Move ${escapeHtml(label)} down" title="Move down"${downDisabled ? ' disabled' : ''}>${ICONS.down}</button><button class="icon-button" type="button" data-queue-action="remove" data-plan-id="${escapeHtml(entry.id)}" aria-label="Remove ${escapeHtml(label)}" title="Remove"${editDisabled ? ' disabled' : ''}>${ICONS.remove}</button><button class="icon-button" type="button" data-queue-action="edit" data-plan-id="${escapeHtml(entry.id)}" aria-label="Edit ${escapeHtml(label)}" title="Edit"${editDisabled ? ' disabled' : ''}>${ICONS.edit}</button></span></div><ol class="queue-steps">${prerequisiteRows}${stepRows || (!prerequisiteRows ? '<li class="queue-step" data-state="complete"><span class="queue-step-marker">✓</span><span>Already satisfied by current inventory</span><span></span></li>' : '')}</ol></li>`;
     }).join('');
     const notice = renderPlanNotice(state.planNotice);
     const queueFinish = isExecutionLocked(status.phase) && Number(status.remainingMs) > 0
@@ -1702,6 +1709,7 @@ function createApplication(shell, datasets, api) {
   });
   resumeButton.addEventListener('click', () => executor.resume());
   stopButton.addEventListener('click', () => executor.stop());
+  compactResume?.addEventListener('click', () => executor.resume());
   compactStop?.addEventListener('click', () => executor.stop());
   clearButton.addEventListener('click', () => {
     const locked = isExecutionLocked(state.executorStatus?.phase);

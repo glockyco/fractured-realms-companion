@@ -294,6 +294,17 @@ test('compact mode toggles and persists its panel preference', () => {
   assert.equal(shell.panel.style.height, '600px');
 });
 
+test('compact strip exposes a resume control hidden unless paused', async () => {
+  const document = new FakeDocument();
+  const result = await bootOverlay({ document, window: { __frCompanion: api() }, fetch: fetchFor(datasets()) });
+  const resume = result.shell.compactStrip.querySelector('#fr-compact-resume');
+  assert.ok(resume);
+  assert.equal(resume.hidden, true);
+  result.app.state.executorStatus = { phase: 'paused', currentStep: 0, message: 'paused' };
+  result.app.renderPlan();
+  assert.equal(resume.hidden, false);
+});
+
 
 test('queued plans project earlier deterministic outputs and estimate duration', () => {
   const goals = [
@@ -384,7 +395,8 @@ test('queued planner appends multiple goals against prior output', async () => {
   assert.deepEqual(result.app.state.executionSteps.map((step) => step.actionId), ['chop_log', 'make_plank']);
   assert.match(panel.querySelector('#fr-plan-result').innerHTML, /Prerequisite satisfied/);
   assert.match(panel.querySelector('#fr-plan-result').innerHTML, /Harbor Log/);
-  assert.match(panel.querySelector('#fr-run').innerHTML, /Start 2-plan queue/);
+  assert.ok(result.shell.queueControls.querySelector('#fr-run'));
+  assert.equal(result.shell.queueControls.querySelector('#fr-run').disabled, false);
 
   const planResult = panel.querySelector('#fr-plan-result');
   planResult.dispatch('click', { target: { closest: () => ({ disabled: false, dataset: { queueAction: 'up', planId: 'plan-2' } }) } });
@@ -400,7 +412,7 @@ test('edits pending queue goals while execution is running', async () => {
   const panel = shell.panels.plan;
   const form = panel.querySelector('#fr-plan-form');
   const qty = panel.querySelector('#fr-plan-qty');
-  const run = panel.querySelector('#fr-run');
+  const run = shell.queueControls.querySelector('#fr-run');
 
   app.state.planItemId = 'log';
   qty.value = '2';
@@ -544,7 +556,7 @@ test('active execution phases preserve the plan, executor status, and Run state'
   const item = panel.querySelector('#fr-plan-item');
   const qty = panel.querySelector('#fr-plan-qty');
   const resolve = panel.querySelector('#fr-resolve-plan');
-  const run = panel.querySelector('#fr-run');
+  const run = shell.queueControls.querySelector('#fr-run');
   app.state.selectedItemId = 'log';
   app.renderItemDetail();
   const detailPlan = shell.panels.items.querySelector('#fr-item-detail').querySelector('#fr-detail-plan');
