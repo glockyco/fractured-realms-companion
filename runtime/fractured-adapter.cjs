@@ -120,7 +120,8 @@ async function handleApi({ method, pathname, headers, body, shell, env = process
   if (!payload) return response(400, { ok: false, error: 'Request body must be valid JSON' });
 
   if (pathname === '/api/steam/unlock') {
-    return response(200, await handleSteamUnlock(payload, services));
+    const result = await handleSteamUnlock(payload, services);
+    return response(result && result.reason === 'no-client' ? 502 : 200, result);
   }
 
   if (pathname === '/api/open-external') {

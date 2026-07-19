@@ -91,15 +91,12 @@ async function defaultRequestHealth(url: string, signal?: AbortSignal): Promise<
 
 function defaultSleep(milliseconds: number): Promise<void> {
   return new Promise((resolve) => {
-    const timer = setTimeout(resolve, milliseconds);
-    timer.unref?.();
+    setTimeout(resolve, milliseconds);
   });
 }
 
 function defaultSetTimer(callback: () => void, milliseconds: number): unknown {
-  const timer = setTimeout(callback, milliseconds);
-  timer.unref?.();
-  return timer;
+  return setTimeout(callback, milliseconds);
 }
 
 function defaultClearTimer(handle: unknown): void {

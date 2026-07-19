@@ -15,6 +15,11 @@ const { start } = createRequire(import.meta.url)(
 ) as {
   start: (config: Record<string, unknown>) => Promise<HostHandle>;
 };
+const { handleApi } = createRequire(import.meta.url)(
+  path.join(runtimeDirectory, 'fractured-adapter.cjs'),
+) as {
+  handleApi: (request: Record<string, unknown>) => Promise<{ status: number; body: unknown }>;
+};
 
 type HostHandle = {
   url: string;
@@ -201,6 +206,16 @@ test('rejects a profile without companion', async () => {
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('returns 502 when achievement activation has no native client', async () => {
+  const response = await handleApi({
+    method: 'POST',
+    pathname: '/api/steam/unlock',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ apiName: 'INVALID_COMPANION_E2E' }),
+  });
+  assert.deepEqual(response, { status: 502, body: { ok: false, reason: 'no-client' } });
 });
 
 test('rejects a profile with a nonboolean companion value', async () => {
