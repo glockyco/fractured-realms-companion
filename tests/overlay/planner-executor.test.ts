@@ -297,6 +297,38 @@ test('executor advances one step at a time and completes', () => {
   assert.deepEqual(game.api.state.actionQueue, []);
 });
 
+test('executor splices appended steps while running and updates totals', () => {
+  const game = fakeGame();
+  const executor = createDirectExecutor(game.api, { ...game.timers });
+  executor.run([{ skillId: 'mine', actionId: 'ore', actionName: 'Ore', count: 1, produceItemId: 'ore', produceQty: 1, interval: 10 }]);
+  assert.equal(executor.splice(1, [{ skillId: 'smith', actionId: 'bar', actionName: 'Bar', count: 1, produceItemId: 'bar', produceQty: 1, interval: 10 }]), true);
+  assert.equal(executor.getStatus().totalSteps, 2);
+  game.produce('ore');
+  game.produce('bar');
+  assert.equal(executor.getStatus().phase, 'complete');
+  assert.equal(executor.getStatus().totalSteps, 2);
+});
+
+test('executor refuses a splice at the current step', () => {
+  const game = fakeGame();
+  const executor = createDirectExecutor(game.api, { ...game.timers });
+  executor.run([{ skillId: 'mine', actionId: 'ore', actionName: 'Ore', count: 1, produceItemId: 'ore', produceQty: 1, interval: 10 }]);
+  assert.equal(executor.splice(executor.getStatus().currentStep, []), false);
+  assert.equal(executor.getStatus().totalSteps, 1);
+});
+
+test('executor splicing removes all pending steps after the current step', () => {
+  const game = fakeGame();
+  const executor = createDirectExecutor(game.api, { ...game.timers });
+  executor.run([
+    { skillId: 'mine', actionId: 'ore', actionName: 'Ore', count: 1, produceItemId: 'ore', produceQty: 1, interval: 10 },
+    { skillId: 'smith', actionId: 'bar', actionName: 'Bar', count: 1, produceItemId: 'bar', produceQty: 1, interval: 10 },
+  ]);
+  assert.equal(executor.splice(1, []), true);
+  game.produce('ore');
+  assert.equal(executor.getStatus().phase, 'complete');
+  assert.equal(executor.getStatus().totalSteps, 1);
+});
 test('executor pauses on external action and resumes from remaining quantity', () => {
   const game = fakeGame();
   const executor = createDirectExecutor(game.api, { ...game.timers });

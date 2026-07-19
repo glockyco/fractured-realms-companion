@@ -14,6 +14,7 @@ import {
   formatDuration,
   isExecutionLocked,
   projectPlanState,
+  projectSteps,
   resolvePlanQueue,
   searchPlanTargets,
 } from '../../overlay/overlay.js';
@@ -244,6 +245,14 @@ test('queued plans project earlier deterministic outputs and estimate duration',
   assert.deepEqual(projected.inventory, { log: 0, plank: 1 });
 });
 
+test('projects deterministic and rare raw execution steps', () => {
+  const projected = projectSteps(datasets(), api().getState(), [
+    { skillId: 'woodcutting', actionId: 'chop_log', count: 2 },
+    { skillId: 'woodcutting', actionId: 'chop_log', count: 20, rare: true, produceItemId: 'plank', produceQty: 1 },
+  ]);
+  assert.equal(projected.inventory.log, 22);
+  assert.equal(projected.inventory.plank, 1);
+});
 test('rendered tool blockers name the blocking action', async () => {
   const blockedData = datasets();
   blockedData.actions = {
@@ -290,6 +299,46 @@ test('queued planner appends multiple goals against prior output', async () => {
   assert.deepEqual(result.app.state.planQueue.map((entry) => entry.itemId), ['plank', 'log']);
   planResult.dispatch('click', { target: { closest: () => ({ disabled: false, dataset: { queueAction: 'remove', planId: 'plan-2' } }) } });
   assert.deepEqual(result.app.state.planQueue.map((entry) => entry.itemId), ['log']);
+});
+
+test('edits pending queue goals while execution is running', async () => {
+  const document = new FakeDocument();
+  const result = await bootOverlay({ document, window: { __frCompanion: api() }, fetch: fetchFor(datasets()) });
+  const { app, shell } = result;
+  const panel = shell.panels.plan;
+  const form = panel.querySelector('#fr-plan-form');
+  const qty = panel.querySelector('#fr-plan-qty');
+  const run = panel.querySelector('#fr-run');
+
+  app.state.planItemId = 'log';
+  qty.value = '2';
+  form.dispatch('submit');
+  app.state.planItemId = 'plank';
+  qty.value = '1';
+  form.dispatch('submit');
+  run.dispatch('click');
+  app.state.executorStatus = { phase: 'running', currentStep: 0, stepTarget: 2, stepProduced: 1 };
+  const firstPlan = app.state.planQueue[0];
+  app.renderPlan();
+
+  const item = panel.querySelector('#fr-plan-item');
+  assert.equal(item.disabled, false);
+  app.state.planItemId = 'log';
+  qty.value = '1';
+  form.dispatch('submit');
+
+  assert.equal(app.state.planQueue.length, 3);
+  assert.equal(app.state.planQueue[0].id, firstPlan.id);
+  assert.equal(app.state.planQueue[0].qty, firstPlan.qty);
+  const html = panel.querySelector('#fr-plan-result').innerHTML;
+  assert.match(html, /data-queue-action="remove" data-plan-id="plan-1"[^>]* disabled/);
+  assert.doesNotMatch(html, /data-queue-action="remove" data-plan-id="plan-2"[^>]* disabled/);
+  const planResult = panel.querySelector('#fr-plan-result');
+  planResult.dispatch('click', { target: { closest: () => ({ disabled: true, dataset: { queueAction: 'remove', planId: 'plan-1' } }) } });
+  assert.equal(app.state.planQueue.length, 3);
+  planResult.dispatch('click', { target: { closest: () => ({ disabled: false, dataset: { queueAction: 'remove', planId: 'plan-2' } }) } });
+  assert.equal(app.state.planQueue.length, 2);
+  app.executor.stop();
 });
 
 test('floating controls clamp to the viewport and suppress click after dragging', () => {
@@ -416,10 +465,10 @@ test('active execution phases preserve the plan, executor status, and Run state'
     app.renderPlan();
 
     assert.equal(isExecutionLocked(phase), true);
-    assert.equal(item.disabled, true);
-    assert.equal(qty.disabled, true);
-    assert.equal(resolve.disabled, true);
-    assert.equal(detailPlan.disabled, true);
+    assert.equal(item.disabled, false);
+    assert.equal(qty.disabled, false);
+    assert.equal(resolve.disabled, false);
+    assert.equal(detailPlan.disabled, false);
     assert.equal(run.disabled, true);
 
     item.value = 'plank';

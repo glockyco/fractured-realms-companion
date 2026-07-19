@@ -334,10 +334,22 @@ export function createDirectExecutor(api, options = {}) {
     observe(state());
   };
 
+  const splice = (fromIndex, replacementSteps) => {
+    if (TERMINAL.has(status.phase)) return false;
+    if (!Number.isInteger(fromIndex) || fromIndex <= index) return false;
+    steps = [
+      ...steps.slice(0, Math.min(fromIndex, steps.length)),
+      ...(Array.isArray(replacementSteps) ? replacementSteps.map((step) => ({ ...step })) : []),
+    ];
+    update(status.phase, status.message, index);
+    return true;
+  };
+
   return {
     run,
     stop,
     resume,
+    splice,
     getStatus: () => ({ ...status }),
   };
 }
