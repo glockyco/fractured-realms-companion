@@ -6,8 +6,10 @@
     "rootDir": "src",
     "outDir": "dist",
     "strict": true,
+    "types": ["node"],
     "erasableSyntaxOnly": true,
     "verbatimModuleSyntax": true,
+    "rewriteRelativeImportExtensions": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true
   },
