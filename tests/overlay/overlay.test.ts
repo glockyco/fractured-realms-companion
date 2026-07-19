@@ -309,6 +309,35 @@ test('restores target goals and rejects invalid target values', async () => {
   }
 });
 
+test('plan form submits a skill level target and labels the queue row', async () => {
+  const document = new FakeDocument();
+  const result = await bootOverlay({ document, window: { __frCompanion: api() }, fetch: fetchFor(datasets()) });
+  const panel = result.shell.panels.plan;
+  result.app.state.planItemId = 'log';
+  panel.querySelector('#fr-plan-target').value = 'level';
+  panel.querySelector('#fr-plan-qty').value = '12';
+  panel.querySelector('#fr-plan-form').dispatch('submit');
+  assert.deepEqual(result.app.state.queueGoals[0].target, { type: 'level', level: 12 });
+  assert.match(panel.querySelector('#fr-plan-result').innerHTML, /\u2192 Woodcutting 12/u);
+});
+
+test('plan form submits a new-items target and produces the requested delta', async () => {
+  const document = new FakeDocument();
+  const gameApi = {
+    getState: () => ({ inventory: { log: 3 }, equipment: {}, skillXp: { woodcutting: 100, crafting: 100 } }),
+    startAction() {}, stopAction() {}, subscribe() { return () => {}; },
+  };
+  const result = await bootOverlay({ document, window: { __frCompanion: gameApi }, fetch: fetchFor(datasets()) });
+  const panel = result.shell.panels.plan;
+  result.app.state.planItemId = 'log';
+  panel.querySelector('#fr-plan-target').value = 'gain';
+  panel.querySelector('#fr-plan-qty').value = '5';
+  panel.querySelector('#fr-plan-form').dispatch('submit');
+  assert.deepEqual(result.app.state.queueGoals[0].target, { type: 'gain', gain: 5 });
+  assert.match(panel.querySelector('#fr-plan-result').innerHTML, /\+5/u);
+  assert.equal(result.app.state.executionSteps[0].produceQty, 5);
+});
+
 test('compact mode toggles and persists its panel preference', () => {
   const document = new FakeDocument();
   const shell = createOverlayShell(document);

@@ -362,7 +362,7 @@ th { position: sticky; top: 0; background: var(--fr-neutral-950); color: var(--f
 tbody tr:last-child td { border-bottom: 0; }
 .cell-title { display: block; color: var(--fr-neutral-100); font-weight: 600; }
 .cell-id { display: block; margin-top: var(--fr-s1); color: var(--fr-neutral-300); font-size: 0.6875rem; }
-.plan-form { display: grid; grid-template-columns: minmax(0, 1fr) 6rem auto; align-items: end; gap: var(--fr-s2); padding-bottom: var(--fr-s4); border-bottom: 1px solid var(--fr-neutral-800); }
+.plan-form { display: grid; grid-template-columns: minmax(0, 1fr) auto 6rem auto; align-items: end; gap: var(--fr-s2); padding-bottom: var(--fr-s4); border-bottom: 1px solid var(--fr-neutral-800); }
 .plan-summary { display: flex; align-items: center; justify-content: space-between; gap: var(--fr-s3); margin: var(--fr-s4) 0 var(--fr-s2); }
 .plan-summary p { margin: var(--fr-s1) 0 0; color: var(--fr-neutral-300); }
 .step-index { width: 1.625rem; height: 1.625rem; display: inline-grid; place-items: center; border-radius: 999px; background: var(--fr-neutral-900); color: var(--fr-neutral-300); font-size: 0.6875rem; }
@@ -446,7 +446,7 @@ tbody tr:last-child td { border-bottom: 0; }
   .items-layout { display: block; }
   .item-browser { height: 48%; border-right: 0; border-bottom: 1px solid var(--fr-neutral-800); }
   .detail { height: 52%; }
-  .plan-form { grid-template-columns: minmax(0, 1fr) 5rem; }
+  .plan-form { grid-template-columns: minmax(0, 1fr) auto 5rem; }
   .plan-form .button { grid-column: 1 / -1; }
   .skills-view, .plan-view, .detail { padding: var(--fr-s3); }
 }
@@ -1287,7 +1287,8 @@ function createApplication(shell, datasets, api) {
     <div class="plan-view">
       <form class="plan-form" id="fr-plan-form">
         <div class="field"><label for="fr-plan-item">Desired item</label><div class="plan-combobox"><input class="control" id="fr-plan-item" type="search" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded="false" aria-controls="fr-plan-options" autocomplete="off" placeholder="Search item names" required></div></div>
-        <div class="field"><label for="fr-plan-qty">Quantity</label><input class="control data" id="fr-plan-qty" type="number" min="1" step="1" value="1" inputmode="numeric"></div>
+        <div class="field"><label for="fr-plan-target">Until</label><select class="control" id="fr-plan-target"><option value="qty" selected>In bag</option><option value="gain">New items</option><option value="level">Skill level</option><option value="time">Minutes</option></select></div>
+        <div class="field"><label for="fr-plan-qty" id="fr-plan-qty-label">Quantity</label><input class="control data" id="fr-plan-qty" type="number" min="1" step="1" value="1" inputmode="numeric"></div>
         <button class="button" id="fr-resolve-plan" type="submit">Add plan</button>
       </form>
       <div class="combobox-popover" id="fr-plan-options" role="listbox" aria-label="Matching items" hidden></div>
@@ -1297,6 +1298,15 @@ function createApplication(shell, datasets, api) {
   const planForm = planPanel.querySelector('#fr-plan-form');
   const planItem = planPanel.querySelector('#fr-plan-item');
   const planQty = planPanel.querySelector('#fr-plan-qty');
+  const planTarget = planPanel.querySelector('#fr-plan-target');
+  const planQtyLabel = planPanel.querySelector('#fr-plan-qty-label');
+  const applyPlanTargetType = (type) => {
+    const map = { qty: ['Total', '1'], gain: ['New', '1'], level: ['Level', '2'], time: ['Minutes', '1'] };
+    const [labelText, min] = map[type] || map.qty;
+    if (planQtyLabel) planQtyLabel.textContent = labelText;
+    planQty.min = min;
+  };
+  planTarget?.addEventListener('change', () => applyPlanTargetType(planTarget.value));
   const planResult = planPanel.querySelector('#fr-plan-result');
   const executorPhase = planPanel.querySelector('#fr-executor-phase');
   const executorMessage = planPanel.querySelector('#fr-executor-message');
@@ -1691,6 +1701,12 @@ function createApplication(shell, datasets, api) {
       const locked = isExecutionLocked(status.phase);
       const mutable = !locked || planIndex !== currentPlanIndex;
       const label = labelFor(items, entry.itemId);
+      const targetLabel = entry.target?.type === 'gain'
+        ? `+${escapeHtml(entry.target.gain)}`
+        : entry.target?.type === 'level'
+          ? `→ ${escapeHtml(skillNames[entry.plan?.goalSkillId] || 'Lv')} ${escapeHtml(entry.target.level)}`
+          : entry.target?.type === 'time' ? `for ${escapeHtml(entry.target.minutes)}m`
+            : `×${escapeHtml(entry.qty)}`;
       const upIsPromote = locked && planIndex - 1 === currentPlanIndex;
       const upDisabled = !mutable || planIndex === 0;
       const upLabel = upIsPromote ? 'Run now — interrupts the current plan' : `Move ${label} up`;
@@ -1701,7 +1717,7 @@ function createApplication(shell, datasets, api) {
       const planMeta = planState === 'complete'
         ? `${actionLabel} · done`
         : `${actionLabel}${prerequisites.length ? ` · ${prerequisites.length} ready` : ''} · about ${escapeHtml(formatDuration(entry.estimateMs))}`;
-      return `<li class="queue-plan" data-state="${planState}" data-plan-id="${escapeHtml(entry.id)}"><div class="queue-plan-top"><span class="queue-plan-index data">${planIndex + 1}</span><span class="queue-plan-title">${escapeHtml(label)} <span class="data">×${escapeHtml(entry.qty)}</span></span><span class="queue-plan-meta">${planMeta}</span><span class="queue-plan-actions"><button class="icon-button" type="button" data-queue-action="up" data-plan-id="${escapeHtml(entry.id)}" aria-label="${escapeHtml(upLabel)}" title="${escapeHtml(upTitle)}"${upDisabled ? ' disabled' : ''}>${ICONS.up}</button><button class="icon-button" type="button" data-queue-action="down" data-plan-id="${escapeHtml(entry.id)}" aria-label="Move ${escapeHtml(label)} down" title="Move down"${downDisabled ? ' disabled' : ''}>${ICONS.down}</button><button class="icon-button" type="button" data-queue-action="remove" data-plan-id="${escapeHtml(entry.id)}" aria-label="Remove ${escapeHtml(label)}" title="Remove"${editDisabled ? ' disabled' : ''}>${ICONS.remove}</button><button class="icon-button" type="button" data-queue-action="edit" data-plan-id="${escapeHtml(entry.id)}" aria-label="Edit ${escapeHtml(label)}" title="Edit"${editDisabled ? ' disabled' : ''}>${ICONS.edit}</button></span></div><ol class="queue-steps">${prerequisiteRows}${stepRows || (!prerequisiteRows ? '<li class="queue-step" data-state="complete"><span class="queue-step-marker">✓</span><span>Already satisfied by current inventory</span><span></span></li>' : '')}</ol></li>`;
+      return `<li class="queue-plan" data-state="${planState}" data-plan-id="${escapeHtml(entry.id)}"><div class="queue-plan-top"><span class="queue-plan-index data">${planIndex + 1}</span><span class="queue-plan-title">${escapeHtml(label)} <span class="data">${targetLabel}</span></span><span class="queue-plan-meta">${planMeta}</span><span class="queue-plan-actions"><button class="icon-button" type="button" data-queue-action="up" data-plan-id="${escapeHtml(entry.id)}" aria-label="${escapeHtml(upLabel)}" title="${escapeHtml(upTitle)}"${upDisabled ? ' disabled' : ''}>${ICONS.up}</button><button class="icon-button" type="button" data-queue-action="down" data-plan-id="${escapeHtml(entry.id)}" aria-label="Move ${escapeHtml(label)} down" title="Move down"${downDisabled ? ' disabled' : ''}>${ICONS.down}</button><button class="icon-button" type="button" data-queue-action="remove" data-plan-id="${escapeHtml(entry.id)}" aria-label="Remove ${escapeHtml(label)}" title="Remove"${editDisabled ? ' disabled' : ''}>${ICONS.remove}</button><button class="icon-button" type="button" data-queue-action="edit" data-plan-id="${escapeHtml(entry.id)}" aria-label="Edit ${escapeHtml(label)}" title="Edit"${editDisabled ? ' disabled' : ''}>${ICONS.edit}</button></span></div><ol class="queue-steps">${prerequisiteRows}${stepRows || (!prerequisiteRows ? '<li class="queue-step" data-state="complete"><span class="queue-step-marker">✓</span><span>Already satisfied by current inventory</span><span></span></li>' : '')}</ol></li>`;
     }).join('');
     const notice = renderPlanNotice(state.planNotice);
     const queueFinish = isExecutionLocked(status.phase) && Number(status.remainingMs) > 0
@@ -1713,8 +1729,31 @@ function createApplication(shell, datasets, api) {
   planForm.addEventListener('submit', (event) => {
     event.preventDefault();
     const locked = isExecutionLocked(state.executorStatus?.phase);
-    const qty = Math.max(1, Math.trunc(Number(planQty.value) || 1));
-    planQty.value = String(qty);
+    const targetType = planTarget?.value || 'qty';
+    const raw = Math.trunc(Number(planQty.value) || 0);
+    let goalPayload;
+    let noticeQty;
+    if (targetType === 'gain') {
+      const gain = Math.max(1, raw || 1);
+      planQty.value = String(gain);
+      noticeQty = gain;
+      goalPayload = { itemId: state.planItemId, qty: 0, target: { type: 'gain', gain } };
+    } else if (targetType === 'level') {
+      const level = Math.min(99, Math.max(2, raw || 2));
+      planQty.value = String(level);
+      noticeQty = level;
+      goalPayload = { itemId: state.planItemId, qty: 0, target: { type: 'level', level } };
+    } else if (targetType === 'time') {
+      const minutes = Math.max(1, raw || 1);
+      planQty.value = String(minutes);
+      noticeQty = minutes;
+      goalPayload = { itemId: state.planItemId, qty: 0, target: { type: 'time', minutes } };
+    } else {
+      const qty = Math.max(1, raw || 1);
+      planQty.value = String(qty);
+      noticeQty = qty;
+      goalPayload = { itemId: state.planItemId, qty };
+    }
     if (!state.planItemId) {
       planItem.setCustomValidity?.('Choose an item from the suggestions.');
       planItem.reportValidity?.();
@@ -1733,11 +1772,11 @@ function createApplication(shell, datasets, api) {
       } else {
         projected = projectPlanState(datasets, api.getState(), state.planQueue.map((entry) => entry.plan));
       }
-      const plan = createPlan(datasets, projected, { itemId: state.planItemId, qty });
+      const plan = resolveGoalPlan(datasets, projected, goalPayload);
       state.currentPlan = plan;
       state.recentPlanItemIds = [state.planItemId, ...state.recentPlanItemIds.filter((id) => id !== state.planItemId)].slice(0, 5);
       if (plan.ok && plan.steps?.length) {
-        state.queueGoals.push({ id: `plan-${state.nextPlanId++}`, itemId: state.planItemId, qty });
+        state.queueGoals.push({ id: `plan-${state.nextPlanId++}`, ...goalPayload });
         persistQueue();
         state.planNotice = null;
         if (locked) {
@@ -1751,16 +1790,16 @@ function createApplication(shell, datasets, api) {
           state.executorStatus = { phase: 'idle', currentStep: null, message: 'Plan added to the queue.' };
         }
       } else if (plan.ok) {
-        state.planNotice = { itemId: state.planItemId, qty, plan };
+        state.planNotice = { itemId: state.planItemId, qty: noticeQty, plan };
         if (!locked) state.executorStatus = { phase: 'idle', currentStep: null, message: `${labelFor(items, state.planItemId)} is already available in the requested quantity.` };
       } else {
-        state.planNotice = { itemId: state.planItemId, qty, plan };
+        state.planNotice = { itemId: state.planItemId, qty: noticeQty, plan };
         if (!locked) state.executorStatus = { phase: 'idle', currentStep: null, message: 'Resolve the blocker before adding this plan.' };
       }
     } catch (error) {
       const plan = { ok: false, steps: [], reason: error instanceof Error ? error.message : String(error) };
       state.currentPlan = plan;
-      state.planNotice = { itemId: state.planItemId, qty, plan };
+      state.planNotice = { itemId: state.planItemId, qty: noticeQty, plan };
       state.executorStatus = { phase: 'error', currentStep: null, message: 'The plan could not be resolved.' };
     }
     renderPlan();
@@ -1861,7 +1900,14 @@ function createApplication(shell, datasets, api) {
       const goal = state.queueGoals[index];
       touchesFrozen = locked && index <= view.currentPlanIndex;
       selectPlanTarget(goal.itemId);
-      planQty.value = String(goal.qty);
+      const targetType = goal.target?.type || 'qty';
+      if (planTarget) planTarget.value = targetType;
+      applyPlanTargetType(targetType);
+      const editValue = goal.target?.type === 'gain' ? goal.target.gain
+        : goal.target?.type === 'level' ? goal.target.level
+          : goal.target?.type === 'time' ? goal.target.minutes
+            : goal.qty;
+      planQty.value = String(editValue);
       state.queueGoals.splice(index, 1);
     } else if (action === 'remove') {
       touchesFrozen = locked && index <= view.currentPlanIndex;
