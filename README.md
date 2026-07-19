@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="overlay/logo.webp" width="144" alt="Fractured Realms Companion shard sigil">
+</p>
+
 # Fractured Realms Companion
 
 Fractured Realms Companion adds a build-matched item wiki and direct-action planner to **Fractured Realms**. It reads live inventory and skill state, explains dependencies, and runs one game action at a time from a local companion window.
