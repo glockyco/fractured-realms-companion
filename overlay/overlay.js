@@ -1024,6 +1024,7 @@ function createApplication(shell, datasets, api) {
 
   shell.loading.hidden = true;
   shell.launcher.dataset.state = 'ready';
+  let lastStructuralKey = '';
   const executor = createDirectExecutor(api, {
     onUpdate(status) {
       state.executorStatus = status;
@@ -1032,7 +1033,9 @@ function createApplication(shell, datasets, api) {
       } else if (status.phase === 'error' || status.phase === 'idle') {
         persistQueue();
       }
-      renderPlan();
+      const key = `${status.phase}:${status.currentStep}:${state.planQueue.length}`;
+      if (key !== lastStructuralKey) { lastStructuralKey = key; renderPlan(); }
+      else renderExecutor();
     },
   });
 
@@ -1335,6 +1338,17 @@ function createApplication(shell, datasets, api) {
     return flattened;
   }
 
+  const queueView = (status = state.executorStatus) => {
+    const currentIndex = Number.isInteger(status?.currentStep) ? Number(status.currentStep) : -1;
+    const currentPlanIndex = currentIndex >= 0 ? state.executionSteps[currentIndex]?.queuePlanIndex ?? -1 : -1;
+    const locked = isExecutionLocked(status?.phase);
+    return {
+      status, currentIndex, currentPlanIndex, locked,
+      frozenIds: new Set(state.planQueue.slice(0, currentPlanIndex + 1).map((entry) => entry.id)),
+      hasPending: state.planQueue.some((_, planIndex) => planIndex > currentPlanIndex),
+    };
+  };
+
   function rebuildQueue() {
     state.planQueue = resolvePlanQueue(datasets, api.getState(), state.queueGoals);
     state.executionSteps = flattenQueue();
@@ -1342,8 +1356,7 @@ function createApplication(shell, datasets, api) {
   }
 
   function remainingFrozenSteps(status) {
-    const currentIndex = Number.isInteger(status?.currentStep) ? status.currentStep : -1;
-    const currentPlanIndex = state.executionSteps[currentIndex]?.queuePlanIndex ?? -1;
+    const { currentIndex, currentPlanIndex } = queueView(status);
     if (currentPlanIndex < 0) return [];
     const remaining = [];
     for (let globalIndex = currentIndex + 1; globalIndex < state.executionSteps.length; globalIndex += 1) {
@@ -1369,10 +1382,8 @@ function createApplication(shell, datasets, api) {
 
   function rebuildPending() {
     const build = (status) => {
-      const currentIndex = Number.isInteger(status?.currentStep) ? status.currentStep : -1;
-      const currentPlanIndex = state.executionSteps[currentIndex]?.queuePlanIndex ?? -1;
+      const { currentPlanIndex, frozenIds } = queueView(status);
       const frozen = state.planQueue.slice(0, currentPlanIndex + 1);
-      const frozenIds = new Set(frozen.map((entry) => entry.id));
       const pendingGoals = state.queueGoals.filter((goal) => !frozenIds.has(goal.id));
       const projected = projectSteps(datasets, api.getState(), remainingFrozenSteps(status));
       const pending = resolvePlanQueue(datasets, projected, pendingGoals);
@@ -1429,64 +1440,92 @@ function createApplication(shell, datasets, api) {
     return [...byItem.values()];
   }
 
-  function renderExecutor() {
-    const status = state.executorStatus || { phase: 'idle', message: '' };
-    const phaseLabels = { idle: 'Queue ready', starting: 'Starting queue', running: 'Queue running', paused: 'Queue paused', complete: 'Queue complete', error: 'Queue stopped' };
+  const describeStatus = (view) => {
+    const { status, currentIndex, locked } = view;
     const total = state.executionSteps.length;
-    const currentIndex = Number.isInteger(status.currentStep) ? Number(status.currentStep) : null;
-    const current = currentIndex == null ? null : state.executionSteps[currentIndex];
-    const currentPlan = current ? state.planQueue[current.queuePlanIndex] : null;
-    const locked = isExecutionLocked(status.phase);
-    const phaseLabel = state.planNotice?.plan && !state.planNotice.plan.ok ? 'Plan blocked' : phaseLabels[status.phase] || status.phase;
-    const phaseText = currentPlan && locked
-      ? `${phaseLabel} · plan ${current.queuePlanIndex + 1} of ${state.planQueue.length}`
-      : phaseLabel;
-    executorPhase.textContent = phaseText;
-
+    const current = currentIndex >= 0 ? state.executionSteps[currentIndex] : null;
+    const phaseLabels = { idle: 'Ready', starting: 'Starting', running: 'Running', paused: 'Paused', complete: 'Complete', error: 'Stopped' };
+    const phaseText = state.planNotice?.plan && !state.planNotice.plan.ok ? 'Plan blocked' : (phaseLabels[status.phase] || status.phase);
     let messageText;
     if (current) {
-      const quantity = current.rare
-        ? ` · ${Number(status.stepProduced) || 0} of ${Number(status.stepTarget) || 0} rare drops`
-        : (Number(status.stepTarget) > 0 ? ` · ${Number(status.stepProduced) || 0} of ${Number(status.stepTarget)}` : '');
-      const remaining = Number(status.remainingMs) > 0 ? ` · about ${formatDuration(status.remainingMs)} left` : '';
-      messageText = `${current.actionName || humanizeId(current.actionId)} · action ${currentIndex + 1} of ${total}${quantity}${remaining}`;
+      const produced = `${Number(status.stepProduced) || 0} of ${Number(status.stepTarget) || 0}${current.rare ? ' rare drops' : ''}`;
+      const planPos = `plan ${current.queuePlanIndex + 1}/${state.planQueue.length}`;
+      const remaining = Number(status.remainingMs) > 0 ? ` · ~${formatDuration(status.remainingMs)}` : '';
+      const finish = locked && Number(status.remainingMs) > 0 ? ` · done ~${formatFinishTime(status.remainingMs)}` : '';
+      messageText = `${current.actionName || humanizeId(current.actionId)} · ${produced} · ${planPos}${remaining}${finish}`;
     } else if (state.planQueue.length) {
       const estimate = queueEstimate();
-      messageText = `${state.planQueue.length} ${state.planQueue.length === 1 ? 'plan' : 'plans'} · ${total} ${total === 1 ? 'action' : 'actions'}${estimate ? ` · about ${formatDuration(estimate)}` : ''}`;
+      messageText = `${state.planQueue.length} ${state.planQueue.length === 1 ? 'plan' : 'plans'} · ${total} ${total === 1 ? 'action' : 'actions'}${estimate ? ` · ~${formatDuration(estimate)}` : ''}`;
     } else {
       messageText = status.message || 'Add one or more plans to the queue.';
     }
-    if (locked && Number(status.remainingMs) > 0) messageText += ` · done ~${formatFinishTime(status.remainingMs)}`;
-    executorMessage.textContent = messageText;
+    const stepFraction = Number(status.stepTarget) > 0 ? Math.min(1, Math.max(0, Number(status.stepProduced) / Number(status.stepTarget))) : 0;
+    const launcherText = locked
+      ? (status.phase === 'paused'
+        ? 'Companion · paused'
+        : `Companion · ${Math.min(total, currentIndex + 1)}/${total}${Number(status.remainingMs) > 0 ? ` · ${formatDuration(status.remainingMs)}` : ''}`)
+      : status.phase === 'complete' ? 'Companion · queue done'
+        : status.phase === 'error' ? 'Companion · queue stopped' : 'Companion';
+    return {
+      phaseText, messageText, launcherText,
+      progressMax: Math.max(1, total),
+      progressValue: status.phase === 'complete' ? total : Math.max(0, Math.max(0, currentIndex) + stepFraction),
+    };
+  };
 
-    const stepFraction = Number(status.stepTarget) > 0
-      ? Math.min(1, Math.max(0, Number(status.stepProduced) / Number(status.stepTarget)))
-      : 0;
-    executorProgress.max = Math.max(1, total);
-    executorProgress.value = status.phase === 'complete' ? total : Math.max(0, (currentIndex || 0) + stepFraction);
+  const stepTimeLabel = (step, status, active) => {
+    const estimate = Math.max(0, (Number(step.interval) || 0) * (Number(step.count) || 0));
+    const base = active && Number(status.stepRemainingMs) > 0
+      ? `about ${formatDuration(status.stepRemainingMs)} left`
+      : estimate ? `about ${formatDuration(estimate)}` : '—';
+    return step.rare ? `${base} (avg)` : base;
+  };
+
+  const updateActiveStepRow = (view) => {
+    const { status, currentIndex } = view;
+    if (currentIndex < 0) return;
+    const row = planResult.querySelector?.(`[data-step-global="${currentIndex}"]`);
+    if (!row) return;
+    const step = state.executionSteps[currentIndex];
+    if (!step) return;
+    const timeCell = row.querySelector?.('.queue-step-time');
+    if (timeCell) timeCell.textContent = stepTimeLabel(step, status, true);
+    const bar = row.querySelector?.('.step-progress');
+    if (bar && Number(status.stepTarget) > 0) {
+      bar.max = Number(status.stepTarget);
+      bar.value = Number(status.stepProduced) || 0;
+    }
+  };
+
+  function renderExecutor() {
+    const view = queueView();
+    const { status, locked } = view;
+    const described = describeStatus(view);
+    updateActiveStepRow(view);
+    const queueTotal = planResult.querySelector?.('#fr-queue-total');
+    if (queueTotal) {
+      const queueFinish = locked && Number(status.remainingMs) > 0 ? ` · done ~${formatFinishTime(status.remainingMs)}` : '';
+      queueTotal.textContent = `${state.planQueue.length} ${state.planQueue.length === 1 ? 'plan' : 'plans'} · about ${formatDuration(queueEstimate())}${queueFinish}`;
+    }
+    executorPhase.textContent = described.phaseText;
+    executorMessage.textContent = described.messageText;
+    executorProgress.max = described.progressMax;
+    executorProgress.value = described.progressValue;
     for (const control of skillTable.querySelectorAll?.('[data-start-action]') || []) control.disabled = locked;
     if (locked) closePlanTargets();
     runButton.disabled = locked || status.phase === 'complete' || !queueIsRunnable();
     runButton.innerHTML = `${ICONS.play}Start ${state.planQueue.length > 1 ? `${state.planQueue.length}-plan ` : ''}queue`;
     resumeButton.hidden = status.phase !== 'paused';
     stopButton.disabled = !locked;
-    const currentPlanIndex = Number.isInteger(status.currentStep) ? state.executionSteps[status.currentStep]?.queuePlanIndex ?? -1 : -1;
-    const hasPending = state.planQueue.some((_, planIndex) => planIndex > currentPlanIndex);
-    clearButton.disabled = locked ? !hasPending : !state.planQueue.length;
+    clearButton.disabled = locked ? !view.hasPending : !state.planQueue.length;
     clearButton.textContent = locked ? 'Clear pending' : 'Clear';
     executorNote.textContent = locked
       ? 'Stop ends the current game action and keeps this queue available to restart.'
       : 'Starting the queue stops active combat. The companion runs one direct action at a time.';
-
     const label = shell.launcher.querySelector?.('#fr-launcher-label') ?? shell.shadow.querySelector?.('#fr-launcher-label');
-    if (label) {
-      label.textContent = locked
-        ? `Companion · ${Math.min(Number(status.totalSteps) || total, (currentIndex ?? 0) + 1)}/${Number(status.totalSteps) || total}${Number(status.remainingMs) > 0 ? ` · ${formatDuration(status.remainingMs)}` : ''}`
-        : status.phase === 'complete' ? 'Companion · queue done'
-          : status.phase === 'error' ? 'Companion · queue stopped' : 'Companion';
-    }
-    if (compactPhase) compactPhase.textContent = phaseText;
-    if (compactMessage) compactMessage.textContent = messageText;
+    if (label) label.textContent = described.launcherText;
+    if (compactPhase) compactPhase.textContent = described.phaseText;
+    if (compactMessage) compactMessage.textContent = described.messageText;
     if (compactProgress) {
       compactProgress.max = executorProgress.max;
       compactProgress.value = executorProgress.value;
@@ -1508,8 +1547,9 @@ function createApplication(shell, datasets, api) {
 
   function renderPlan() {
     const status = state.executorStatus || { phase: 'idle' };
-    const currentIndex = Number.isInteger(status.currentStep) ? Number(status.currentStep) : null;
-    const currentPlanIndex = currentIndex == null ? -1 : state.executionSteps[currentIndex]?.queuePlanIndex ?? -1;
+    const view = queueView(status);
+    const { currentPlanIndex } = view;
+    const currentIndex = view.currentIndex < 0 ? null : view.currentIndex;
     let globalIndex = 0;
     const queueRows = state.planQueue.map((entry, planIndex) => {
       const startIndex = globalIndex;
@@ -1528,18 +1568,14 @@ function createApplication(shell, datasets, api) {
         const active = currentIndex === stepIndex && status.phase !== 'idle';
         const stepState = complete ? 'complete' : active ? 'active' : 'pending';
         const marker = complete ? ICONS.check : String(planStepIndex + 1);
-        const estimate = Math.max(0, (Number(step.interval) || 0) * (Number(step.count) || 0));
         const activeProgress = active && Number(status.stepTarget) > 0
           ? `<progress class="step-progress" max="${escapeHtml(status.stepTarget)}" value="${escapeHtml(status.stepProduced || 0)}" aria-label="${escapeHtml(step.actionName)} progress"></progress>`
           : '';
-        const timeBase = active && Number(status.stepRemainingMs) > 0
-          ? `about ${formatDuration(status.stepRemainingMs)} left`
-          : estimate ? `about ${formatDuration(estimate)}` : '—';
-        const time = step.rare ? `${timeBase} (avg)` : timeBase;
+        const time = stepTimeLabel(step, status, active);
         const quantity = step.rare ? `~×${escapeHtml(step.count)}` : `×${escapeHtml(step.count)}`;
         const chanceBadge = step.rare
           ? ` <span class="badge warning">${escapeHtml(formatChance(step.chance))}</span>` : '';
-        return `<li class="queue-step" data-state="${stepState}"><span class="queue-step-marker">${marker}</span><span>${escapeHtml(step.actionName || humanizeId(step.actionId))}${chanceBadge} <span class="data">${quantity}</span></span><span class="queue-step-time data">${escapeHtml(time)}</span>${activeProgress}</li>`;
+        return `<li class="queue-step" data-state="${stepState}" data-step-global="${stepIndex}"><span class="queue-step-marker">${marker}</span><span>${escapeHtml(step.actionName || humanizeId(step.actionId))}${chanceBadge} <span class="data">${quantity}</span></span><span class="queue-step-time data">${escapeHtml(time)}</span>${activeProgress}</li>`;
       }).join('');
       const locked = isExecutionLocked(status.phase);
       const mutable = !locked || planIndex > currentPlanIndex;
@@ -1552,7 +1588,7 @@ function createApplication(shell, datasets, api) {
     const notice = renderPlanNotice(state.planNotice);
     const queueFinish = isExecutionLocked(status.phase) && Number(status.remainingMs) > 0
       ? ` · done ~${formatFinishTime(status.remainingMs)}` : '';
-    planResult.innerHTML = `${notice}${state.planQueue.length ? `<div class="queue-header"><h3>Plan queue</h3><span class="queue-total data">${state.planQueue.length} ${state.planQueue.length === 1 ? 'plan' : 'plans'} · about ${escapeHtml(formatDuration(queueEstimate()))}${queueFinish}</span></div><ol class="queue-list">${queueRows}</ol>` : '<div class="empty">Add an item to begin a queue. Each plan is resolved against the output of plans before it.</div>'}`;
+    planResult.innerHTML = `${notice}${state.planQueue.length ? `<div class="queue-header"><h3>Plan queue</h3><span class="queue-total data" id="fr-queue-total">${state.planQueue.length} ${state.planQueue.length === 1 ? 'plan' : 'plans'} · about ${escapeHtml(formatDuration(queueEstimate()))}${queueFinish}</span></div><ol class="queue-list">${queueRows}</ol>` : '<div class="empty">Add an item to begin a queue. Each plan is resolved against the output of plans before it.</div>'}`;
     renderExecutor();
   }
 
@@ -1571,8 +1607,7 @@ function createApplication(shell, datasets, api) {
       let projected;
       if (locked) {
         const status = state.executorStatus;
-        const currentIndex = Number.isInteger(status?.currentStep) ? status.currentStep : -1;
-        const currentPlanIndex = state.executionSteps[currentIndex]?.queuePlanIndex ?? -1;
+        const { currentPlanIndex } = queueView(status);
         projected = projectSteps(datasets, api.getState(), [
           ...remainingFrozenSteps(status),
           ...pendingPlanSteps(currentPlanIndex),
@@ -1671,10 +1706,7 @@ function createApplication(shell, datasets, api) {
   clearButton.addEventListener('click', () => {
     const locked = isExecutionLocked(state.executorStatus?.phase);
     if (locked) {
-      const status = state.executorStatus;
-      const currentIndex = Number.isInteger(status?.currentStep) ? status.currentStep : -1;
-      const currentPlanIndex = state.executionSteps[currentIndex]?.queuePlanIndex ?? -1;
-      const frozenIds = new Set(state.planQueue.slice(0, currentPlanIndex + 1).map((entry) => entry.id));
+      const { frozenIds } = queueView(state.executorStatus);
       state.queueGoals = state.queueGoals.filter((goal) => frozenIds.has(goal.id));
       persistQueue();
       rebuildPending();
