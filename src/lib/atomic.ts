@@ -1,7 +1,9 @@
-import { closeSync, chmodSync, copyFileSync, fsyncSync, linkSync, openSync, renameSync, statSync, unlinkSync, utimesSync, writeSync } from 'node:fs';
+import { closeSync, chmodSync, constants, copyFileSync, fsyncSync, linkSync, openSync, renameSync, statSync, unlinkSync, utimesSync, writeSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { O_CREAT, O_DIRECTORY, O_EXCL, O_RDONLY, O_WRONLY } from 'node:constants';
 import { basename, dirname, join } from 'node:path';
+
+const { O_CREAT, O_EXCL, O_RDONLY, O_WRONLY } = constants;
+const O_DIRECTORY = constants.O_DIRECTORY ?? 0;
 
 const runtimeProcess = globalThis as typeof globalThis & { process?: { platform?: string } };
 
