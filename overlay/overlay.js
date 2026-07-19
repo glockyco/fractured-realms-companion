@@ -424,11 +424,15 @@ tbody tr:last-child td { border-bottom: 0; }
 .panel[data-compact="true"] .loading-line { display: none; }
 .panel[data-compact="true"] .compact-strip {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: var(--fr-s2);
+  gap: var(--fr-s1) var(--fr-s2);
   padding: var(--fr-s3) var(--fr-s4);
 }
+.panel[data-compact="true"] .compact-strip > #fr-compact-phase { grid-column: 1; grid-row: 1; }
+.panel[data-compact="true"] .compact-strip > #fr-compact-message { grid-column: 1; grid-row: 2; }
+.panel[data-compact="true"] .compact-strip > #fr-compact-progress { grid-column: 1 / -1; grid-row: 3; }
+.panel[data-compact="true"] .compact-strip > .compact-actions { grid-column: 2; grid-row: 1 / 3; display: flex; gap: var(--fr-s1); align-items: center; }
 .panel[data-compact="true"] .compact-strip p { margin: 0; overflow: hidden; color: var(--fr-neutral-300); font-size: 0.75rem; text-overflow: ellipsis; white-space: nowrap; }
 .loading-line::after { content: ""; display: block; width: 35%; height: 100%; background: var(--fr-harbor-400); animation: loading 1.2s linear infinite; }
 @keyframes loading { from { transform: translateX(-100%); } to { transform: translateX(300%); } }
@@ -835,7 +839,7 @@ export function createOverlayShell(documentRef) {
   }));
   const compactStrip = makeElement(documentRef, 'div', {
     class: 'compact-strip',
-    html: '<strong id="fr-compact-phase"></strong><p id="fr-compact-message"></p><progress class="executor-progress" id="fr-compact-progress" max="1" value="0"></progress><button class="icon-button" id="fr-compact-resume" type="button" title="Resume queue" aria-label="Resume queue" hidden>' + ICONS.resume + '</button><button class="button danger" id="fr-compact-stop" type="button">Stop</button>',
+    html: '<strong id="fr-compact-phase"></strong><p id="fr-compact-message"></p><progress class="executor-progress" id="fr-compact-progress" max="1" value="0"></progress><div class="compact-actions"><button class="icon-button" id="fr-compact-resume" type="button" title="Resume queue" aria-label="Resume queue" hidden>' + ICONS.resume + '</button><button class="icon-button danger" id="fr-compact-stop" type="button" title="Stop queue" aria-label="Stop queue">' + ICONS.stop + '</button></div>',
   });
   panel.append(header, loading, error, tabs, tabpanels, compactStrip);
   shadow.append(style, launcher, panel);
