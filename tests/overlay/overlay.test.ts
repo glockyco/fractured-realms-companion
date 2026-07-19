@@ -10,6 +10,7 @@ import {
   clampFloatingPosition,
   createOverlayShell,
   estimatePlanDuration,
+  fitWithinViewport,
   formatDuration,
   isExecutionLocked,
   projectPlanState,
@@ -243,6 +244,26 @@ test('queued plans project earlier deterministic outputs and estimate duration',
   assert.deepEqual(projected.inventory, { log: 0, plank: 1 });
 });
 
+test('rendered tool blockers name the blocking action', async () => {
+  const blockedData = datasets();
+  blockedData.actions = {
+    ...blockedData.actions,
+    crafting: [{ ...blockedData.actions.crafting[0], toolReq: 'workshop_saw' }],
+  };
+  blockedData.strings = { ...blockedData.strings, 'name.workshop_saw': 'Workshop Saw' };
+  const document = new FakeDocument();
+  const result = await bootOverlay({ document, window: { __frCompanion: api() }, fetch: fetchFor(blockedData) });
+  const panel = result.shell.panels.plan;
+  const form = panel.querySelector('#fr-plan-form');
+  const quantity = panel.querySelector('#fr-plan-qty');
+  result.app.state.planItemId = 'plank';
+  quantity.value = '1';
+  form.dispatch('submit');
+  const notice = panel.querySelector('#fr-plan-result').innerHTML;
+  assert.doesNotMatch(notice, /undefined/);
+  assert.match(notice, /Make Harbor Plank/);
+});
+
 test('queued planner appends multiple goals against prior output', async () => {
   const document = new FakeDocument();
   const result = await bootOverlay({ document, window: { __frCompanion: api() }, fetch: fetchFor(datasets()) });
@@ -276,6 +297,14 @@ test('floating controls clamp to the viewport and suppress click after dragging'
     clampFloatingPosition({ left: -20, top: 900 }, { width: 100, height: 80 }, { width: 500, height: 400 }),
     { left: 8, top: 312 },
   );
+  const fitted = fitWithinViewport(
+    { left: 500, top: 700 },
+    { width: 768, height: 672 },
+    { width: 900, height: 800 },
+  );
+  assert.equal(fitted.left, 124);
+  assert.equal(fitted.top, 120);
+  assert.equal(fitted.maxHeight, 800 - fitted.top - 8);
 
   const document = new FakeDocument();
   const shell = createOverlayShell(document);

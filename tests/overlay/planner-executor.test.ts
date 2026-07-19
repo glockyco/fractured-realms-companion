@@ -158,6 +158,7 @@ test('treats Shop tools as permanent unlocks, not inventory items', () => {
   assert.equal(locked.ok, false);
   assert.equal(locked.blocked.reason, 'tool');
   assert.equal(locked.blocked.toolId, 'bronze_pick');
+  assert.equal(locked.blocked.actionName, 'Mine Ore');
   assert.match(locked.message, /unlocked tool Bronze Pickaxe/);
 
   const unlocked = createPlan(

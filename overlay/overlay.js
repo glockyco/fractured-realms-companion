@@ -127,9 +127,9 @@ svg {
   width: min(var(--fr-panel-width), calc(100vw - (2 * var(--fr-panel-gap))));
   height: min(var(--fr-panel-height), calc(100dvh - 5rem));
   min-width: min(var(--fr-panel-min), calc(100vw - (2 * var(--fr-panel-gap))));
-  min-height: 20rem;
+  min-height: min(20rem, calc(100dvh - 1rem));
   max-width: calc(100vw - (2 * var(--fr-panel-gap)));
-  max-height: calc(100dvh - 5rem);
+  max-height: calc(100dvh - 1rem);
   display: grid;
   grid-template-rows: auto auto auto minmax(0, 1fr);
   overflow: hidden;
@@ -342,6 +342,7 @@ h3 { margin: var(--fr-s5) 0 var(--fr-s2); font-size: 0.875rem; }
 .skill-action-status { min-height: 1.25rem; margin: 0 0 var(--fr-s3); color: var(--fr-neutral-300); font-size: 0.75rem; }
 .skill-action-status[data-state="error"] { color: var(--fr-brass-400); }
 .table-wrap { overflow: auto; border: 1px solid var(--fr-neutral-800); border-radius: var(--fr-radius-sm); }
+.table-wrap table { min-width: 44rem; }
 table { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
 caption { padding: var(--fr-s3); color: var(--fr-neutral-300); text-align: left; }
 th, td { padding: var(--fr-s2) var(--fr-s3); border-bottom: 1px solid var(--fr-neutral-800); text-align: left; vertical-align: top; }
@@ -543,6 +544,18 @@ export function clampFloatingPosition(position, size, viewport, gutter = 8) {
   };
 }
 
+export function fitWithinViewport(position, size, viewport, gutter = 8) {
+  const width = Math.min(Math.max(0, Number(size?.width) || 0), Math.max(0, (Number(viewport?.width) || 0) - 2 * gutter));
+  const height = Math.min(Math.max(0, Number(size?.height) || 0), Math.max(0, (Number(viewport?.height) || 0) - 2 * gutter));
+  const { left, top } = clampFloatingPosition(position, { width, height }, viewport, gutter);
+  return {
+    left,
+    top,
+    maxWidth: (Number(viewport?.width) || 0) - left - gutter,
+    maxHeight: (Number(viewport?.height) || 0) - top - gutter,
+  };
+}
+
 function formatInterval(milliseconds) {
   const value = Number(milliseconds);
   if (!Number.isFinite(value)) return '—';
@@ -658,7 +671,7 @@ function makeElement(documentRef, tag, attributes = {}) {
   return element;
 }
 
-function enableFloatingDrag(documentRef, element, handle, onPosition) {
+function enableFloatingDrag(documentRef, element, handle, onPosition, onMove) {
   let drag = null;
   let suppressClick = false;
   const viewport = () => ({
@@ -677,6 +690,7 @@ function enableFloatingDrag(documentRef, element, handle, onPosition) {
     element.style.top = `${position.top}px`;
     element.style.right = 'auto';
     element.style.bottom = 'auto';
+    onMove?.();
   };
   const end = (event) => {
     if (!drag || (event.pointerId != null && event.pointerId !== drag.pointerId)) return;
@@ -785,17 +799,40 @@ export function createOverlayShell(documentRef) {
     element.style.right = 'auto';
     element.style.bottom = 'auto';
   };
+  const fitPanel = () => {
+    if (panel.hidden) return;
+    const rect = panel.getBoundingClientRect();
+    const hasInlinePosition = Boolean(panel.style.left || panel.style.top);
+    const left = hasInlinePosition ? Number.parseFloat(panel.style.left) : rect.left;
+    const top = hasInlinePosition ? Number.parseFloat(panel.style.top) : rect.top;
+    const fitted = fitWithinViewport(
+      { left: Number.isFinite(left) ? left : rect.left, top: Number.isFinite(top) ? top : rect.top },
+      rect,
+      viewport(),
+    );
+    if (hasInlinePosition) {
+      panel.style.left = `${fitted.left}px`;
+      panel.style.top = `${fitted.top}px`;
+      panel.style.right = 'auto';
+      panel.style.bottom = 'auto';
+    }
+    panel.style.maxWidth = `${fitted.maxWidth}px`;
+    panel.style.maxHeight = `${fitted.maxHeight}px`;
+  };
   const savePosition = (key, position) => {
     positions = { ...positions, [key]: position };
     try { storage?.setItem(POSITION_STORAGE_KEY, JSON.stringify(positions)); } catch { /* persistence is optional */ }
   };
   applyPosition(launcher, positions.launcher);
   const launcherDrag = enableFloatingDrag(documentRef, launcher, launcher, (position) => savePosition('launcher', position));
-  enableFloatingDrag(documentRef, panel, identity, (position) => savePosition('panel', position));
+  enableFloatingDrag(documentRef, panel, identity, (position) => savePosition('panel', position), fitPanel);
 
   const setOpen = (open, restoreFocus = false) => {
     panel.hidden = !open;
-    if (open) applyPosition(panel, positions.panel);
+    if (open) {
+      applyPosition(panel, positions.panel);
+      fitPanel();
+    }
     launcher.setAttribute('aria-expanded', String(open));
     launcher.setAttribute('aria-label', open ? 'Close Fractured Realms Companion' : 'Open Fractured Realms Companion');
     if (open) tabButtons.find((button) => button.getAttribute('aria-selected') === 'true')?.focus();
@@ -843,10 +880,7 @@ export function createOverlayShell(documentRef) {
   view?.addEventListener?.('resize', () => {
     const launcherRect = launcher.getBoundingClientRect();
     applyPosition(launcher, { left: launcherRect.left, top: launcherRect.top });
-    if (!panel.hidden) {
-      const panelRect = panel.getBoundingClientRect();
-      applyPosition(panel, { left: panelRect.left, top: panelRect.top });
-    }
+    if (!panel.hidden) fitPanel();
   });
 
   return { host, shadow, launcher, panel, header, identity, close, loading, error, tabs, tabButtons, panels, setOpen, selectTab, showError };
@@ -857,14 +891,14 @@ function blockedText(blocked) {
   if (typeof blocked === 'string') return blocked;
   const reason = blocked.reason || blocked.type;
   if (reason === 'level') return `Requires ${blocked.skillName || blocked.skillId || 'skill'} level ${blocked.minLevel ?? blocked.levelReq ?? blocked.level ?? '—'}${blocked.actionName ? ` for ${blocked.actionName}` : ''}.`;
-  if (reason === 'tool') return `Unlock ${blocked.toolName || humanizeId(blocked.toolId)} in the Shop before running ${blocked.actionName}.`;
-  if (reason === 'pattern') return `Unlock the ${humanizeId(blocked.patternId)} glyph pattern before running ${blocked.actionName}.`;
+  if (reason === 'tool') return `Unlock ${blocked.toolName || humanizeId(blocked.toolId)} in the Shop${blocked.actionName ? ` before running ${blocked.actionName}` : ''}.`;
+  if (reason === 'pattern') return `Unlock the ${humanizeId(blocked.patternId)} glyph pattern${blocked.actionName ? ` before running ${blocked.actionName}` : ''}.`;
   if (reason === 'prayer') return `Reach Prayer level ${blocked.minPrayerLevel} before running ${blocked.actionName}.`;
-  if (reason === 'map') return `Chart ${humanizeId(blocked.mapId)} before running ${blocked.actionName}.`;
-  if (reason === 'recipe') return `Learn the ${blocked.actionName} recipe before running this step.`;
+  if (reason === 'map') return `Chart ${humanizeId(blocked.mapId)}${blocked.actionName ? ` before running ${blocked.actionName}` : ''}.`;
+  if (reason === 'recipe') return `Learn the ${blocked.actionName || 'required'} recipe before running this step.`;
   if (reason === 'bag-full') return 'Free at least one bag slot before running an action.';
   if (reason === 'input') return `Requires ${blocked.required} ${humanizeId(blocked.itemId)} in the bag; ${blocked.available} available.`;
-  if (reason === 'rare-only') return `Only available as a rare output${blocked.chances ? ` (${blocked.chances})` : ''}; rare drops are not automated.`;
+  if (reason === 'rare-only') return `Only available as a rare drop${Array.isArray(blocked.chances) && blocked.chances.length ? ` (${blocked.chances.map((chance) => formatChance(chance.chance)).join(', ')})` : ''}.`;
   if (reason === 'no-source') return 'No deterministic source exists in this game build.';
   if (reason === 'cycle') return `A dependency cycle prevents a safe plan${blocked.itemId ? ` at ${blocked.itemId}` : ''}.`;
   return blocked.message || String(reason || 'This step is blocked.');

@@ -201,9 +201,8 @@ export function createPlan(datasets = {}, snapshot = {}, request = {}) {
   };
 
   const fail = (itemId, reason, details = {}, source) => {
-    if (!failure) failure = { reason, itemId, ...details };
     const action = source?.action;
-    steps.push(blockedStep(itemId, datasets.items, reason, {
+    const enriched = {
       ...details,
       ...(source ? {
         skillId: source.skillId,
@@ -213,7 +212,9 @@ export function createPlan(datasets = {}, snapshot = {}, request = {}) {
         gateLevelReq: action?.gateLevelReq,
         interval: action?.interval,
       } : {}),
-    }));
+    };
+    if (!failure) failure = { reason, itemId, ...enriched };
+    steps.push(blockedStep(itemId, datasets.items, reason, enriched));
     return { ok: false };
   };
 
