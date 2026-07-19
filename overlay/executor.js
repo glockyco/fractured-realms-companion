@@ -34,6 +34,7 @@ export function createDirectExecutor(api, options = {}) {
   let steps = [];
   let index = -1;
   let target = 0;
+  let stepStart = 0;
   let lastProduced = 0;
   let lastProgressAt = 0;
   let verifyTimer;
@@ -44,12 +45,41 @@ export function createDirectExecutor(api, options = {}) {
   let terminalResolve;
   let terminalPromise = Promise.resolve();
 
-  const update = (phase, message, currentStep = index) => {
+  const stepDuration = (step) => Math.max(0, asNumber(step?.interval, 0)) * Math.max(0, asNumber(step?.count, 0));
+  const progress = (current = state()) => {
+    const step = steps[index];
+    if (!step) {
+      return {
+        completedSteps: status.phase === 'complete' ? steps.length : 0,
+        stepProduced: 0,
+        stepTarget: 0,
+        stepRemainingMs: 0,
+        remainingMs: status.phase === 'complete' ? 0 : steps.reduce((sum, candidate) => sum + stepDuration(candidate), 0),
+      };
+    }
+    const inventory = inventoryValue(current, step.produceItemId);
+    const stepTarget = Math.max(0, target - stepStart);
+    const stepProduced = Math.min(stepTarget, Math.max(0, inventory - stepStart));
+    const outputPerRun = Math.max(1, asNumber(step.produceQty, 0) / Math.max(1, asNumber(step.count, 1)));
+    const remainingRuns = Math.ceil(Math.max(0, target - inventory) / outputPerRun);
+    const futureMs = steps.slice(index + 1).reduce((sum, candidate) => sum + stepDuration(candidate), 0);
+    const stepRemainingMs = remainingRuns * Math.max(0, asNumber(step.interval, 0));
+    return {
+      completedSteps: Math.max(0, index),
+      stepProduced,
+      stepTarget,
+      stepRemainingMs,
+      remainingMs: stepRemainingMs + futureMs,
+    };
+  };
+
+  const update = (phase, message, currentStep = index, current = state()) => {
     status = {
       phase,
       currentStep: currentStep == null ? null : currentStep,
       totalSteps: steps.length,
       message: message ?? '',
+      ...progress(current),
     };
     try { onUpdate({ ...status }); } catch { /* UI observers must not break execution. */ }
   };
@@ -86,10 +116,11 @@ export function createDirectExecutor(api, options = {}) {
     && current?.activeAction === step?.actionId;
 
   const error = (message) => {
+    const current = state();
     clearStepTimers();
     detach();
     transitionBusy = false;
-    update('error', message);
+    update('error', message, index, current);
     resolveTerminal();
   };
 
@@ -97,7 +128,18 @@ export function createDirectExecutor(api, options = {}) {
     clearStepTimers();
     detach();
     transitionBusy = false;
-    update('complete', 'Plan complete', steps.length ? steps.length - 1 : null);
+    status = {
+      phase: 'complete',
+      currentStep: steps.length ? steps.length - 1 : null,
+      totalSteps: steps.length,
+      completedSteps: steps.length,
+      stepProduced: steps.length ? Math.max(0, target - stepStart) : 0,
+      stepTarget: steps.length ? Math.max(0, target - stepStart) : 0,
+      stepRemainingMs: 0,
+      remainingMs: 0,
+      message: 'Queue complete',
+    };
+    try { onUpdate({ ...status }); } catch { /* UI observers must not break execution. */ }
     resolveTerminal();
   };
 
@@ -166,7 +208,7 @@ export function createDirectExecutor(api, options = {}) {
         verifyTimer = undefined;
         lastProduced = inventory;
         lastProgressAt = asNumber(now(), 0);
-        update('running', `Running ${step.actionName}`);
+        update('running', `Running ${step.actionName}`, index, current);
         armStallTimer(runToken);
       }
       return;
@@ -174,6 +216,7 @@ export function createDirectExecutor(api, options = {}) {
     if (inventory > lastProduced) {
       lastProduced = inventory;
       lastProgressAt = asNumber(now(), 0);
+      update('running', `Running ${step.actionName}`, index, current);
       armStallTimer(runToken);
     }
     if (!matching(current, step)) {
@@ -190,14 +233,15 @@ export function createDirectExecutor(api, options = {}) {
     index = stepIndex;
     const step = steps[index];
     const current = state();
-    target = inventoryValue(current, step.produceItemId) + Math.max(0, asNumber(step.produceQty, 0));
+    stepStart = inventoryValue(current, step.produceItemId);
+    target = stepStart + Math.max(0, asNumber(step.produceQty, 0));
     // A malformed/legacy step can still be executed using count and one output.
-    if (target === inventoryValue(current, step.produceItemId) && asNumber(step.count, 0) > 0) {
+    if (target === stepStart && asNumber(step.count, 0) > 0) {
       target += asNumber(step.count, 0);
     }
-    lastProduced = inventoryValue(current, step.produceItemId);
+    lastProduced = stepStart;
     lastProgressAt = asNumber(now(), 0);
-    update('starting', `Starting ${step.actionName}`);
+    update('starting', `Starting ${step.actionName}`, index, current);
 
     const invokeStart = () => {
       if (token !== runToken) return;
@@ -259,7 +303,7 @@ export function createDirectExecutor(api, options = {}) {
     steps = [];
     index = -1;
     transitionBusy = false;
-    update('idle', 'Stopped', null);
+    update('idle', 'Stopped', null, {});
     resolveTerminal();
   };
 
@@ -270,7 +314,7 @@ export function createDirectExecutor(api, options = {}) {
     const currentInventory = inventoryValue(current, steps[index].produceItemId);
     const remaining = Math.max(0, target - currentInventory);
     if (remaining <= 0) {
-      update('running', `Finishing ${steps[index].actionName}`);
+      update('running', `Finishing ${steps[index].actionName}`, index, current);
       finishStep(token);
       return;
     }
@@ -279,7 +323,7 @@ export function createDirectExecutor(api, options = {}) {
     steps[index].produceQty = remaining;
     lastProduced = currentInventory;
     lastProgressAt = asNumber(now(), 0);
-    update('starting', `Resuming ${steps[index].actionName}`);
+    update('starting', `Resuming ${steps[index].actionName}`, index, current);
     let result;
     try { result = api.startAction(steps[index].skillId, steps[index].actionId); }
     catch (cause) { error(cause instanceof Error ? cause.message : `Unable to resume ${steps[index].actionName}`); return; }

@@ -252,10 +252,20 @@ test('executor advances one step at a time and completes', () => {
   ];
   executor.run(steps);
   assert.equal(game.api.state.activeAction, 'ore');
+  assert.deepEqual(
+    { produced: executor.getStatus().stepProduced, target: executor.getStatus().stepTarget, stepRemaining: executor.getStatus().stepRemainingMs, remaining: executor.getStatus().remainingMs },
+    { produced: 0, target: 1, stepRemaining: 10, remaining: 20 },
+  );
   game.produce('ore');
   assert.equal(game.api.state.activeAction, 'bar');
+  assert.deepEqual(
+    { step: executor.getStatus().currentStep, produced: executor.getStatus().stepProduced, target: executor.getStatus().stepTarget, stepRemaining: executor.getStatus().stepRemainingMs, remaining: executor.getStatus().remainingMs },
+    { step: 1, produced: 0, target: 1, stepRemaining: 10, remaining: 10 },
+  );
   game.produce('bar');
   assert.equal(executor.getStatus().phase, 'complete');
+  assert.equal(executor.getStatus().completedSteps, 2);
+  assert.equal(executor.getStatus().remainingMs, 0);
   assert.deepEqual(game.api.state.actionQueue, []);
 });
 

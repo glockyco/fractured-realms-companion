@@ -7,8 +7,13 @@ import {
   DATA_FILES,
   bootOverlay,
   buildIndexes,
+  clampFloatingPosition,
   createOverlayShell,
+  estimatePlanDuration,
+  formatDuration,
   isExecutionLocked,
+  projectPlanState,
+  resolvePlanQueue,
   searchPlanTargets,
 } from '../../overlay/overlay.js';
 
@@ -220,6 +225,70 @@ test('planner target combobox supports keyboard selection and submission', async
   assert.deepEqual(result.app.state.currentPlan.steps.map((step) => step.actionId), ['chop_log', 'make_plank']);
   assert.deepEqual(result.app.state.recentPlanItemIds, ['plank']);
 });
+test('queued plans project earlier deterministic outputs and estimate duration', () => {
+  const goals = [
+    { id: 'plan-1', itemId: 'log', qty: 2 },
+    { id: 'plan-2', itemId: 'plank', qty: 1 },
+  ];
+  const queue = resolvePlanQueue(datasets(), api().getState(), goals);
+
+  assert.equal(queue.length, 2);
+  assert.deepEqual(queue[0].plan.steps.map((step) => [step.actionId, step.count]), [['chop_log', 2]]);
+  assert.deepEqual(queue[1].plan.steps.map((step) => [step.actionId, step.count]), [['make_plank', 1]]);
+  assert.equal(queue[0].estimateMs, 2000);
+  assert.equal(estimatePlanDuration(queue[1].plan), 800);
+  assert.equal(formatDuration(62_000), '1m 2s');
+
+  const projected = projectPlanState(datasets(), api().getState(), queue.map((entry) => entry.plan));
+  assert.deepEqual(projected.inventory, { log: 0, plank: 1 });
+});
+
+test('queued planner appends multiple goals against prior output', async () => {
+  const document = new FakeDocument();
+  const result = await bootOverlay({ document, window: { __frCompanion: api() }, fetch: fetchFor(datasets()) });
+  const panel = result.shell.panels.plan;
+  const form = panel.querySelector('#fr-plan-form');
+  const qty = panel.querySelector('#fr-plan-qty');
+
+  result.app.state.planItemId = 'log';
+  qty.value = '2';
+  form.dispatch('submit');
+  result.app.state.planItemId = 'plank';
+  qty.value = '1';
+  form.dispatch('submit');
+
+  assert.equal(result.app.state.planQueue.length, 2);
+  assert.deepEqual(result.app.state.planQueue.map((entry) => entry.itemId), ['log', 'plank']);
+  assert.deepEqual(result.app.state.executionSteps.map((step) => step.actionId), ['chop_log', 'make_plank']);
+  assert.match(panel.querySelector('#fr-run').innerHTML, /Start 2-plan queue/);
+
+  const planResult = panel.querySelector('#fr-plan-result');
+  planResult.dispatch('click', { target: { closest: () => ({ disabled: false, dataset: { queueAction: 'up', planId: 'plan-2' } }) } });
+  assert.deepEqual(result.app.state.planQueue.map((entry) => entry.itemId), ['plank', 'log']);
+  planResult.dispatch('click', { target: { closest: () => ({ disabled: false, dataset: { queueAction: 'remove', planId: 'plan-2' } }) } });
+  assert.deepEqual(result.app.state.planQueue.map((entry) => entry.itemId), ['log']);
+});
+
+test('floating controls clamp to the viewport and suppress click after dragging', () => {
+  assert.deepEqual(
+    clampFloatingPosition({ left: -20, top: 900 }, { width: 100, height: 80 }, { width: 500, height: 400 }),
+    { left: 8, top: 312 },
+  );
+
+  const document = new FakeDocument();
+  const shell = createOverlayShell(document);
+  shell.launcher.dispatch('pointerdown', { pointerId: 1, clientX: 10, clientY: 10, button: 0 });
+  shell.launcher.dispatch('pointermove', { pointerId: 1, clientX: 110, clientY: 90 });
+  shell.launcher.dispatch('pointerup', { pointerId: 1, clientX: 110, clientY: 90 });
+  shell.launcher.dispatch('click');
+
+  assert.equal(shell.launcher.style.left, '110px');
+  assert.equal(shell.launcher.style.top, '90px');
+  assert.equal(shell.panel.hidden, true);
+  shell.launcher.dispatch('click');
+  assert.equal(shell.panel.hidden, false);
+});
+
 test('tab keyboard navigation updates selection and focus', () => {
   const document = new FakeDocument();
   const shell = createOverlayShell(document);

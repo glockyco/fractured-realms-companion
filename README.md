@@ -16,7 +16,7 @@ Search the current game build for an item, then inspect its guaranteed and rare 
 
 | State-aware action planning | Build-matched skill data |
 | --- | --- |
-| The planner turns one goal into an ordered sequence of live game actions. | Skill tables expose levels, timings, tools, outputs, and drop rates. |
+| Queue multiple dependency-aware goals, reorder them, and follow live step progress with remaining-time estimates. | Skill tables expose levels, timings, tools, outputs, and drop rates. |
 | ![Four-action plan for crafting a Minor Fire Rune](docs/screenshots/action-planner.webp) | ![Archaeology actions with levels, intervals, outputs, and tools](docs/screenshots/skill-actions.webp) |
 
 ## Supported systems and discovery
@@ -95,8 +95,9 @@ fractured-companion --help
 
 - **Items:** search by item name, then view descriptions, values, healing data, icons, deterministic and rare sources, and uses.
 - **Skills:** browse extracted skill actions and their requirements, intervals, inputs, outputs, and locations.
-- **Planner:** find a target with the searchable item picker, then request a quantity from the current inventory and unlock state. The planner resolves deterministic input dependencies in order, checks skill levels, permanent Shop tool unlocks, learned recipes, glyph patterns, Prayer requirements, charted maps, and bag capacity, then explains anything that blocks the plan.
-- **Executor:** runs each planned step directly through the game's own start/stop action controls, verifies that the requested action started, detects outside action changes, supports resume, and stops on a stalled action or completion. Rare outputs are never treated as guaranteed production, and tools are not auto-crafted.
+- **Planner:** find targets with the searchable item picker, add multiple quantity goals, and reorder or remove them before starting. Each queued plan resolves against current inventory plus deterministic output from earlier plans. The queue shows every action, estimated duration, and live produced/target progress while running. It checks skill levels, permanent Shop tool unlocks, learned recipes, glyph patterns, Prayer requirements, charted maps, and bag capacity, then explains anything that blocks a plan.
+- **Executor:** runs queued steps directly through the game's own start/stop action controls, one action at a time. It verifies starts, detects outside action changes, supports resume, reports queue and step progress with time remaining, and stops on a stalled action or completion. Stopping keeps the queue available to restart. Rare outputs are never treated as guaranteed production, and tools are not auto-crafted.
+- **Layout:** drag the companion window by its title and drag the Companion button itself. Positions persist locally and are clamped back inside the viewport after a resize.
 - **Game data:** `refresh` re-extracts the current build's item, action, skill, XP, building, dig-site, string, and item-art data before patching.
 
 ## Safety model and local state

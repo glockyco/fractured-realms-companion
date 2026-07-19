@@ -12,6 +12,7 @@ export const DATA_FILES = Object.freeze([
 ]);
 
 const HOST_ID = 'fractured-realms-companion';
+const POSITION_STORAGE_KEY = 'fractured-realms-companion.positions.v1';
 const TAB_IDS = Object.freeze(['items', 'skills', 'plan']);
 const LIST_LIMIT = 120;
 const SEARCH_LIMIT = 240;
@@ -26,6 +27,9 @@ const ICONS = Object.freeze({
   warning: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2.8 20h18.4ZM12 9v5m0 3v.1"/></svg>',
   error: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m9 9 6 6m0-6-6 6"/></svg>',
   check: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>',
+  up: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 14 6-6 6 6"/></svg>',
+  down: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 10 6 6 6-6"/></svg>',
+  remove: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>',
   chevron: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg>',
 });
 
@@ -112,6 +116,7 @@ svg {
 }
 .launcher:hover { background: var(--fr-neutral-900); border-color: var(--fr-harbor-400); }
 .launcher:active { transform: translateY(1px); }
+.launcher[data-dragging="true"] { cursor: grabbing; transform: none; transition: none; }
 .launcher[data-state="error"] { border-color: var(--fr-danger-400); color: var(--fr-danger-400); }
 .launcher[data-state="ready"] svg { color: var(--fr-harbor-400); }
 .panel {
@@ -148,6 +153,9 @@ svg {
   background: var(--fr-neutral-950);
 }
 .identity { min-width: 0; display: flex; align-items: center; gap: var(--fr-s2); }
+.panel-drag-handle { flex: 1 1 auto; cursor: grab; touch-action: none; user-select: none; }
+.panel[data-dragging="true"] { transition: none; }
+.panel[data-dragging="true"] .panel-drag-handle { cursor: grabbing; }
 .identity svg { color: var(--fr-harbor-400); width: var(--fr-icon-lg); height: var(--fr-icon-lg); }
 .identity strong { font-size: 0.9375rem; font-weight: 650; letter-spacing: -0.01em; }
 .icon-button {
@@ -320,7 +328,7 @@ h3 { margin: var(--fr-s5) 0 var(--fr-s2); font-size: 0.875rem; }
 .button.primary { border-color: var(--fr-harbor-600); background: var(--fr-harbor-600); color: var(--fr-neutral-100); }
 .button.primary:hover { border-color: var(--fr-harbor-400); background: var(--fr-harbor-800); }
 .button.danger { border-color: var(--fr-danger-400); background: var(--fr-danger-950); color: var(--fr-danger-400); }
-.button:disabled, .control:disabled { cursor: not-allowed; opacity: 0.48; }
+.button:disabled, .icon-button:disabled, .control:disabled { cursor: not-allowed; opacity: 0.48; }
 .button:focus-visible, .icon-button:focus-visible, .launcher:focus-visible, .tab:focus-visible, .control:focus-visible, .search-control:focus-within, .item-row:focus-visible {
   outline: 2px solid var(--fr-harbor-400);
   outline-offset: 2px;
@@ -336,12 +344,40 @@ tbody tr:last-child td { border-bottom: 0; }
 .cell-title { display: block; color: var(--fr-neutral-100); font-weight: 600; }
 .cell-id { display: block; margin-top: var(--fr-s1); color: var(--fr-neutral-300); font-size: 0.6875rem; }
 .plan-form { display: grid; grid-template-columns: minmax(0, 1fr) 6rem auto; align-items: end; gap: var(--fr-s2); padding-bottom: var(--fr-s4); border-bottom: 1px solid var(--fr-neutral-800); }
-.plan-summary { margin: var(--fr-s4) 0 var(--fr-s2); }
+.plan-summary { display: flex; align-items: center; justify-content: space-between; gap: var(--fr-s3); margin: var(--fr-s4) 0 var(--fr-s2); }
+.plan-summary p { margin: var(--fr-s1) 0 0; color: var(--fr-neutral-300); }
 .step-index { width: 1.625rem; height: 1.625rem; display: inline-grid; place-items: center; border-radius: 999px; background: var(--fr-neutral-900); color: var(--fr-neutral-300); font-size: 0.6875rem; }
 .step-name { flex: 1 1 auto; font-weight: 650; }
 .step-qty { color: var(--fr-harbor-400); }
 .step-note { display: flex; align-items: flex-start; gap: var(--fr-s2); color: var(--fr-brass-400) !important; }
 .step-note svg { margin-top: 0.1rem; }
+.queue-header { display: flex; align-items: center; justify-content: space-between; gap: var(--fr-s3); margin-top: var(--fr-s5); }
+.queue-header h3 { margin: 0; }
+.queue-total { color: var(--fr-neutral-300); font-size: 0.75rem; }
+.queue-list { margin: var(--fr-s2) 0 0; padding: 0; list-style: none; border-top: 1px solid var(--fr-neutral-700); }
+.queue-plan { padding: var(--fr-s3) 0; border-bottom: 1px solid var(--fr-neutral-700); }
+.queue-plan[data-state="active"] { background: var(--fr-harbor-950); margin-inline: calc(-1 * var(--fr-s2)); padding-inline: var(--fr-s2); }
+.queue-plan[data-state="complete"] .queue-plan-title { color: var(--fr-success-400); }
+.queue-plan-top { display: flex; align-items: center; gap: var(--fr-s2); }
+.queue-plan-index { color: var(--fr-neutral-300); font-size: 0.75rem; }
+.queue-plan-title { min-width: 0; flex: 1 1 auto; overflow: hidden; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+.queue-plan-meta { color: var(--fr-neutral-300); font-size: 0.75rem; white-space: nowrap; }
+.queue-plan-actions { display: flex; gap: var(--fr-s1); }
+.queue-plan-actions .icon-button { width: 1.875rem; height: 1.875rem; }
+.queue-steps { margin: var(--fr-s2) 0 0 1.625rem; padding: 0; list-style: none; }
+.queue-step { display: grid; grid-template-columns: 1.25rem minmax(0, 1fr) auto; align-items: center; gap: var(--fr-s2); min-height: 2rem; color: var(--fr-neutral-300); font-size: 0.75rem; }
+.queue-step[data-state="active"] { color: var(--fr-neutral-100); }
+.queue-step[data-state="complete"] { color: var(--fr-success-400); }
+.queue-step-marker { width: 1.125rem; height: 1.125rem; display: inline-grid; place-items: center; border: 1px solid var(--fr-neutral-700); border-radius: 999px; font-size: 0.625rem; }
+.queue-step[data-state="active"] .queue-step-marker { border-color: var(--fr-harbor-400); background: var(--fr-harbor-800); }
+.queue-step[data-state="complete"] .queue-step-marker { border-color: var(--fr-success-400); background: var(--fr-success-950); }
+.queue-step-time { white-space: nowrap; }
+.step-progress { grid-column: 2 / -1; width: 100%; height: 0.375rem; overflow: hidden; border: 0; border-radius: 999px; background: var(--fr-neutral-800); accent-color: var(--fr-harbor-400); }
+.step-progress::-webkit-progress-bar { background: var(--fr-neutral-800); }
+.step-progress::-webkit-progress-value { background: var(--fr-harbor-400); }
+.executor-progress { width: 100%; height: 0.375rem; margin-top: var(--fr-s2); overflow: hidden; border: 0; border-radius: 999px; background: var(--fr-neutral-800); accent-color: var(--fr-harbor-400); }
+.executor-progress::-webkit-progress-bar { background: var(--fr-neutral-800); }
+.executor-progress::-webkit-progress-value { background: var(--fr-harbor-400); }
 .executor {
   position: sticky;
   bottom: 0;
@@ -357,12 +393,15 @@ tbody tr:last-child td { border-bottom: 0; }
 .executor-status { min-width: 0; }
 .executor-status strong { display: block; }
 .executor-status p { margin: var(--fr-s1) 0 0; overflow: hidden; color: var(--fr-neutral-300); font-size: 0.75rem; text-overflow: ellipsis; white-space: nowrap; }
+.executor-note { margin-top: var(--fr-s2) !important; white-space: normal !important; }
 .executor-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--fr-s2); }
 .loading-line { height: 0.25rem; overflow: hidden; background: var(--fr-neutral-900); }
 .loading-line::after { content: ""; display: block; width: 35%; height: 100%; background: var(--fr-harbor-400); animation: loading 1.2s linear infinite; }
 @keyframes loading { from { transform: translateX(-100%); } to { transform: translateX(300%); } }
 @media (max-width: 40rem) {
   .panel { width: calc(100vw - (2 * var(--fr-panel-gap))); height: min(78dvh, calc(100dvh - 5rem)); resize: vertical; }
+  .queue-plan-top { flex-wrap: wrap; }
+  .queue-plan-actions { margin-left: 1.625rem; }
   .items-layout { display: block; }
   .item-browser { height: 48%; border-right: 0; border-bottom: 1px solid var(--fr-neutral-800); }
   .detail { height: 52%; }
@@ -426,6 +465,73 @@ export function searchPlanTargets(itemEntries, query = '', priorityIds = [], lim
       return left.label.localeCompare(right.label) || left.id.localeCompare(right.id);
     })
     .slice(0, Math.max(0, Number(limit) || 0));
+}
+
+export function formatDuration(milliseconds) {
+  const totalSeconds = Math.max(0, Math.ceil((Number(milliseconds) || 0) / 1000));
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours) return `${hours}h ${minutes}m`;
+  return seconds ? `${minutes}m ${seconds}s` : `${minutes}m`;
+}
+
+export function estimatePlanDuration(plan) {
+  return (plan?.steps || []).reduce((total, step) => {
+    const interval = Math.max(0, Number(step.interval) || 0);
+    const count = Math.max(0, Number(step.count) || 0);
+    return total + interval * count;
+  }, 0);
+}
+
+export function projectPlanState(datasets, snapshot, plans) {
+  const projected = {
+    ...(snapshot || {}),
+    inventory: { ...(snapshot?.inventory || {}) },
+  };
+  const actionById = new Map();
+  for (const [skillId, actions] of Object.entries(datasets.actions || {})) {
+    for (const action of actions || []) actionById.set(`${skillId}:${action.id}`, action);
+  }
+  for (const plan of plans || []) {
+    if (!plan?.ok) continue;
+    for (const step of plan.steps || []) {
+      const action = actionById.get(`${step.skillId}:${step.actionId}`);
+      const count = Math.max(0, Number(step.count) || 0);
+      if (!action || !count) continue;
+      for (const [itemId, qty] of Object.entries(action.inputs || {})) {
+        projected.inventory[itemId] = Math.max(0, (Number(projected.inventory[itemId]) || 0) - (Number(qty) || 0) * count);
+      }
+      for (const [itemId, qty] of Object.entries(action.outputs || {})) {
+        projected.inventory[itemId] = Math.max(0, (Number(projected.inventory[itemId]) || 0) + (Number(qty) || 0) * count);
+      }
+    }
+  }
+  return projected;
+}
+
+export function resolvePlanQueue(datasets, snapshot, goals) {
+  const queue = [];
+  let projected = projectPlanState(datasets, snapshot, []);
+  for (const goal of goals || []) {
+    const plan = createPlan(datasets, projected, { itemId: goal.itemId, qty: goal.qty });
+    const entry = { ...goal, plan, estimateMs: estimatePlanDuration(plan) };
+    queue.push(entry);
+    projected = projectPlanState(datasets, projected, [plan]);
+  }
+  return queue;
+}
+
+export function clampFloatingPosition(position, size, viewport, gutter = 8) {
+  const width = Math.max(0, Number(size?.width) || 0);
+  const height = Math.max(0, Number(size?.height) || 0);
+  const viewportWidth = Math.max(0, Number(viewport?.width) || 0);
+  const viewportHeight = Math.max(0, Number(viewport?.height) || 0);
+  return {
+    left: Math.max(gutter, Math.min(Number(position?.left) || 0, Math.max(gutter, viewportWidth - width - gutter))),
+    top: Math.max(gutter, Math.min(Number(position?.top) || 0, Math.max(gutter, viewportHeight - height - gutter))),
+  };
 }
 
 function formatInterval(milliseconds) {
@@ -543,6 +649,63 @@ function makeElement(documentRef, tag, attributes = {}) {
   return element;
 }
 
+function enableFloatingDrag(documentRef, element, handle, onPosition) {
+  let drag = null;
+  let suppressClick = false;
+  const viewport = () => ({
+    width: Number(documentRef.defaultView?.innerWidth) || Number(globalThis.innerWidth) || 1024,
+    height: Number(documentRef.defaultView?.innerHeight) || Number(globalThis.innerHeight) || 768,
+  });
+  const move = (event) => {
+    if (!drag || (event.pointerId != null && event.pointerId !== drag.pointerId)) return;
+    const left = drag.left + (Number(event.clientX) - drag.clientX);
+    const top = drag.top + (Number(event.clientY) - drag.clientY);
+    const rect = element.getBoundingClientRect();
+    const position = clampFloatingPosition({ left, top }, rect, viewport());
+    const distance = Math.hypot(Number(event.clientX) - drag.clientX, Number(event.clientY) - drag.clientY);
+    if (distance > 4) drag.moved = true;
+    element.style.left = `${position.left}px`;
+    element.style.top = `${position.top}px`;
+    element.style.right = 'auto';
+    element.style.bottom = 'auto';
+  };
+  const end = (event) => {
+    if (!drag || (event.pointerId != null && event.pointerId !== drag.pointerId)) return;
+    const moved = drag.moved;
+    drag = null;
+    element.dataset.dragging = 'false';
+    try { handle.releasePointerCapture?.(event.pointerId); } catch { /* capture may already be released */ }
+    if (!moved) return;
+    suppressClick = true;
+    onPosition({ left: Number.parseFloat(element.style.left) || 0, top: Number.parseFloat(element.style.top) || 0 });
+  };
+  handle.addEventListener('pointerdown', (event) => {
+    if (event.button != null && event.button !== 0) return;
+    const rect = element.getBoundingClientRect();
+    drag = {
+      pointerId: event.pointerId,
+      clientX: Number(event.clientX) || 0,
+      clientY: Number(event.clientY) || 0,
+      left: rect.left,
+      top: rect.top,
+      moved: false,
+    };
+    element.dataset.dragging = 'true';
+    try { handle.setPointerCapture?.(event.pointerId); } catch { /* pointer capture is optional in embedded browsers */ }
+    event.preventDefault?.();
+  });
+  handle.addEventListener('pointermove', move);
+  handle.addEventListener('pointerup', end);
+  handle.addEventListener('pointercancel', end);
+  return {
+    consumeClick() {
+      if (!suppressClick) return false;
+      suppressClick = false;
+      return true;
+    },
+  };
+}
+
 export function createOverlayShell(documentRef) {
   if (documentRef.getElementById?.(HOST_ID)) return null;
   const host = makeElement(documentRef, 'div', { id: HOST_ID });
@@ -560,7 +723,8 @@ export function createOverlayShell(documentRef) {
   panel.hidden = true;
   const header = makeElement(documentRef, 'header', { class: 'panel-header' });
   const identity = makeElement(documentRef, 'div', {
-    class: 'identity', html: `${ICONS.helm}<strong>Fractured Realms Companion</strong>`,
+    class: 'identity panel-drag-handle', title: 'Drag companion window',
+    html: `${ICONS.helm}<strong>Fractured Realms Companion</strong>`,
   });
   const close = makeElement(documentRef, 'button', {
     class: 'icon-button', type: 'button', title: 'Close companion', 'aria-label': 'Close companion', html: ICONS.close,
@@ -595,8 +759,34 @@ export function createOverlayShell(documentRef) {
   shadow.append(style, launcher, panel);
   documentRef.body.append(host);
 
+  const view = documentRef.defaultView || globalThis.window;
+  const storage = view?.localStorage;
+  let positions = {};
+  try { positions = JSON.parse(storage?.getItem(POSITION_STORAGE_KEY) || '{}') || {}; } catch { positions = {}; }
+  const viewport = () => ({
+    width: Number(view?.innerWidth) || Number(globalThis.innerWidth) || 1024,
+    height: Number(view?.innerHeight) || Number(globalThis.innerHeight) || 768,
+  });
+  const applyPosition = (element, position) => {
+    if (!position) return;
+    const rect = element.getBoundingClientRect();
+    const next = clampFloatingPosition(position, rect, viewport());
+    element.style.left = `${next.left}px`;
+    element.style.top = `${next.top}px`;
+    element.style.right = 'auto';
+    element.style.bottom = 'auto';
+  };
+  const savePosition = (key, position) => {
+    positions = { ...positions, [key]: position };
+    try { storage?.setItem(POSITION_STORAGE_KEY, JSON.stringify(positions)); } catch { /* persistence is optional */ }
+  };
+  applyPosition(launcher, positions.launcher);
+  const launcherDrag = enableFloatingDrag(documentRef, launcher, launcher, (position) => savePosition('launcher', position));
+  enableFloatingDrag(documentRef, panel, identity, (position) => savePosition('panel', position));
+
   const setOpen = (open, restoreFocus = false) => {
     panel.hidden = !open;
+    if (open) applyPosition(panel, positions.panel);
     launcher.setAttribute('aria-expanded', String(open));
     launcher.setAttribute('aria-label', open ? 'Close Fractured Realms Companion' : 'Open Fractured Realms Companion');
     if (open) tabButtons.find((button) => button.getAttribute('aria-selected') === 'true')?.focus();
@@ -620,7 +810,10 @@ export function createOverlayShell(documentRef) {
     setOpen(true, false);
   };
 
-  launcher.addEventListener('click', () => setOpen(panel.hidden, panel.hidden === false));
+  launcher.addEventListener('click', () => {
+    if (launcherDrag.consumeClick()) return;
+    setOpen(panel.hidden, panel.hidden === false);
+  });
   close.addEventListener('click', () => setOpen(false, true));
   tabButtons.forEach((button, index) => {
     button.addEventListener('click', () => selectTab(index));
@@ -638,7 +831,16 @@ export function createOverlayShell(documentRef) {
     }
   });
 
-  return { host, shadow, launcher, panel, close, loading, error, tabs, tabButtons, panels, setOpen, selectTab, showError };
+  view?.addEventListener?.('resize', () => {
+    const launcherRect = launcher.getBoundingClientRect();
+    applyPosition(launcher, { left: launcherRect.left, top: launcherRect.top });
+    if (!panel.hidden) {
+      const panelRect = panel.getBoundingClientRect();
+      applyPosition(panel, { left: panelRect.left, top: panelRect.top });
+    }
+  });
+
+  return { host, shadow, launcher, panel, header, identity, close, loading, error, tabs, tabButtons, panels, setOpen, selectTab, showError };
 }
 
 function blockedText(blocked) {
@@ -672,7 +874,12 @@ function createApplication(shell, datasets, api) {
     recentPlanItemIds: [],
     query: '',
     currentPlan: null,
-    executorStatus: { phase: 'idle', currentStep: null, message: 'Choose an item and build a plan.' },
+    planNotice: null,
+    queueGoals: [],
+    planQueue: [],
+    executionSteps: [],
+    nextPlanId: 1,
+    executorStatus: { phase: 'idle', currentStep: null, message: 'Add one or more plans to the queue.' },
   };
 
   shell.loading.hidden = true;
@@ -680,7 +887,7 @@ function createApplication(shell, datasets, api) {
   const executor = createDirectExecutor(api, {
     onUpdate(status) {
       state.executorStatus = status;
-      renderExecutor();
+      renderPlan();
     },
   });
 
@@ -800,13 +1007,13 @@ function createApplication(shell, datasets, api) {
       <form class="plan-form" id="fr-plan-form">
         <div class="field"><label for="fr-plan-item">Desired item</label><div class="plan-combobox"><input class="control" id="fr-plan-item" type="search" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded="false" aria-controls="fr-plan-options" autocomplete="off" placeholder="Search item names" required></div></div>
         <div class="field"><label for="fr-plan-qty">Quantity</label><input class="control data" id="fr-plan-qty" type="number" min="1" step="1" value="1" inputmode="numeric"></div>
-        <button class="button" id="fr-resolve-plan" type="submit">Build plan</button>
+        <button class="button" id="fr-resolve-plan" type="submit">Add plan</button>
       </form>
       <div class="combobox-popover" id="fr-plan-options" role="listbox" aria-label="Matching items" hidden></div>
-      <div id="fr-plan-result"><div class="empty">Choose an item and quantity. The planner checks your inventory and skill levels, then lists each required action.</div></div>
-      <div class="executor" aria-label="Direct action controls">
-        <div class="executor-status" role="status" aria-live="polite" aria-atomic="true"><strong id="fr-executor-phase">Ready</strong><p id="fr-executor-message">Choose an item and build a plan.</p></div>
-        <div class="executor-actions"><button class="button primary" id="fr-run" type="button" disabled>${ICONS.play}Run</button><button class="button" id="fr-resume" type="button" hidden>${ICONS.resume}Resume</button><button class="button danger" id="fr-stop" type="button" disabled>${ICONS.stop}Stop</button></div>
+      <div id="fr-plan-result"><div class="empty">Add an item to begin a queue. Each plan is resolved against the output of plans before it.</div></div>
+      <div class="executor" aria-label="Queued action controls">
+        <div class="executor-status" role="status" aria-live="polite" aria-atomic="true"><strong id="fr-executor-phase">Queue ready</strong><p id="fr-executor-message">Add one or more plans to the queue.</p><progress class="executor-progress" id="fr-executor-progress" max="1" value="0" aria-label="Queue progress"></progress><p class="executor-note" id="fr-executor-note">Starting the queue stops active combat. The companion runs one direct action at a time.</p></div>
+        <div class="executor-actions"><button class="button primary" id="fr-run" type="button" disabled>${ICONS.play}Start queue</button><button class="button" id="fr-resume" type="button" hidden>${ICONS.resume}Resume</button><button class="button danger" id="fr-stop" type="button" disabled>${ICONS.stop}Stop queue</button><button class="button" id="fr-clear" type="button" disabled>Clear</button></div>
       </div>
     </div>`;
   const planForm = planPanel.querySelector('#fr-plan-form');
@@ -816,9 +1023,12 @@ function createApplication(shell, datasets, api) {
   const resolveButton = planPanel.querySelector('#fr-resolve-plan');
   const executorPhase = planPanel.querySelector('#fr-executor-phase');
   const executorMessage = planPanel.querySelector('#fr-executor-message');
+  const executorProgress = planPanel.querySelector('#fr-executor-progress');
+  const executorNote = planPanel.querySelector('#fr-executor-note');
   const runButton = planPanel.querySelector('#fr-run');
   const resumeButton = planPanel.querySelector('#fr-resume');
   const stopButton = planPanel.querySelector('#fr-stop');
+  const clearButton = planPanel.querySelector('#fr-clear');
   const planOptions = planPanel.querySelector('#fr-plan-options');
   shell.shadow.append(planOptions);
   let planTargetResults = [];
@@ -933,16 +1143,66 @@ function createApplication(shell, datasets, api) {
   shell.close.addEventListener('click', closePlanTargets);
   documentRef.defaultView?.addEventListener?.('resize', closePlanTargets);
 
+  function flattenQueue() {
+    const flattened = [];
+    state.planQueue.forEach((entry, planIndex) => {
+      (entry.plan?.steps || []).forEach((step, planStepIndex) => flattened.push({
+        ...step,
+        queuePlanId: entry.id,
+        queuePlanIndex: planIndex,
+        queuePlanCount: state.planQueue.length,
+        queuePlanStep: planStepIndex,
+        queuePlanSteps: entry.plan.steps.length,
+        queuePlanLabel: labelFor(items, entry.itemId),
+      }));
+    });
+    return flattened;
+  }
+
+  function rebuildQueue() {
+    state.planQueue = resolvePlanQueue(datasets, api.getState(), state.queueGoals);
+    state.executionSteps = flattenQueue();
+    state.currentPlan = state.planQueue.at(-1)?.plan || null;
+  }
+
+  function queueEstimate() {
+    return state.planQueue.reduce((total, entry) => total + entry.estimateMs, 0);
+  }
+
+  function queueIsRunnable() {
+    return state.planQueue.length > 0
+      && state.planQueue.every((entry) => entry.plan?.ok)
+      && state.executionSteps.length > 0;
+  }
+
   function renderExecutor() {
     const status = state.executorStatus || { phase: 'idle', message: '' };
-    const phaseLabels = { idle: 'Ready', starting: 'Starting action', running: 'Running plan', paused: 'Plan paused', complete: 'Plan complete', error: 'Plan stopped' };
-    const total = state.currentPlan?.steps?.length || 0;
-    const step = Number.isInteger(status.currentStep) ? Number(status.currentStep) + 1 : null;
-    const phaseLabel = status.phase === 'idle' && state.currentPlan && !state.currentPlan.ok
-      ? 'Blocked'
-      : phaseLabels[status.phase] || status.phase;
-    executorPhase.textContent = `${phaseLabel}${step && total ? ` · step ${step} of ${total}` : ''}`;
-    executorMessage.textContent = status.message || 'Direct actions are idle.';
+    const phaseLabels = { idle: 'Queue ready', starting: 'Starting queue', running: 'Queue running', paused: 'Queue paused', complete: 'Queue complete', error: 'Queue stopped' };
+    const total = state.executionSteps.length;
+    const currentIndex = Number.isInteger(status.currentStep) ? Number(status.currentStep) : null;
+    const current = currentIndex == null ? null : state.executionSteps[currentIndex];
+    const currentPlan = current ? state.planQueue[current.queuePlanIndex] : null;
+    const phaseLabel = state.planNotice?.plan && !state.planNotice.plan.ok ? 'Plan blocked' : phaseLabels[status.phase] || status.phase;
+    executorPhase.textContent = currentPlan && isExecutionLocked(status.phase)
+      ? `${phaseLabel} · plan ${current.queuePlanIndex + 1} of ${state.planQueue.length}`
+      : phaseLabel;
+
+    if (current) {
+      const quantity = Number(status.stepTarget) > 0 ? ` · ${Number(status.stepProduced) || 0} of ${Number(status.stepTarget)}` : '';
+      const remaining = Number(status.remainingMs) > 0 ? ` · about ${formatDuration(status.remainingMs)} left` : '';
+      executorMessage.textContent = `${current.actionName || humanizeId(current.actionId)} · action ${currentIndex + 1} of ${total}${quantity}${remaining}`;
+    } else if (state.planQueue.length) {
+      const estimate = queueEstimate();
+      executorMessage.textContent = `${state.planQueue.length} ${state.planQueue.length === 1 ? 'plan' : 'plans'} · ${total} ${total === 1 ? 'action' : 'actions'}${estimate ? ` · about ${formatDuration(estimate)}` : ''}`;
+    } else {
+      executorMessage.textContent = status.message || 'Add one or more plans to the queue.';
+    }
+
+    const stepFraction = Number(status.stepTarget) > 0
+      ? Math.min(1, Math.max(0, Number(status.stepProduced) / Number(status.stepTarget)))
+      : 0;
+    executorProgress.max = Math.max(1, total);
+    executorProgress.value = status.phase === 'complete' ? total : Math.max(0, (currentIndex || 0) + stepFraction);
     const locked = isExecutionLocked(status.phase);
     if (locked) closePlanTargets();
     planItem.disabled = locked;
@@ -950,31 +1210,56 @@ function createApplication(shell, datasets, api) {
     resolveButton.disabled = locked;
     const detailPlanButton = detail.querySelector('#fr-detail-plan');
     if (detailPlanButton) detailPlanButton.disabled = locked;
-    runButton.disabled = locked || !state.currentPlan?.ok || !state.currentPlan?.steps?.length;
+    runButton.disabled = locked || status.phase === 'complete' || !queueIsRunnable();
+    runButton.innerHTML = `${ICONS.play}Start ${state.planQueue.length > 1 ? `${state.planQueue.length}-plan ` : ''}queue`;
     resumeButton.hidden = status.phase !== 'paused';
     stopButton.disabled = !locked;
+    clearButton.disabled = locked || !state.planQueue.length;
+    executorNote.textContent = locked
+      ? 'Stop ends the current game action and keeps this queue available to restart.'
+      : 'Starting the queue stops active combat. The companion runs one direct action at a time.';
+  }
+
+  function renderBlockedPlan(notice) {
+    const plan = notice?.plan;
+    if (!plan || plan.ok) return '';
+    const block = blockedText(plan.blocked || plan.reason);
+    return `<div class="banner plan-blocked" role="alert">${ICONS.error}<div><strong>${escapeHtml(labelFor(items, notice.itemId))} could not be queued</strong><p>${escapeHtml(block || plan.message || 'Resolve the blockers and try again.')}</p></div></div>`;
   }
 
   function renderPlan() {
-    const plan = state.currentPlan;
-    if (!plan) {
-      planResult.innerHTML = '<div class="empty">Choose an item and quantity. The planner checks your inventory and skill levels, then lists each required action.</div>';
-      renderExecutor();
-      return;
-    }
-    const steps = plan.steps || [];
-    const topBlock = blockedText(plan.blocked || plan.reason);
-    const rows = steps.map((step, index) => {
-      const block = blockedText(step.blocked);
-      const count = Number(step.count);
-      const produced = Number(step.produceQty);
-      const quantity = count > 0 ? `×${escapeHtml(count)}` : 'Locked';
-      const production = produced > 0
-        ? `produces ${escapeHtml(labelFor(items, step.produceItemId))} <span class="data">×${escapeHtml(produced)}</span>`
-        : `would produce ${escapeHtml(labelFor(items, step.produceItemId))}`;
-      return `<li class="plan-step"><div class="step-top"><span class="step-index data">${index + 1}</span><span class="step-name">${escapeHtml(step.actionName || humanizeId(step.actionId))}</span><span class="step-qty data">${quantity}</span></div><p>${escapeHtml(skillNames[step.skillId] || humanizeId(step.skillId))} · ${production}</p>${block ? `<p class="step-note">${ICONS.error}<span>${escapeHtml(block)}</span></p>` : ''}</li>`;
+    const status = state.executorStatus || { phase: 'idle' };
+    const currentIndex = Number.isInteger(status.currentStep) ? Number(status.currentStep) : null;
+    let globalIndex = 0;
+    const queueRows = state.planQueue.map((entry, planIndex) => {
+      const startIndex = globalIndex;
+      const steps = entry.plan?.steps || [];
+      const endIndex = startIndex + steps.length;
+      globalIndex = endIndex;
+      const planComplete = status.phase === 'complete'
+        || (currentIndex != null && currentIndex >= endIndex && status.phase !== 'idle');
+      const planActive = currentIndex != null && currentIndex >= startIndex && currentIndex < endIndex && status.phase !== 'idle';
+      const planState = planComplete ? 'complete' : planActive ? 'active' : 'pending';
+      const stepRows = steps.map((step, planStepIndex) => {
+        const stepIndex = startIndex + planStepIndex;
+        const complete = status.phase === 'complete' || (currentIndex != null && stepIndex < currentIndex && status.phase !== 'idle');
+        const active = currentIndex === stepIndex && status.phase !== 'idle';
+        const stepState = complete ? 'complete' : active ? 'active' : 'pending';
+        const marker = complete ? ICONS.check : String(planStepIndex + 1);
+        const estimate = Math.max(0, (Number(step.interval) || 0) * (Number(step.count) || 0));
+        const activeProgress = active && Number(status.stepTarget) > 0
+          ? `<progress class="step-progress" max="${escapeHtml(status.stepTarget)}" value="${escapeHtml(status.stepProduced || 0)}" aria-label="${escapeHtml(step.actionName)} progress"></progress>`
+          : '';
+        const time = active && Number(status.stepRemainingMs) > 0
+          ? `about ${formatDuration(status.stepRemainingMs)} left`
+          : estimate ? `about ${formatDuration(estimate)}` : '—';
+        return `<li class="queue-step" data-state="${stepState}"><span class="queue-step-marker">${marker}</span><span>${escapeHtml(step.actionName || humanizeId(step.actionId))} <span class="data">×${escapeHtml(step.count)}</span></span><span class="queue-step-time data">${escapeHtml(time)}</span>${activeProgress}</li>`;
+      }).join('');
+      const locked = isExecutionLocked(status.phase);
+      return `<li class="queue-plan" data-state="${planState}" data-plan-id="${escapeHtml(entry.id)}"><div class="queue-plan-top"><span class="queue-plan-index data">${planIndex + 1}</span><span class="queue-plan-title">${escapeHtml(labelFor(items, entry.itemId))} <span class="data">×${escapeHtml(entry.qty)}</span></span><span class="queue-plan-meta">${steps.length} ${steps.length === 1 ? 'action' : 'actions'} · about ${escapeHtml(formatDuration(entry.estimateMs))}</span><span class="queue-plan-actions"><button class="icon-button" type="button" data-queue-action="up" data-plan-id="${escapeHtml(entry.id)}" aria-label="Move ${escapeHtml(labelFor(items, entry.itemId))} up" title="Move up"${locked || planIndex === 0 ? ' disabled' : ''}>${ICONS.up}</button><button class="icon-button" type="button" data-queue-action="down" data-plan-id="${escapeHtml(entry.id)}" aria-label="Move ${escapeHtml(labelFor(items, entry.itemId))} down" title="Move down"${locked || planIndex === state.planQueue.length - 1 ? ' disabled' : ''}>${ICONS.down}</button><button class="icon-button" type="button" data-queue-action="remove" data-plan-id="${escapeHtml(entry.id)}" aria-label="Remove ${escapeHtml(labelFor(items, entry.itemId))}" title="Remove"${locked ? ' disabled' : ''}>${ICONS.remove}</button></span></div><ol class="queue-steps">${stepRows || '<li class="queue-step" data-state="complete"><span class="queue-step-marker">✓</span><span>Already satisfied by current inventory</span><span></span></li>'}</ol></li>`;
     }).join('');
-    planResult.innerHTML = `<div class="plan-summary"><strong>${plan.ok ? `${steps.length} ${steps.length === 1 ? 'action' : 'actions'} resolved` : 'Plan blocked'}</strong>${topBlock && !rows ? `<p class="step-note">${ICONS.error}<span>${escapeHtml(topBlock)}</span></p>` : ''}</div>${rows ? `<ol class="plan-list">${rows}</ol>` : '<div class="empty">No executable steps were produced. Current inventory may already satisfy the request.</div>'}`;
+    const notice = renderBlockedPlan(state.planNotice);
+    planResult.innerHTML = `${notice}${state.planQueue.length ? `<div class="queue-header"><h3>Plan queue</h3><span class="queue-total data">${state.planQueue.length} ${state.planQueue.length === 1 ? 'plan' : 'plans'} · about ${escapeHtml(formatDuration(queueEstimate()))}</span></div><ol class="queue-list">${queueRows}</ol>` : '<div class="empty">Add an item to begin a queue. Each plan is resolved against the output of plans before it.</div>'}`;
     renderExecutor();
   }
 
@@ -990,23 +1275,72 @@ function createApplication(shell, datasets, api) {
       return;
     }
     try {
-      state.currentPlan = createPlan(datasets, api.getState(), { itemId: state.planItemId, qty });
+      const projected = projectPlanState(datasets, api.getState(), state.planQueue.map((entry) => entry.plan));
+      const plan = createPlan(datasets, projected, { itemId: state.planItemId, qty });
+      state.currentPlan = plan;
       state.recentPlanItemIds = [state.planItemId, ...state.recentPlanItemIds.filter((id) => id !== state.planItemId)].slice(0, 5);
-      state.executorStatus = { phase: 'idle', currentStep: null, message: state.currentPlan.ok ? 'Plan ready. Review the dependency order, then run.' : 'Resolve the blockers before running.' };
+      if (plan.ok && plan.steps?.length) {
+        state.queueGoals.push({ id: `plan-${state.nextPlanId++}`, itemId: state.planItemId, qty });
+        state.planNotice = null;
+        rebuildQueue();
+        state.executorStatus = { phase: 'idle', currentStep: null, message: 'Plan added to the queue.' };
+      } else if (plan.ok) {
+        state.planNotice = null;
+        state.executorStatus = { phase: 'idle', currentStep: null, message: `${labelFor(items, state.planItemId)} is already available in the requested quantity.` };
+      } else {
+        state.planNotice = { itemId: state.planItemId, qty, plan };
+        state.executorStatus = { phase: 'idle', currentStep: null, message: 'Resolve the blocker before adding this plan.' };
+      }
     } catch (error) {
-      state.currentPlan = { ok: false, steps: [], reason: error instanceof Error ? error.message : String(error) };
+      const plan = { ok: false, steps: [], reason: error instanceof Error ? error.message : String(error) };
+      state.currentPlan = plan;
+      state.planNotice = { itemId: state.planItemId, qty, plan };
       state.executorStatus = { phase: 'error', currentStep: null, message: 'The plan could not be resolved.' };
     }
     renderPlan();
   });
-  runButton.addEventListener('click', () => {
+
+  planResult.addEventListener('click', (event) => {
     if (isExecutionLocked(state.executorStatus?.phase)) return;
-    if (state.currentPlan?.ok) executor.run(state.currentPlan.steps);
+    const control = event.target.closest?.('[data-queue-action][data-plan-id]');
+    if (!control || control.disabled) return;
+    const index = state.queueGoals.findIndex((goal) => goal.id === control.dataset.planId);
+    if (index < 0) return;
+    if (control.dataset.queueAction === 'remove') state.queueGoals.splice(index, 1);
+    else {
+      const target = control.dataset.queueAction === 'up' ? index - 1 : index + 1;
+      if (target < 0 || target >= state.queueGoals.length) return;
+      [state.queueGoals[index], state.queueGoals[target]] = [state.queueGoals[target], state.queueGoals[index]];
+    }
+    state.planNotice = null;
+    rebuildQueue();
+    state.executorStatus = { phase: 'idle', currentStep: null, message: state.planQueue.length ? 'Queue updated.' : 'Queue cleared.' };
+    renderPlan();
+  });
+
+  runButton.addEventListener('click', () => {
+    if (isExecutionLocked(state.executorStatus?.phase) || !state.planQueue.length) return;
+    rebuildQueue();
+    const blocked = state.planQueue.find((entry) => !entry.plan?.ok);
+    if (blocked) {
+      state.planNotice = { itemId: blocked.itemId, qty: blocked.qty, plan: blocked.plan };
+      state.executorStatus = { phase: 'idle', currentStep: null, message: 'The queue changed and now contains a blocked plan.' };
+      renderPlan();
+      return;
+    }
+    state.executionSteps = flattenQueue();
+    if (state.executionSteps.length) executor.run(state.executionSteps);
   });
   resumeButton.addEventListener('click', () => executor.resume());
-  stopButton.addEventListener('click', () => {
-    executor.stop();
+  stopButton.addEventListener('click', () => executor.stop());
+  clearButton.addEventListener('click', () => {
+    if (isExecutionLocked(state.executorStatus?.phase)) return;
+    state.queueGoals = [];
+    state.planQueue = [];
+    state.executionSteps = [];
     state.currentPlan = null;
+    state.planNotice = null;
+    state.executorStatus = { phase: 'idle', currentStep: null, message: 'Queue cleared.' };
     renderPlan();
   });
   detail.addEventListener('click', (event) => {
