@@ -218,6 +218,57 @@ export function createPlan(datasets = {}, snapshot = {}, request = {}) {
     return { ok: false };
   };
 
+  const applyGates = (candidates) => {
+    let eligible = candidates.filter(({ source }) => hasToolUnlock(source.action, equipment));
+    if (!eligible.length) {
+      const source = candidates.map(({ source: candidate }) => candidate).sort(sourceCompare)[0];
+      const toolId = requiredTool(source.action);
+      return { eligible: [], blocked: { reason: 'tool', details: {
+        toolId,
+        toolName: datasets.strings?.[`name.${toolId}`] ?? itemName(datasets.items, toolId),
+      }, source } };
+    }
+
+    const patternCandidates = eligible;
+    eligible = patternCandidates.filter(({ source }) => !source.action.patternReq || unlockedGlyphPatterns.has(source.action.patternReq));
+    if (!eligible.length) {
+      const source = patternCandidates.map(({ source: candidate }) => candidate).sort(sourceCompare)[0];
+      return { eligible: [], blocked: { reason: 'pattern', details: { patternId: source.action.patternReq }, source } };
+    }
+
+    const prayerCandidates = eligible;
+    eligible = prayerCandidates.filter(({ source }) => (
+      !source.action.prayerReq || levelForXp(datasets.xp, skillXp.prayer) >= number(source.action.prayerReq, 0)
+    ));
+    if (!eligible.length) {
+      const source = prayerCandidates.map(({ source: candidate }) => candidate).sort(sourceCompare)[0];
+      return { eligible: [], blocked: { reason: 'prayer', details: { minPrayerLevel: number(source.action.prayerReq, 0) }, source } };
+    }
+
+    const mapCandidates = eligible;
+    eligible = mapCandidates.filter(({ source }) => !source.action.mapReq || chartedMaps.has(source.action.mapReq));
+    if (!eligible.length) {
+      const source = mapCandidates.map(({ source: candidate }) => candidate).sort(sourceCompare)[0];
+      return { eligible: [], blocked: { reason: 'map', details: { mapId: source.action.mapReq }, source } };
+    }
+
+    const recipeCandidates = eligible;
+    eligible = recipeCandidates.filter(({ source }) => !source.action.recipeScroll || unlockedRecipes.has(source.action.id));
+    if (!eligible.length) {
+      const source = recipeCandidates.map(({ source: candidate }) => candidate).sort(sourceCompare)[0];
+      return { eligible: [], blocked: { reason: 'recipe', details: { recipeScrollId: source.action.recipeScroll }, source } };
+    }
+    return { eligible, blocked: null };
+  };
+
+  const rareChances = (sources) => sources.map(({ skillId, action, rareOutput }) => ({
+    skillId,
+    actionId: action.id ?? '',
+    actionName: action.name ?? action.id ?? itemName(datasets.items, rareOutput?.item),
+    chance: number(rareOutput?.chance, 0),
+    qty: number(rareOutput?.qty, 0),
+  }));
+
   const recordSatisfied = (itemId, requiredQty, satisfiedQty) => {
     const covered = Math.min(Math.max(0, number(requiredQty, 0)), Math.max(0, number(satisfiedQty, 0)));
     if (!covered) return;
@@ -246,61 +297,58 @@ export function createPlan(datasets = {}, snapshot = {}, request = {}) {
           skillId: source.skillId,
         }, source);
       }
+
       const rareSources = rare.get(itemId) ?? [];
-      if (rareSources.length) {
-        const chances = rareSources.map(({ skillId, action, rareOutput }) => ({
-          skillId,
-          actionId: action.id ?? '',
-          actionName: action.name ?? action.id ?? itemName(datasets.items, itemId),
-          chance: number(rareOutput.chance, 0),
-          qty: number(rareOutput.qty, 0),
-        }));
-        return fail(itemId, 'rare-only', { chances }, rareSources[0]);
+      if (!rareSources.length) return fail(itemId, 'no-source');
+      const rareLevels = rareSources.map((source) => ({ source, level: levelForXp(datasets.xp, skillXp[source.skillId]) }));
+      const rareLevelEligible = rareLevels.filter(({ source, level }) => level >= requiredLevel(source.action));
+      if (!rareLevelEligible.length) {
+        const source = [...rareSources].sort(sourceCompare)[0];
+        return fail(itemId, 'level', {
+          minLevel: requiredLevel(source.action),
+          actionName: source.action.name ?? source.action.id ?? itemName(datasets.items, itemId),
+          currentLevel: levelForXp(datasets.xp, skillXp[source.skillId]),
+          skillId: source.skillId,
+        }, source);
       }
-      return fail(itemId, 'no-source');
+      const rareGates = applyGates(rareLevelEligible);
+      if (!rareGates.eligible.length) {
+        const { reason, details, source } = rareGates.blocked;
+        return fail(itemId, reason, details, source);
+      }
+      const source = rareGates.eligible.map(({ source: candidate }) => candidate).sort(sourceCompare)[0];
+      if (Object.keys(source.action.inputs ?? {}).length > 0) {
+        return fail(itemId, 'rare-only', { chances: rareChances(rareSources) }, source);
+      }
+      const rareOutput = source.rareOutput;
+      const chance = number(rareOutput?.chance, 0);
+      const normalized = chance > 1 ? chance / 100 : chance;
+      const perHit = Math.max(1, number(rareOutput?.qty, 0));
+      if (normalized <= 0) return fail(itemId, 'rare-only', { chances: rareChances(rareSources) }, source);
+      const expectedRuns = Math.ceil(need / (normalized * perHit));
+      steps.push({
+        skillId: source.skillId,
+        actionId: String(source.action.id ?? ''),
+        actionName: source.action.name ?? source.action.label ?? String(source.action.id ?? ''),
+        count: expectedRuns,
+        produceItemId: itemId,
+        produceQty: need,
+        rare: true,
+        chance: normalized,
+        progressItemId: Object.keys(source.action.outputs ?? {})[0] ?? null,
+        levelReq: requiredLevel(source.action),
+        interval: number(source.action.interval, 0),
+      });
+      projected[itemId] = quantity(projected, itemId) + need;
+      return { ok: true };
     }
 
-    let eligible = levelEligible.filter(({ source }) => hasToolUnlock(source.action, equipment));
-    if (!eligible.length) {
-      const source = levelEligible.map(({ source: candidate }) => candidate).sort(sourceCompare)[0];
-      const toolId = requiredTool(source.action);
-      return fail(itemId, 'tool', {
-        toolId,
-        toolName: datasets.strings?.[`name.${toolId}`] ?? itemName(datasets.items, toolId),
-      }, source);
+    const gates = applyGates(levelEligible);
+    if (!gates.eligible.length) {
+      const { reason, details, source } = gates.blocked;
+      return fail(itemId, reason, details, source);
     }
-
-    const patternCandidates = eligible;
-    eligible = patternCandidates.filter(({ source }) => !source.action.patternReq || unlockedGlyphPatterns.has(source.action.patternReq));
-    if (!eligible.length) {
-      const source = patternCandidates.map(({ source: candidate }) => candidate).sort(sourceCompare)[0];
-      return fail(itemId, 'pattern', { patternId: source.action.patternReq }, source);
-    }
-
-    const prayerCandidates = eligible;
-    eligible = prayerCandidates.filter(({ source }) => (
-      !source.action.prayerReq || levelForXp(datasets.xp, skillXp.prayer) >= number(source.action.prayerReq, 0)
-    ));
-    if (!eligible.length) {
-      const source = prayerCandidates.map(({ source: candidate }) => candidate).sort(sourceCompare)[0];
-      return fail(itemId, 'prayer', { minPrayerLevel: number(source.action.prayerReq, 0) }, source);
-    }
-
-    const mapCandidates = eligible;
-    eligible = mapCandidates.filter(({ source }) => !source.action.mapReq || chartedMaps.has(source.action.mapReq));
-    if (!eligible.length) {
-      const source = mapCandidates.map(({ source: candidate }) => candidate).sort(sourceCompare)[0];
-      return fail(itemId, 'map', { mapId: source.action.mapReq }, source);
-    }
-
-    const recipeCandidates = eligible;
-    eligible = recipeCandidates.filter(({ source }) => !source.action.recipeScroll || unlockedRecipes.has(source.action.id));
-    if (!eligible.length) {
-      const source = recipeCandidates.map(({ source: candidate }) => candidate).sort(sourceCompare)[0];
-      return fail(itemId, 'recipe', { recipeScrollId: source.action.recipeScroll }, source);
-    }
-
-    const source = eligible.map(({ source }) => source).sort(sourceCompare)[0];
+    const source = gates.eligible.map(({ source: candidate }) => candidate).sort(sourceCompare)[0];
     const count = Math.ceil(need / source.outputQty);
     stack.push(itemId);
     for (const [inputId, inputPerRun] of Object.entries(source.action.inputs ?? {})) {

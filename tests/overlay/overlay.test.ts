@@ -253,6 +253,30 @@ test('projects deterministic and rare raw execution steps', () => {
   assert.equal(projected.inventory.log, 22);
   assert.equal(projected.inventory.plank, 1);
 });
+test('renders rare plan rows with expected quantity and chance badge', async () => {
+  const rareData = datasets();
+  rareData.items = { ...rareData.items, pearl: { label: 'River Pearl', type: 'material' } };
+  rareData.actions = {
+    fishing: [{
+      id: 'fish_pearl', name: 'Fish River', levelReq: 1, interval: 1000,
+      outputs: { fish: 1 }, rareOutputs: [{ item: 'pearl', qty: 1, chance: 0.05 }],
+    }],
+  };
+  const document = new FakeDocument();
+  const result = await bootOverlay({ document, window: { __frCompanion: api() }, fetch: fetchFor(rareData) });
+  const panel = result.shell.panels.plan;
+  const form = panel.querySelector('#fr-plan-form');
+  const quantity = panel.querySelector('#fr-plan-qty');
+  result.app.state.planItemId = 'pearl';
+  quantity.value = '1';
+  form.dispatch('submit');
+  const html = panel.querySelector('#fr-plan-result').innerHTML;
+  assert.match(html, /~×20/);
+  assert.match(html, /badge warning[^>]*>5%/);
+  assert.match(html, /\(avg\)/);
+});
+
+
 test('rendered tool blockers name the blocking action', async () => {
   const blockedData = datasets();
   blockedData.actions = {

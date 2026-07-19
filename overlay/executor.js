@@ -36,6 +36,7 @@ export function createDirectExecutor(api, options = {}) {
   let target = 0;
   let stepStart = 0;
   let lastProduced = 0;
+  let lastProgress = 0;
   let lastProgressAt = 0;
   let verifyTimer;
   let stallTimer;
@@ -153,8 +154,8 @@ export function createDirectExecutor(api, options = {}) {
   const armStallTimer = (token) => {
     clearTimer(stallTimer);
     stallTimer = undefined;
-    const interval = Math.max(0, asNumber(steps[index]?.interval, 0));
-    const limit = interval * 3;
+    const perRun = Math.max(0, asNumber(steps[index]?.interval, 0));
+    const limit = steps[index]?.rare && !steps[index]?.progressItemId ? 0 : perRun * 3;
     if (!Number.isFinite(limit) || limit <= 0) return;
     stallTimer = schedule(() => {
       if (token !== runToken || status.phase !== 'running') return;
@@ -207,14 +208,19 @@ export function createDirectExecutor(api, options = {}) {
         clearTimer(verifyTimer);
         verifyTimer = undefined;
         lastProduced = inventory;
+        lastProgress = typeof step.progressItemId === 'string' && step.progressItemId
+          ? inventoryValue(current, step.progressItemId) : 0;
         lastProgressAt = asNumber(now(), 0);
         update('running', `Running ${step.actionName}`, index, current);
         armStallTimer(runToken);
       }
       return;
     }
-    if (inventory > lastProduced) {
+    const progressItemId = typeof step.progressItemId === 'string' && step.progressItemId ? step.progressItemId : null;
+    const progressInventory = progressItemId ? inventoryValue(current, progressItemId) : lastProgress;
+    if (inventory > lastProduced || progressInventory > lastProgress) {
       lastProduced = inventory;
+      lastProgress = progressInventory;
       lastProgressAt = asNumber(now(), 0);
       update('running', `Running ${step.actionName}`, index, current);
       armStallTimer(runToken);
@@ -240,6 +246,8 @@ export function createDirectExecutor(api, options = {}) {
       target += asNumber(step.count, 0);
     }
     lastProduced = stepStart;
+    lastProgress = typeof step.progressItemId === 'string' && step.progressItemId
+      ? inventoryValue(current, step.progressItemId) : 0;
     lastProgressAt = asNumber(now(), 0);
     update('starting', `Starting ${step.actionName}`, index, current);
 
@@ -322,6 +330,8 @@ export function createDirectExecutor(api, options = {}) {
     // live game starts the same action again; no queue is involved.
     steps[index].produceQty = remaining;
     lastProduced = currentInventory;
+    lastProgress = typeof steps[index].progressItemId === 'string' && steps[index].progressItemId
+      ? inventoryValue(current, steps[index].progressItemId) : 0;
     lastProgressAt = asNumber(now(), 0);
     update('starting', `Resuming ${steps[index].actionName}`, index, current);
     let result;

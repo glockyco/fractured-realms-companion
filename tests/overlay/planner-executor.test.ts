@@ -129,13 +129,19 @@ test('does not treat equipped consumables as projected stock', () => {
   assert.deepEqual(plan.steps.map((step) => step.actionId), ['herb', 'potion']);
 });
 
-test('reports level, rare-drop, and no-source blockers', () => {
+test('reports level and no-source blockers while planning rare drops', () => {
   const blocked = createPlan(data({ mine: [action('mine', 'gem', 'Mine Gem', 'gem', {}, { levelReq: 20 })] }), snapshot({}, { mine: 100 }), { itemId: 'gem', qty: 1 });
   assert.equal(blocked.ok, false); assert.equal(blocked.steps.at(-1).blocked.reason, 'level');
   assert.equal(blocked.steps.at(-1).blocked.minLevel, 20);
   const rare = createPlan(data({ fish: [action('fish', 'fish', 'Fish', 'fish', {}, { rareOutputs: [{ item: 'pearl', qty: 1, chance: 0.05 }] })] }), snapshot(), { itemId: 'pearl', qty: 1 });
-  assert.equal(rare.ok, false); assert.equal(rare.steps.at(-1).blocked.reason, 'rare-only');
-  assert.equal(rare.steps.at(-1).blocked.chances[0].chance, 0.05);
+  assert.equal(rare.ok, true);
+  assert.deepEqual(
+    { rare: rare.steps[0].rare, count: rare.steps[0].count, produceQty: rare.steps[0].produceQty, progressItemId: rare.steps[0].progressItemId },
+    { rare: true, count: 20, produceQty: 1, progressItemId: 'fish' },
+  );
+  const inputRare = createPlan(data({ fish: [action('fish', 'fish', 'Fish', 'fish', { bait: 1 }, { rareOutputs: [{ item: 'pearl', qty: 1, chance: 0.05 }] })] }), snapshot(), { itemId: 'pearl', qty: 1 });
+  assert.equal(inputRare.ok, false); assert.equal(inputRare.steps.at(-1).blocked.reason, 'rare-only');
+  assert.equal(inputRare.steps.at(-1).blocked.chances[0].chance, 0.05);
   const none = createPlan(data({}), snapshot(), { itemId: 'unknown', qty: 1 });
   assert.equal(none.ok, false); assert.equal(none.steps.at(-1).blocked.reason, 'no-source');
 });
@@ -295,6 +301,35 @@ test('executor advances one step at a time and completes', () => {
   assert.equal(executor.getStatus().completedSteps, 2);
   assert.equal(executor.getStatus().remainingMs, 0);
   assert.deepEqual(game.api.state.actionQueue, []);
+});
+
+test('executor keeps rare actions alive on deterministic co-output and targets the drop', () => {
+  const game = fakeGame();
+  const executor = createDirectExecutor(game.api, { ...game.timers });
+  executor.run([{
+    skillId: 'fish', actionId: 'fish', actionName: 'Fish', count: 20,
+    produceItemId: 'pearl', produceQty: 1, rare: true, chance: 0.05,
+    progressItemId: 'fish', interval: 10,
+  }]);
+  game.timers.tick(25);
+  game.produce('fish');
+  game.timers.tick(25);
+  assert.equal(executor.getStatus().phase, 'running');
+  game.produce('pearl');
+  assert.equal(executor.getStatus().phase, 'complete');
+});
+
+test('executor stalls a rare action with no co-output progress', () => {
+  const game = fakeGame();
+  const executor = createDirectExecutor(game.api, { ...game.timers });
+  executor.run([{
+    skillId: 'fish', actionId: 'fish', actionName: 'Fish', count: 20,
+    produceItemId: 'pearl', produceQty: 1, rare: true, chance: 0.05,
+    progressItemId: 'fish', interval: 10,
+  }]);
+  game.timers.tick(30);
+  assert.equal(executor.getStatus().phase, 'error');
+  assert.match(executor.getStatus().message, /stalled/);
 });
 
 test('executor splices appended steps while running and updates totals', () => {

@@ -1346,7 +1346,9 @@ function createApplication(shell, datasets, api) {
       : phaseLabel;
 
     if (current) {
-      const quantity = Number(status.stepTarget) > 0 ? ` · ${Number(status.stepProduced) || 0} of ${Number(status.stepTarget)}` : '';
+      const quantity = current.rare
+        ? ` · ${Number(status.stepProduced) || 0} of ${Number(status.stepTarget) || 0} rare drops`
+        : (Number(status.stepTarget) > 0 ? ` · ${Number(status.stepProduced) || 0} of ${Number(status.stepTarget)}` : '');
       const remaining = Number(status.remainingMs) > 0 ? ` · about ${formatDuration(status.remainingMs)} left` : '';
       executorMessage.textContent = `${current.actionName || humanizeId(current.actionId)} · action ${currentIndex + 1} of ${total}${quantity}${remaining}`;
     } else if (state.planQueue.length) {
@@ -1415,10 +1417,14 @@ function createApplication(shell, datasets, api) {
         const activeProgress = active && Number(status.stepTarget) > 0
           ? `<progress class="step-progress" max="${escapeHtml(status.stepTarget)}" value="${escapeHtml(status.stepProduced || 0)}" aria-label="${escapeHtml(step.actionName)} progress"></progress>`
           : '';
-        const time = active && Number(status.stepRemainingMs) > 0
+        const timeBase = active && Number(status.stepRemainingMs) > 0
           ? `about ${formatDuration(status.stepRemainingMs)} left`
           : estimate ? `about ${formatDuration(estimate)}` : '—';
-        return `<li class="queue-step" data-state="${stepState}"><span class="queue-step-marker">${marker}</span><span>${escapeHtml(step.actionName || humanizeId(step.actionId))} <span class="data">×${escapeHtml(step.count)}</span></span><span class="queue-step-time data">${escapeHtml(time)}</span>${activeProgress}</li>`;
+        const time = step.rare ? `${timeBase} (avg)` : timeBase;
+        const quantity = step.rare ? `~×${escapeHtml(step.count)}` : `×${escapeHtml(step.count)}`;
+        const chanceBadge = step.rare
+          ? ` <span class="badge warning">${escapeHtml(formatChance(step.chance))}</span>` : '';
+        return `<li class="queue-step" data-state="${stepState}"><span class="queue-step-marker">${marker}</span><span>${escapeHtml(step.actionName || humanizeId(step.actionId))}${chanceBadge} <span class="data">${quantity}</span></span><span class="queue-step-time data">${escapeHtml(time)}</span>${activeProgress}</li>`;
       }).join('');
       const locked = isExecutionLocked(status.phase);
       const mutable = !locked || planIndex > currentPlanIndex;
