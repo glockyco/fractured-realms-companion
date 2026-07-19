@@ -1583,14 +1583,17 @@ function createApplication(shell, datasets, api) {
       const locked = isExecutionLocked(status.phase);
       const mutable = !locked || planIndex > currentPlanIndex;
       const label = labelFor(items, entry.itemId);
-      const upDisabled = !mutable || planIndex === 0 || (locked && planIndex - 1 <= currentPlanIndex);
+      const upIsPromote = locked && planIndex - 1 === currentPlanIndex;
+      const upDisabled = !mutable || planIndex === 0 || (locked && planIndex - 1 < currentPlanIndex);
+      const upLabel = upIsPromote ? 'Run now — interrupts the current plan' : `Move ${label} up`;
+      const upTitle = upIsPromote ? 'Run now — interrupts the current plan' : 'Move up';
       const downDisabled = !mutable || planIndex === state.planQueue.length - 1;
       const editDisabled = !mutable;
       const actionLabel = `${steps.length} ${steps.length === 1 ? 'action' : 'actions'}`;
       const planMeta = planState === 'complete'
         ? `${actionLabel} · done`
         : `${actionLabel}${prerequisites.length ? ` · ${prerequisites.length} ready` : ''} · about ${escapeHtml(formatDuration(entry.estimateMs))}`;
-      return `<li class="queue-plan" data-state="${planState}" data-plan-id="${escapeHtml(entry.id)}"><div class="queue-plan-top"><span class="queue-plan-index data">${planIndex + 1}</span><span class="queue-plan-title">${escapeHtml(label)} <span class="data">×${escapeHtml(entry.qty)}</span></span><span class="queue-plan-meta">${planMeta}</span><span class="queue-plan-actions"><button class="icon-button" type="button" data-queue-action="up" data-plan-id="${escapeHtml(entry.id)}" aria-label="Move ${escapeHtml(label)} up" title="Move up"${upDisabled ? ' disabled' : ''}>${ICONS.up}</button><button class="icon-button" type="button" data-queue-action="down" data-plan-id="${escapeHtml(entry.id)}" aria-label="Move ${escapeHtml(label)} down" title="Move down"${downDisabled ? ' disabled' : ''}>${ICONS.down}</button><button class="icon-button" type="button" data-queue-action="remove" data-plan-id="${escapeHtml(entry.id)}" aria-label="Remove ${escapeHtml(label)}" title="Remove"${editDisabled ? ' disabled' : ''}>${ICONS.remove}</button><button class="icon-button" type="button" data-queue-action="edit" data-plan-id="${escapeHtml(entry.id)}" aria-label="Edit ${escapeHtml(label)}" title="Edit"${editDisabled ? ' disabled' : ''}>${ICONS.edit}</button></span></div><ol class="queue-steps">${prerequisiteRows}${stepRows || (!prerequisiteRows ? '<li class="queue-step" data-state="complete"><span class="queue-step-marker">✓</span><span>Already satisfied by current inventory</span><span></span></li>' : '')}</ol></li>`;
+      return `<li class="queue-plan" data-state="${planState}" data-plan-id="${escapeHtml(entry.id)}"><div class="queue-plan-top"><span class="queue-plan-index data">${planIndex + 1}</span><span class="queue-plan-title">${escapeHtml(label)} <span class="data">×${escapeHtml(entry.qty)}</span></span><span class="queue-plan-meta">${planMeta}</span><span class="queue-plan-actions"><button class="icon-button" type="button" data-queue-action="up" data-plan-id="${escapeHtml(entry.id)}" aria-label="${escapeHtml(upLabel)}" title="${escapeHtml(upTitle)}"${upDisabled ? ' disabled' : ''}>${ICONS.up}</button><button class="icon-button" type="button" data-queue-action="down" data-plan-id="${escapeHtml(entry.id)}" aria-label="Move ${escapeHtml(label)} down" title="Move down"${downDisabled ? ' disabled' : ''}>${ICONS.down}</button><button class="icon-button" type="button" data-queue-action="remove" data-plan-id="${escapeHtml(entry.id)}" aria-label="Remove ${escapeHtml(label)}" title="Remove"${editDisabled ? ' disabled' : ''}>${ICONS.remove}</button><button class="icon-button" type="button" data-queue-action="edit" data-plan-id="${escapeHtml(entry.id)}" aria-label="Edit ${escapeHtml(label)}" title="Edit"${editDisabled ? ' disabled' : ''}>${ICONS.edit}</button></span></div><ol class="queue-steps">${prerequisiteRows}${stepRows || (!prerequisiteRows ? '<li class="queue-step" data-state="complete"><span class="queue-step-marker">✓</span><span>Already satisfied by current inventory</span><span></span></li>' : '')}</ol></li>`;
     }).join('');
     const notice = renderPlanNotice(state.planNotice);
     const queueFinish = isExecutionLocked(status.phase) && Number(status.remainingMs) > 0
@@ -1655,6 +1658,52 @@ function createApplication(shell, datasets, api) {
     renderPlan();
   });
 
+  const promotePlan = (planId, view) => {
+    const previousGoals = [...state.queueGoals];
+    const currentEntry = state.planQueue[view.currentPlanIndex];
+    if (!currentEntry) return false;
+    const currentGoalId = currentEntry.id;
+    const promoted = state.queueGoals.find((goal) => goal.id === planId);
+    if (!promoted) return false;
+    const remaining = state.queueGoals.filter((goal) => goal.id !== planId);
+    const anchor = remaining.findIndex((goal) => goal.id === currentGoalId);
+    if (anchor < 0) return false;
+    remaining.splice(anchor, 0, promoted);
+    state.queueGoals = remaining;
+
+    const completed = state.planQueue.slice(0, view.currentPlanIndex);
+    const completedIds = new Set(completed.map((entry) => entry.id));
+    const tail = resolvePlanQueue(datasets, api.getState(), state.queueGoals.filter((goal) => !completedIds.has(goal.id)));
+    const blocked = tail.find((entry) => !entry.plan?.ok);
+    if (blocked) {
+      state.queueGoals = previousGoals;
+      state.planNotice = { itemId: blocked.itemId, qty: blocked.qty, plan: blocked.plan };
+      renderPlan();
+      return false;
+    }
+    state.planQueue = [...completed, ...tail];
+    state.executionSteps = flattenQueue();
+    const startIndex = completed.reduce((total, entry) => total + (entry.plan?.steps?.length || 0), 0);
+    if (startIndex >= state.executionSteps.length) {
+      executor.stop();
+      state.planNotice = null;
+      persistQueue();
+      renderPlan();
+      return true;
+    }
+    if (!executor.jump(state.executionSteps, startIndex)) {
+      state.queueGoals = previousGoals;
+      rebuildPending();
+      state.planNotice = { itemId: '', qty: 0, plan: { ok: false, steps: [], reason: 'The queue advanced while editing. Try again.' } };
+      renderPlan();
+      return false;
+    }
+    state.planNotice = null;
+    persistQueue();
+    renderPlan();
+    return true;
+  };
+
   planResult.addEventListener('click', (event) => {
     const control = event.target.closest?.('[data-queue-action][data-plan-id]');
     if (!control || control.disabled) return;
@@ -1662,6 +1711,13 @@ function createApplication(shell, datasets, api) {
     if (index < 0) return;
     const locked = isExecutionLocked(state.executorStatus?.phase);
     const action = control.dataset.queueAction;
+    if (action === 'up') {
+      const view = queueView();
+      if (view.locked && index - 1 === view.currentPlanIndex) {
+        promotePlan(control.dataset.planId, view);
+        return;
+      }
+    }
     if (action === 'edit') {
       const goal = state.queueGoals[index];
       selectPlanTarget(goal.itemId);

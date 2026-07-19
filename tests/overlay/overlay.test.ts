@@ -445,6 +445,72 @@ test('edits pending queue goals while execution is running', async () => {
   app.executor.stop();
 });
 
+test('promotes a pending plan over the running one', async () => {
+  const document = new FakeDocument();
+  const calls = [];
+  const liveApi = {
+    getState: () => ({ inventory: {}, equipment: {}, skillXp: { woodcutting: 100, crafting: 100 } }),
+    startAction(skillId, actionId) { calls.push(['start', skillId, actionId]); },
+    stopAction() { calls.push(['stop']); },
+    subscribe() { return () => {}; },
+  };
+  const result = await bootOverlay({ document, window: { __frCompanion: liveApi }, fetch: fetchFor(datasets()) });
+  const { app, shell } = result;
+  const panel = shell.panels.plan;
+  const form = panel.querySelector('#fr-plan-form');
+  const qty = panel.querySelector('#fr-plan-qty');
+  const run = shell.queueControls.querySelector('#fr-run');
+  const planResult = panel.querySelector('#fr-plan-result');
+
+  app.state.planItemId = 'plank';
+  qty.value = '1';
+  form.dispatch('submit');
+  app.state.planItemId = 'log';
+  qty.value = '1';
+  form.dispatch('submit');
+  assert.deepEqual(app.state.planQueue.map((entry) => entry.itemId), ['plank', 'log']);
+
+  run.dispatch('click');
+  calls.length = 0;
+
+  planResult.dispatch('click', { target: { closest: () => ({ disabled: false, dataset: { queueAction: 'up', planId: 'plan-2' } }) } });
+
+  assert.equal(app.state.planQueue[0].itemId, 'log');
+  assert.equal(app.state.queueGoals[0].id, 'plan-2');
+  assert.equal(app.state.queueGoals[1].id, 'plan-1');
+  assert.ok(calls.some(([kind]) => kind === 'stop'));
+  assert.ok(calls.some(([kind, , actionId]) => kind === 'start' && actionId === 'chop_log'));
+  assert.match(planResult.innerHTML, /Run now/);
+  app.executor.stop();
+});
+
+test('preemption reverts when the executor is no longer running', async () => {
+  const document = new FakeDocument();
+  const result = await bootOverlay({ document, window: { __frCompanion: api() }, fetch: fetchFor(datasets()) });
+  const { app, shell } = result;
+  const panel = shell.panels.plan;
+  const form = panel.querySelector('#fr-plan-form');
+  const qty = panel.querySelector('#fr-plan-qty');
+  const planResult = panel.querySelector('#fr-plan-result');
+
+  app.state.planItemId = 'plank';
+  qty.value = '1';
+  form.dispatch('submit');
+  app.state.planItemId = 'log';
+  qty.value = '1';
+  form.dispatch('submit');
+
+  // The app believes a plan is running, but the real executor was never started.
+  app.state.executorStatus = { phase: 'running', currentStep: 0, stepTarget: 2, stepProduced: 0 };
+  app.renderPlan();
+  const originalGoals = app.state.queueGoals.map((goal) => goal.id);
+
+  planResult.dispatch('click', { target: { closest: () => ({ disabled: false, dataset: { queueAction: 'up', planId: 'plan-2' } }) } });
+
+  assert.deepEqual(app.state.queueGoals.map((goal) => goal.id), originalGoals);
+  assert.match(planResult.innerHTML, /advanced while editing/);
+});
+
 test('floating controls clamp to the viewport and suppress click after dragging', () => {
   assert.deepEqual(
     clampFloatingPosition({ left: -20, top: 900 }, { width: 100, height: 80 }, { width: 500, height: 400 }),
