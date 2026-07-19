@@ -410,7 +410,7 @@ tbody tr:last-child td { border-bottom: 0; }
 }
 .executor-status { min-width: 0; }
 .executor-status strong { display: block; }
-.executor-status p { display: flex; align-items: baseline; min-width: 0; margin: var(--fr-s1) 0 0; color: var(--fr-neutral-300); font-size: 0.75rem; }
+.executor-status p { display: flex; align-items: baseline; min-width: 0; gap: 0.35ch; margin: var(--fr-s1) 0 0; color: var(--fr-neutral-300); font-size: 0.75rem; }
 .exec-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .exec-meta { flex: 0 0 auto; white-space: nowrap; }
 .loading-line { height: 0.25rem; overflow: hidden; background: var(--fr-neutral-900); }
@@ -436,7 +436,7 @@ tbody tr:last-child td { border-bottom: 0; }
 .panel[data-compact="true"] .compact-strip > #fr-compact-message { grid-column: 1; grid-row: 2; min-width: 0; }
 .panel[data-compact="true"] .compact-strip > #fr-compact-progress { grid-column: 1 / -1; grid-row: 3; }
 .panel[data-compact="true"] .compact-strip > .compact-actions { grid-column: 2; grid-row: 1 / 3; display: flex; gap: var(--fr-s1); align-items: center; }
-.panel[data-compact="true"] .compact-strip p { display: flex; align-items: baseline; min-width: 0; margin: 0; overflow: hidden; color: var(--fr-neutral-300); font-size: 0.75rem; text-overflow: ellipsis; white-space: nowrap; }
+.panel[data-compact="true"] .compact-strip p { display: flex; align-items: baseline; min-width: 0; gap: 0.35ch; margin: 0; overflow: hidden; color: var(--fr-neutral-300); font-size: 0.75rem; text-overflow: ellipsis; white-space: nowrap; }
 .loading-line::after { content: ""; display: block; width: 35%; height: 100%; background: var(--fr-harbor-400); animation: loading 1.2s linear infinite; }
 @keyframes loading { from { transform: translateX(-100%); } to { transform: translateX(300%); } }
 @media (max-width: 40rem) {
@@ -1526,7 +1526,7 @@ function createApplication(shell, datasets, api) {
 
   const setStatusMessage = (el, described) => {
     if (!el) return;
-    const meta = described.metaText ? `<span class="exec-meta"> · ${escapeHtml(described.metaText)}</span>` : '';
+    const meta = described.metaText ? `<span class="exec-meta">· ${escapeHtml(described.metaText)}</span>` : '';
     el.innerHTML = `<span class="exec-name">${escapeHtml(described.actionText ?? described.messageText)}</span>${meta}`;
   };
 
