@@ -6,7 +6,7 @@ import { join, relative } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { runInNewContext } from 'node:vm';
 import { FRACTURED_MARKER, createFracturedApply } from '../../src/patch/fracturedAdapter.ts';
-import { ELECTRON_HOST_SOURCE, FRACTURED_ADAPTER_SOURCE } from '../../src/generated/embedded.ts';
+import { ELECTRON_HOST_SOURCE, EXECUTOR_SOURCE, FRACTURED_ADAPTER_SOURCE, OVERLAY_SOURCE, PLANNER_SOURCE } from '../../src/generated/embedded.ts';
 
 const fixture = join(process.cwd(), 'tests/fixtures/fractured-realms/electron');
 const dataNames = ['items', 'actions', 'skills', 'xp', 'buildings', 'digsites', 'strings-en'];
@@ -39,7 +39,9 @@ function createCase(buildId = '24185239'): { root: string; pack: string } {
   const pack = join(work, 'pack');
   mkdirSync(join(pack, 'data'), { recursive: true });
   writeFileSync(join(pack, 'pack.json'), JSON.stringify({ schema_version: 1, build_id: buildId, generated_at: '2026-07-19T00:00:00Z' }));
-  writeFileSync(join(pack, 'overlay.js'), 'overlay');
+  writeFileSync(join(pack, 'overlay.js'), OVERLAY_SOURCE);
+  writeFileSync(join(pack, 'planner.js'), PLANNER_SOURCE);
+  writeFileSync(join(pack, 'executor.js'), EXECUTOR_SOURCE);
   for (const name of dataNames) writeFileSync(join(pack, `data/${name}.json`), '{}');
   return { root, pack };
 }
@@ -103,7 +105,10 @@ test('installs exact runtime profile, pack and companion bundle API', () => {
   assert.equal(readFileSync(join(root, 'electron/companion-adapter.cjs'), 'utf8'), FRACTURED_ADAPTER_SOURCE);
   assert.equal(readFileSync(bundlePath, 'utf8').match(/__frCompanion/g)?.length, 1);
   assert.equal(readFileSync(join(root, 'dist/companion/data/items.json'), 'utf8'), '{}');
-  assert.equal(readFileSync(join(root, 'dist/companion/overlay.js'), 'utf8'), 'overlay');
+  assert.deepEqual(readdirSync(join(root, 'dist/companion')).sort(), ['data', 'executor.js', 'overlay.js', 'pack.json', 'planner.js']);
+  assert.equal(readFileSync(join(root, 'dist/companion/overlay.js'), 'utf8'), OVERLAY_SOURCE);
+  assert.equal(readFileSync(join(root, 'dist/companion/planner.js'), 'utf8'), PLANNER_SOURCE);
+  assert.equal(readFileSync(join(root, 'dist/companion/executor.js'), 'utf8'), EXECUTOR_SOURCE);
 
   const startCalls: Array<[string, string]> = [];
   const stopCalls: number[] = [];
@@ -184,6 +189,20 @@ test('rejects main, preload and bundle anchor mutations without tree writes', ()
       const { root, pack } = createCase(); const path = join(root, file); let source = readFileSync(path, 'utf8'); source = duplicate ? `${source}\n${anchor}\n` : source.replace(anchor, ''); writeFileSync(path, source); const before = snapshot(root);
       assert.throws(() => apply(root, pack)); assert.deepEqual(snapshot(root), before);
     }
+  }
+});
+
+
+test('rejects missing or unknown companion modules before mutation', () => {
+  for (const mutate of [
+    (pack: string) => unlinkSync(join(pack, 'planner.js')),
+    (pack: string) => writeFileSync(join(pack, 'unexpected.js'), 'unexpected'),
+  ]) {
+    const { root, pack } = createCase();
+    mutate(pack);
+    const before = snapshot(root);
+    assert.throws(() => apply(root, pack), /pack has unexpected root files|pack has missing or unknown/);
+    assert.deepEqual(snapshot(root), before);
   }
 });
 

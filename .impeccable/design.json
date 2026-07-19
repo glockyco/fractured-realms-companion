@@ -1,0 +1,147 @@
+{
+  "schemaVersion": 2,
+  "name": "Fractured Realms Companion",
+  "register": "product",
+  "direction": "The Quiet Helm",
+  "tokens": {
+    "color": {
+      "neutral": {
+        "1000": "oklch(0.14 0 0)",
+        "950": "oklch(0.19 0 0)",
+        "900": "oklch(0.24 0 0)",
+        "800": "oklch(0.32 0 0)",
+        "700": "oklch(0.42 0 0)",
+        "300": "oklch(0.78 0 0)",
+        "100": "oklch(0.94 0 0)"
+      },
+      "harbor": {
+        "950": "oklch(0.20 0.04 230)",
+        "800": "oklch(0.36 0.10 230)",
+        "600": "oklch(0.50 0.13 230)",
+        "400": "oklch(0.76 0.11 230)"
+      },
+      "brass": {
+        "950": "oklch(0.24 0.04 85)",
+        "700": "oklch(0.45 0.09 85)",
+        "400": "oklch(0.82 0.10 85)"
+      },
+      "danger": {
+        "950": "oklch(0.24 0.05 25)",
+        "400": "oklch(0.76 0.12 25)"
+      },
+      "success": {
+        "950": "oklch(0.24 0.04 150)",
+        "400": "oklch(0.75 0.12 150)"
+      }
+    },
+    "contrast": {
+      "primaryAction": {
+        "foreground": "neutral.100",
+        "background": "harbor.600",
+        "ratio": 4.71,
+        "minimum": 4.5
+      }
+    },
+    "typography": {
+      "sans": "system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif",
+      "mono": "ui-monospace, SFMono-Regular, Consolas, monospace",
+      "sizesRem": {
+        "compact": 0.6875,
+        "label": 0.75,
+        "table": 0.8125,
+        "body": 0.875,
+        "identity": 0.9375,
+        "heading": 1.125
+      },
+      "baseLineHeight": 1.45
+    },
+    "spacingRem": {
+      "1": 0.25,
+      "2": 0.5,
+      "3": 0.75,
+      "4": 1,
+      "5": 1.25,
+      "6": 1.5,
+      "8": 2
+    },
+    "radiiRem": {
+      "sm": 0.25,
+      "md": 0.5,
+      "lg": 0.75,
+      "pill": 999
+    },
+    "controlHeightsRem": {
+      "control": 2.25,
+      "launcher": 2.75
+    },
+    "motion": {
+      "stateDurationMs": 180,
+      "allowedRangeMs": [
+        150,
+        220
+      ],
+      "easing": "cubic-bezier(0.16, 1, 0.3, 1)",
+      "reducedMotion": "0.01ms; one iteration"
+    },
+    "breakpoints": {
+      "compact": "22rem",
+      "stacked": "40rem",
+      "minimumSupportedViewport": "320px"
+    },
+    "elevation": {
+      "launcher": "0 0.5rem 2rem oklch(0 0 0 / 0.42)",
+      "panel": "0 1rem 2rem oklch(0 0 0 / 0.56)"
+    }
+  },
+  "components": {
+    "button": {
+      "snippet": "<button class=\"button primary\" type=\"button\"><svg aria-hidden=\"true\">\u2026</svg>Run</button>",
+      "states": [
+        "default",
+        "hover",
+        "focus-visible",
+        "active",
+        "disabled"
+      ]
+    },
+    "search": {
+      "snippet": "<label for=\"fr-item-search\">Search items</label><div class=\"search-control\"><svg aria-hidden=\"true\">\u2026</svg><input id=\"fr-item-search\" type=\"search\" placeholder=\"Name or item ID\"></div>",
+      "behavior": "140ms debounce; label and ID substring match; visible result count; initial 120-row cap"
+    },
+    "tab": {
+      "snippet": "<div role=\"tablist\"><button role=\"tab\" aria-selected=\"true\" aria-controls=\"fr-panel-items\" tabindex=\"0\">Items</button></div>",
+      "keyboard": [
+        "ArrowLeft",
+        "ArrowRight",
+        "ArrowUp",
+        "ArrowDown",
+        "Home",
+        "End"
+      ]
+    },
+    "planStep": {
+      "snippet": "<li class=\"plan-step\"><span class=\"step-index\">1</span><strong>Action name</strong><span class=\"step-qty\">×3</span><p>Skill · produces Item ×3</p></li>",
+      "executionLock": "Desired item, quantity, Resolve, and per-item Plan controls are disabled during starting, running, and paused phases; idle, complete, and error phases unlock them.",
+      "states": [
+        "ready",
+        "tool-warning",
+        "blocked",
+        "starting",
+        "running",
+        "paused",
+        "complete",
+        "error"
+      ]
+    }
+  },
+  "constraints": [
+    "WCAG 2.2 AA",
+    "Shadow DOM",
+    "zero dependencies",
+    "no gradients",
+    "no glass",
+    "no custom scrollbars",
+    "no decorative motion",
+    "no native queued-action integration"
+  ]
+}

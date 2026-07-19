@@ -19,6 +19,7 @@ import { OperationalError } from '../lib/errors.ts';
 export const FRACTURED_MARKER = 'FRACTURED_REALMS_COMPANION_V1';
 const FOREIGN_MARKER_PREFIX = 'CROSSOVER_BROWSER_GAMES_FRACTURED_REALMS_';
 const ERROR_PREFIX = 'Unexpected Fractured Realms entry point for build ';
+const REQUIRED_MODULES = ['overlay.js', 'planner.js', 'executor.js'] as const;
 const REQUIRED_DATA = [
   'items.json',
   'actions.json',
@@ -176,10 +177,10 @@ function validatePack(options: FracturedApplyOptions): PackFile[] {
   };
   walk(pack);
   const names = readdirSync(pack);
-  const expectedRoot = new Set(['pack.json', 'overlay.js', 'data']);
+  const expectedRoot = new Set(['pack.json', 'overlay.js', 'planner.js', 'executor.js', 'data']);
   if (names.length !== expectedRoot.size || names.some((name) => !expectedRoot.has(name))) fail('pack has unexpected root files');
   regular(join(pack, 'pack.json'), 'pack.json');
-  regular(join(pack, 'overlay.js'), 'overlay.js');
+  for (const name of REQUIRED_MODULES) regular(join(pack, name), name);
   directory(join(pack, 'data'), 'pack data directory');
   const dataNames = readdirSync(join(pack, 'data'));
   const expectedData = new Set<string>(REQUIRED_DATA);
@@ -190,14 +191,18 @@ function validatePack(options: FracturedApplyOptions): PackFile[] {
   const record = manifest as Record<string, unknown>;
   if (Object.keys(record).length !== 3 || record.schema_version !== 1 || record.build_id !== options.buildId || typeof record.generated_at !== 'string') fail('pack.json has invalid schema or build');
   const files: PackFile[] = [];
-  for (const name of ['pack.json', 'overlay.js', ...REQUIRED_DATA]) {
-    const path = join(pack, name === 'pack.json' || name === 'overlay.js' ? name : join('data', name));
+  for (const name of ['pack.json', ...REQUIRED_MODULES]) {
+    const path = join(pack, name);
     regular(path, name);
     const bytes = readFileSync(path);
-    if (name.endsWith('.json')) {
-      try { JSON.parse(bytes.toString('utf8')); } catch (error) { fail(`pack data file is not valid JSON: ${name}`, error); }
-    }
-    files.push({ relativePath: name === 'pack.json' || name === 'overlay.js' ? name : join('data', name), bytes });
+    files.push({ relativePath: name, bytes });
+  }
+  for (const name of REQUIRED_DATA) {
+    const path = join(pack, 'data', name);
+    regular(path, name);
+    const bytes = readFileSync(path);
+    try { JSON.parse(bytes.toString('utf8')); } catch (error) { fail(`pack data file is not valid JSON: ${name}`, error); }
+    files.push({ relativePath: join('data', name), bytes });
   }
   return files;
 }

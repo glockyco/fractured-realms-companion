@@ -12,7 +12,7 @@ import {
 import { randomUUID } from 'node:crypto';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { extractDatasets, type ExtractedDatasets } from './extract/datasets.ts';
-import { OVERLAY_SOURCE } from './generated/embedded.ts';
+import { EXECUTOR_SOURCE, OVERLAY_SOURCE, PLANNER_SOURCE } from './generated/embedded.ts';
 import { readSteamManifest, type SteamManifest } from './lib/acf.ts';
 import { extractFile, listFiles } from './lib/asar.ts';
 import { OperationalError } from './lib/errors.ts';
@@ -63,6 +63,8 @@ export interface RefreshDependencies {
   extractFile?: (archive: string, innerPath: string) => Buffer;
   extractDatasets?: (source: string, archiveFiles: readonly string[]) => ExtractedDatasets;
   overlaySource?: string;
+  plannerSource?: string;
+  executorSource?: string;
   patchManager?: { patch(request: PatchRequest): PatchResult };
   createApply?: typeof createFracturedApply;
   /** File-system hooks are intentionally narrow so transaction failures can be tested. */
@@ -88,6 +90,8 @@ export interface RefreshOptions extends DiscoverInstallOptions {
   extractFile?: RefreshDependencies['extractFile'];
   extractDatasets?: RefreshDependencies['extractDatasets'];
   overlaySource?: string;
+  plannerSource?: string;
+  executorSource?: string;
   patchManager?: RefreshDependencies['patchManager'];
   createApply?: RefreshDependencies['createApply'];
   fileSystem?: RefreshDependencies['fileSystem'];
@@ -203,8 +207,8 @@ function metadataForBackup(stateDirectory: string, buildId: string, live: Finger
   return backupPath;
 }
 
-function validatePackDirectory(pack: string, buildId: string, datasets: ExtractedDatasets, generatedAt: string, overlay: string): void {
-  const expectedRoot = new Set(['pack.json', 'overlay.js', 'data']);
+function validatePackDirectory(pack: string, buildId: string, datasets: ExtractedDatasets, generatedAt: string, overlay: string, planner: string, executor: string): void {
+  const expectedRoot = new Set(['pack.json', 'overlay.js', 'planner.js', 'executor.js', 'data']);
   let rootStat;
   try { rootStat = lstatSync(pack); } catch (error) { fail(`staged companion pack is missing: ${pack}`, error); }
   if (!rootStat!.isDirectory() || rootStat!.isSymbolicLink()) fail(`staged companion pack is not a regular directory: ${pack}`);
@@ -215,6 +219,8 @@ function validatePackDirectory(pack: string, buildId: string, datasets: Extracte
   try { manifest = JSON.parse(readFileSync(manifestPath, 'utf8')); } catch (error) { fail('staged companion pack has invalid pack.json', error); }
   if (!isRecord(manifest) || Object.keys(manifest).length !== 3 || manifest.schema_version !== 1 || manifest.build_id !== buildId || manifest.generated_at !== generatedAt) fail('staged companion pack has invalid pack.json schema');
   if (readFileSync(join(pack, 'overlay.js'), 'utf8') !== overlay) fail('staged companion pack overlay does not match embedded source');
+  if (readFileSync(join(pack, 'planner.js'), 'utf8') !== planner) fail('staged companion pack planner does not match embedded source');
+  if (readFileSync(join(pack, 'executor.js'), 'utf8') !== executor) fail('staged companion pack executor does not match embedded source');
   const dataDir = join(pack, 'data');
   const dataNames = readdirSync(dataDir);
   const expectedData = new Set<string>(DATA_FILES.map(([, filename]) => filename));
@@ -226,7 +232,7 @@ function validatePackDirectory(pack: string, buildId: string, datasets: Extracte
   }
 }
 
-function publishPack(stateDirectory: string, buildId: string, datasets: ExtractedDatasets, generatedAt: string, overlay: string, fsOps: NonNullable<RefreshDependencies['fileSystem']>): string {
+function publishPack(stateDirectory: string, buildId: string, datasets: ExtractedDatasets, generatedAt: string, overlay: string, planner: string, executor: string, fsOps: NonNullable<RefreshDependencies['fileSystem']>): string {
   const mkdir = fsOps.mkdirSync ?? mkdirSync;
   const mkdtemp = fsOps.mkdtempSync ?? mkdtempSync;
   const rename = fsOps.renameSync ?? renameSync;
@@ -240,12 +246,14 @@ function publishPack(stateDirectory: string, buildId: string, datasets: Extracte
     const packManifest = `${JSON.stringify({ schema_version: 1, build_id: buildId, generated_at: generatedAt }, null, 2)}\n`;
     write(join(stage, 'pack.json'), packManifest, { mode: 0o600 });
     write(join(stage, 'overlay.js'), overlay, { mode: 0o600 });
+    write(join(stage, 'planner.js'), planner, { mode: 0o600 });
+    write(join(stage, 'executor.js'), executor, { mode: 0o600 });
     for (const [key, filename] of DATA_FILES) {
       const json = JSON.stringify(datasets[key], null, 2);
       if (json === undefined) fail(`dataset ${key} is not JSON serializable`);
       write(join(stage, 'data', filename), `${json}\n`, { mode: 0o600 });
     }
-    validatePackDirectory(stage, buildId, datasets, generatedAt, overlay);
+    validatePackDirectory(stage, buildId, datasets, generatedAt, overlay, planner, executor);
 
     let existing = false;
     try {
@@ -317,8 +325,12 @@ export function refreshCompanion(options: RefreshOptions = {}): RefreshResult {
   const datasets = extractAllDatasets(source, files);
   const generatedAt = utcTimestamp(options.clock);
   const overlay = dependency(options, 'overlaySource', OVERLAY_SOURCE);
+  const planner = dependency(options, 'plannerSource', PLANNER_SOURCE);
+  const executor = dependency(options, 'executorSource', EXECUTOR_SOURCE);
   if (typeof overlay !== 'string' || overlay.length === 0) fail('embedded companion overlay source is unavailable');
-  const pack = publishPack(state, manifest.buildid, datasets, generatedAt, overlay, options.fileSystem ?? options.dependencies?.fileSystem ?? {});
+  if (typeof planner !== 'string' || planner.length === 0) fail('embedded companion planner source is unavailable');
+  if (typeof executor !== 'string' || executor.length === 0) fail('embedded companion executor source is unavailable');
+  const pack = publishPack(state, manifest.buildid, datasets, generatedAt, overlay, planner, executor, options.fileSystem ?? options.dependencies?.fileSystem ?? {});
 
   const expectedOriginal = { sha256: original.sha256.toLowerCase(), size: original.size };
   if (options.noPatch) return { install, stateDirectory: state, packDirectory: pack, buildId: manifest.buildid, original: expectedOriginal, changed: false };
