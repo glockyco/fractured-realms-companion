@@ -1,6 +1,7 @@
 /** Direct action executor. It intentionally never reads or writes actionQueue. */
 
 const TERMINAL = new Set(['idle', 'complete', 'error']);
+const MISMATCH_GRACE_MS = 1200;
 
 function asNumber(value, fallback = 0) {
   const parsed = Number(value);
@@ -40,6 +41,7 @@ export function createDirectExecutor(api, options = {}) {
   let lastProgressAt = 0;
   let verifyTimer;
   let stallTimer;
+  let mismatchTimer;
   let unsubscribe;
   let runToken = 0;
   let transitionBusy = false;
@@ -91,8 +93,10 @@ export function createDirectExecutor(api, options = {}) {
   const clearStepTimers = () => {
     clearTimer(verifyTimer);
     clearTimer(stallTimer);
+    clearTimer(mismatchTimer);
     verifyTimer = undefined;
     stallTimer = undefined;
+    mismatchTimer = undefined;
   };
   const detach = () => {
     if (typeof unsubscribe === 'function') {
@@ -226,9 +230,23 @@ export function createDirectExecutor(api, options = {}) {
       armStallTimer(runToken);
     }
     if (!matching(current, step)) {
-      clearStepTimers();
-      update('paused', 'action changed in game');
+      if (mismatchTimer === undefined) {
+        const token = runToken;
+        mismatchTimer = schedule(() => {
+          mismatchTimer = undefined;
+          if (token !== runToken || status.phase !== 'running') return;
+          const latest = state();
+          const active = steps[index];
+          if (!active || matching(latest, active)) return;
+          if (inventoryValue(latest, active.produceItemId) >= target) { finishStep(token); return; }
+          clearStepTimers();
+          update('paused', 'action changed in game', index, latest);
+        }, MISMATCH_GRACE_MS);
+      }
+      return;
     }
+    clearTimer(mismatchTimer);
+    mismatchTimer = undefined;
   };
 
   const beginStep = (stepIndex, token) => {
@@ -355,11 +373,24 @@ export function createDirectExecutor(api, options = {}) {
     return true;
   };
 
+  const jump = (allSteps, startIndex) => {
+    if (TERMINAL.has(status.phase)) return false;
+    if (!Number.isInteger(startIndex) || startIndex < 0) return false;
+    if (!Array.isArray(allSteps) || startIndex >= allSteps.length) return false;
+    clearStepTimers();
+    stopGameAction();
+    transitionBusy = false;
+    steps = allSteps.map((step) => ({ ...step }));
+    beginStep(startIndex, runToken);
+    return true;
+  };
+
   return {
     run,
     stop,
     resume,
     splice,
+    jump,
     getStatus: () => ({ ...status }),
   };
 }

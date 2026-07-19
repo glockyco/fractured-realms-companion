@@ -367,14 +367,73 @@ test('executor splicing removes all pending steps after the current step', () =>
 test('executor pauses on external action and resumes from remaining quantity', () => {
   const game = fakeGame();
   const executor = createDirectExecutor(game.api, { ...game.timers });
-  executor.run([{ skillId: 'mine', actionId: 'ore', actionName: 'Ore', count: 2, produceItemId: 'ore', produceQty: 2, interval: 10 }]);
+  executor.run([{ skillId: 'mine', actionId: 'ore', actionName: 'Ore', count: 2, produceItemId: 'ore', produceQty: 2, interval: 500 }]);
   game.produce('ore');
   game.api.state.activeSkill = 'combat'; game.api.state.activeAction = 'attack'; game.emit();
+  game.timers.tick(1300);
   assert.equal(executor.getStatus().phase, 'paused');
   executor.resume();
   assert.equal(game.api.state.activeAction, 'ore');
   game.produce('ore');
   assert.equal(executor.getStatus().phase, 'complete');
+});
+
+test('executor ignores a transient action mismatch that self-heals', () => {
+  const game = fakeGame();
+  const executor = createDirectExecutor(game.api, { ...game.timers });
+  executor.run([{ skillId: 'mine', actionId: 'ore', actionName: 'Ore', count: 2, produceItemId: 'ore', produceQty: 2, interval: 500 }]);
+  game.api.state.activeSkill = 'combat'; game.api.state.activeAction = 'attack'; game.emit();
+  game.api.state.activeSkill = 'mine'; game.api.state.activeAction = 'ore'; game.emit();
+  game.timers.tick(1300);
+  assert.equal(executor.getStatus().phase, 'running');
+});
+
+test('executor pauses after the grace window when the action stays changed', () => {
+  const game = fakeGame();
+  const executor = createDirectExecutor(game.api, { ...game.timers });
+  executor.run([{ skillId: 'mine', actionId: 'ore', actionName: 'Ore', count: 2, produceItemId: 'ore', produceQty: 2, interval: 500 }]);
+  game.api.state.activeSkill = 'combat'; game.api.state.activeAction = 'attack'; game.emit();
+  assert.equal(executor.getStatus().phase, 'running');
+  game.timers.tick(1300);
+  assert.equal(executor.getStatus().phase, 'paused');
+  assert.match(executor.getStatus().message, /action changed in game/);
+});
+
+test('executor jump replaces the queue and restarts at the given index', () => {
+  const game = fakeGame();
+  const executor = createDirectExecutor(game.api, { ...game.timers });
+  executor.run([
+    { skillId: 'mine', actionId: 'ore', actionName: 'Ore', count: 1, produceItemId: 'ore', produceQty: 1, interval: 10 },
+    { skillId: 'smith', actionId: 'bar', actionName: 'Bar', count: 1, produceItemId: 'bar', produceQty: 1, interval: 10 },
+  ]);
+  const next = [
+    { skillId: 'chop', actionId: 'log', actionName: 'Log', count: 1, produceItemId: 'log', produceQty: 1, interval: 10 },
+    { skillId: 'mine', actionId: 'ore', actionName: 'Ore', count: 1, produceItemId: 'ore', produceQty: 1, interval: 10 },
+  ];
+  assert.equal(executor.jump(next, 0), true);
+  assert.equal(game.api.state.activeAction, 'log');
+  game.produce('log');
+  assert.equal(game.api.state.activeAction, 'ore');
+  game.produce('ore');
+  assert.equal(executor.getStatus().phase, 'complete');
+});
+
+test('executor jump resumes from a paused queue', () => {
+  const game = fakeGame();
+  const executor = createDirectExecutor(game.api, { ...game.timers });
+  executor.run([{ skillId: 'mine', actionId: 'ore', actionName: 'Ore', count: 2, produceItemId: 'ore', produceQty: 2, interval: 500 }]);
+  game.api.state.activeSkill = 'combat'; game.api.state.activeAction = 'attack'; game.emit();
+  game.timers.tick(1300);
+  assert.equal(executor.getStatus().phase, 'paused');
+  assert.equal(executor.jump([{ skillId: 'chop', actionId: 'log', actionName: 'Log', count: 1, produceItemId: 'log', produceQty: 1, interval: 10 }], 0), true);
+  assert.equal(game.api.state.activeAction, 'log');
+  assert.equal(executor.getStatus().phase, 'running');
+});
+
+test('executor jump refuses a terminal executor', () => {
+  const game = fakeGame();
+  const executor = createDirectExecutor(game.api, { ...game.timers });
+  assert.equal(executor.jump([{ skillId: 'mine', actionId: 'ore', actionName: 'Ore', count: 1, produceItemId: 'ore', produceQty: 1, interval: 10 }], 0), false);
 });
 
 test('executor aborts a stalled action, and stop clears execution', () => {
