@@ -1,0 +1,33 @@
+{
+  "name": "fractured-realms-companion",
+  "version": "0.1.0",
+  "description": "In-game item wiki and action planner for Fractured Realms.",
+  "type": "module",
+  "bin": {
+    "fractured-companion": "dist/cli.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "dist",
+    "runtime",
+    "overlay"
+  ],
+  "scripts": {
+    "build": "node scripts/embed-runtime.mjs && tsc",
+    "test": "node scripts/embed-runtime.mjs && node --test \"tests/**/*.test.ts\""
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/glockyco/fractured-realms-companion.git"
+  },
+  "bugs": {
+    "url": "https://github.com/glockyco/fractured-realms-companion/issues"
+  },
+  "homepage": "https://github.com/glockyco/fractured-realms-companion#readme"
+}
