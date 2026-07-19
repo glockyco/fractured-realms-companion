@@ -320,6 +320,7 @@ function patchedMain(source: string, newline: string): string {
     '      fs,',
     '      profile: require(\'./companion-profile.json\'),',
     "      adapter: require('./companion-adapter.cjs'),",
+    '      openBrowser: !companionNoOpen,',
     '      services: {',
     '        steamUnlock: unlockSteamAchievement,',
     '        quitApp: () => app.quit(),',
@@ -335,7 +336,7 @@ function patchedMain(source: string, newline: string): string {
   ].join(newline);
   source = source.replace(originalReady, browserReady);
   const pathAnchor = "const path = require('path');";
-  source = source.replace(pathAnchor, `${pathAnchor}${newline}const companionBrowserMode = process.argv.includes('--companion-browser'); // ${FRACTURED_MARKER}`);
+  source = source.replace(pathAnchor, `${pathAnchor}${newline}const companionBrowserMode = process.argv.includes('--companion-browser'); // ${FRACTURED_MARKER}${newline}const companionNoOpen = process.argv.includes('--companion-no-open');`);
   return source;
 }
 
@@ -367,7 +368,7 @@ function validateMainAndPreload(root: string, buildId: string): { entry: string;
   } catch (error) { fail(`${ERROR_PREFIX}${buildId}`, error); }
   if (MAIN_ANCHORS.some((anchor) => count(source!, anchor) !== 1)) fail(`${ERROR_PREFIX}${buildId}`);
   if (count(source!, "const path = require('path');") !== 1 || count(source!, "const fs   = require('fs');") !== 1) fail(`${ERROR_PREFIX}${buildId}`);
-  if (source!.includes('companionBrowserMode') || preloadSource!.includes('companionBrowserMode') || source!.includes(FRACTURED_MARKER) || preloadSource!.includes(FRACTURED_MARKER) || source!.includes(FOREIGN_MARKER_PREFIX) || preloadSource!.includes(FOREIGN_MARKER_PREFIX)) fail(`${ERROR_PREFIX}${buildId}`);
+  if (source!.includes('companionBrowserMode') || source!.includes('companionNoOpen') || preloadSource!.includes('companionBrowserMode') || preloadSource!.includes('companionNoOpen') || source!.includes(FRACTURED_MARKER) || preloadSource!.includes(FRACTURED_MARKER) || source!.includes(FOREIGN_MARKER_PREFIX) || preloadSource!.includes(FOREIGN_MARKER_PREFIX)) fail(`${ERROR_PREFIX}${buildId}`);
   if (count(preloadSource!, "contextBridge.exposeInMainWorld('electronAPI', {") !== 1 || PRELOAD_NAMES.some((name) => (preloadSource!.match(new RegExp(`^\\s*${name}\\s*:`, 'gm')) ?? []).length !== 1)) fail(`${ERROR_PREFIX}${buildId}`);
   const newline = source!.includes('\r\n') ? '\r\n' : '\n';
   if (count(source!, NATIVE_UNLOCK_LINES.join(newline)) !== 1) fail(`${ERROR_PREFIX}${buildId}`);

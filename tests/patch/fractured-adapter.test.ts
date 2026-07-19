@@ -55,7 +55,8 @@ const path = require('node:path');
 const Module = require('node:module');
 const entry = process.argv[2];
 const browser = process.argv[3] === 'browser';
-const mode = process.argv[4] || 'client';
+const noOpen = process.argv[4] === 'no-open';
+const mode = noOpen ? (process.argv[5] || 'client') : (process.argv[4] || 'client');
 const silent = { log() {}, error() {}, warn() {} };
 global.console = silent;
 const events = [];
@@ -79,11 +80,11 @@ Module._load = function(request, parent, isMain) {
   if (request === './companion-adapter.cjs') return {};
   return originalLoad.call(this, request, parent, isMain);
 };
-process.argv = ['node', entry].concat(browser ? ['--companion-browser'] : []);
+process.argv = ['node', entry].concat(browser ? ['--companion-browser'] : []).concat(noOpen ? ['--companion-no-open'] : []);
 require(entry);
 setImmediate(() => {
   const call = handlers.get('steam:unlock');
-  const result = { events, browser: Boolean(global.hostConfig), success: call && mode === 'client' ? call(null, 'ACH_TEST') : null, bad: call && mode === 'client' ? call(null, null) : null, noClient: call && mode === 'none' ? call(null, 'ACH_TEST') : null, caught: call && mode === 'throw' ? call(null, 'ACH_TEST') : null, cached: fs.existsSync(path.join(path.dirname(entry), 'user-data/companion-steamworks-0.4.0-v1/dist/win64/steam_api64.dll')) };
+  const result = { events, browser: Boolean(global.hostConfig), openBrowser: global.hostConfig ? global.hostConfig.openBrowser : null, success: call && mode === 'client' ? call(null, 'ACH_TEST') : null, bad: call && mode === 'client' ? call(null, null) : null, noClient: call && mode === 'none' ? call(null, 'ACH_TEST') : null, caught: call && mode === 'throw' ? call(null, 'ACH_TEST') : null, cached: fs.existsSync(path.join(path.dirname(entry), 'user-data/companion-steamworks-0.4.0-v1/dist/win64/steam_api64.dll')) };
   if (global.hostConfig) { result.service = global.hostConfig.services.steamUnlock('ACH_TEST'); global.hostConfig.services.quitApp(); }
   if (!browser && appHandlers.has('activate')) { windows.length = 0; appHandlers.get('activate')(); result.activated = events.filter((x) => x === 'createWindow').length === 2; }
   process.stdout.write(JSON.stringify(result));
@@ -176,7 +177,9 @@ test('transformed main preserves browser and native behavior', () => {
   const harnessPath = join(root, 'adapter-harness.cjs'); writeFileSync(harnessPath, harness);
   const browser = spawnSync(process.execPath, [harnessPath, join(root, 'electron/main.cjs'), 'browser', 'client'], { encoding: 'utf8' });
   assert.equal(browser.status, 0, browser.stderr); const browserResult = JSON.parse(browser.stdout);
-  assert.deepEqual(browserResult.events.slice(0, 2), ['initSteam', 'hostStart']); assert.equal(browserResult.browser, true); assert.deepEqual(browserResult.service, { ok: true, activated: 7 }); assert.equal(browserResult.cached, true);
+  assert.deepEqual(browserResult.events.slice(0, 2), ['initSteam', 'hostStart']); assert.equal(browserResult.browser, true); assert.equal(browserResult.openBrowser, true); assert.deepEqual(browserResult.service, { ok: true, activated: 7 }); assert.equal(browserResult.cached, true);
+  const noOpen = spawnSync(process.execPath, [harnessPath, join(root, 'electron/main.cjs'), 'browser', 'no-open', 'client'], { encoding: 'utf8' });
+  assert.equal(noOpen.status, 0, noOpen.stderr); const noOpenResult = JSON.parse(noOpen.stdout); assert.deepEqual(noOpenResult.events.slice(0, 2), ['initSteam', 'hostStart']); assert.equal(noOpenResult.browser, true); assert.equal(noOpenResult.openBrowser, false); assert.deepEqual(noOpenResult.service, { ok: true, activated: 7 });
   const normal = spawnSync(process.execPath, [harnessPath, join(root, 'electron/main.cjs'), 'normal', 'none'], { encoding: 'utf8' });
   assert.equal(normal.status, 0, normal.stderr); const normalResult = JSON.parse(normal.stdout); assert.equal(normalResult.browser, false); assert.deepEqual(normalResult.noClient, { ok: false, reason: 'no-client' }); assert.equal(normalResult.cached, true); assert.equal(normalResult.activated, true);
   const bad = spawnSync(process.execPath, [harnessPath, join(root, 'electron/main.cjs'), 'normal', 'throw'], { encoding: 'utf8' });
@@ -192,7 +195,14 @@ test('rejects main, preload and bundle anchor mutations without tree writes', ()
   }
 });
 
-
+test('rejects a preexisting companion no-open flag without tree writes', () => {
+  const { root, pack } = createCase();
+  const main = join(root, 'electron/main.cjs');
+  writeFileSync(main, `${readFileSync(main, 'utf8')}\nconst companionNoOpen = false;\n`);
+  const before = snapshot(root);
+  assert.throws(() => apply(root, pack));
+  assert.deepEqual(snapshot(root), before);
+});
 test('rejects missing or unknown companion modules before mutation', () => {
   for (const mutate of [
     (pack: string) => unlinkSync(join(pack, 'planner.js')),

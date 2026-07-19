@@ -193,11 +193,12 @@ function validateStartConfig(config) {
     throw new TypeError('Invalid browser profile network settings');
   }
   if (typeof profile.companion !== 'boolean') throw new TypeError('Invalid browser profile companion');
+  if ('openBrowser' in config && typeof config.openBrowser !== 'boolean') throw new TypeError('Invalid browser openBrowser');
   if (!adapter || typeof adapter !== 'object' || typeof adapter.id !== 'string' || typeof adapter.bridgeScript !== 'function' || typeof adapter.handleApi !== 'function') {
     throw new TypeError('Invalid browser adapter ABI');
   }
   if (adapter.id !== profile.service) throw new TypeError('Browser adapter does not match profile service');
-  return { app, shell, path: pathModule, fs: fsModule, profile, adapter };
+  return { app, shell, path: pathModule, fs: fsModule, profile, adapter, openBrowser: config.openBrowser === undefined ? true : config.openBrowser };
 }
 
 function expectedOrigin(profile) {
@@ -303,7 +304,7 @@ function closePromise(server) {
 }
 
 async function start(config) {
-  const { app, shell, path: pathModule, fs: fsModule, profile, adapter } = validateStartConfig(config);
+  const { app, shell, path: pathModule, fs: fsModule, profile, adapter, openBrowser } = validateStartConfig(config);
   const services = config.services && typeof config.services === 'object' ? Object.freeze({ ...config.services }) : Object.freeze({});
   const env = frozenEnvironment(fsModule, pathModule);
   const token = crypto.randomBytes(32).toString('base64url');
@@ -440,7 +441,9 @@ async function start(config) {
       if (settled) return;
       if (error && error.code === 'EADDRINUSE') {
         if (await checkExistingServer(profile)) {
-          try { await shell.openExternal(`${origin}/`); } catch { /* existing host remains valid */ }
+          if (openBrowser) {
+            try { await shell.openExternal(`${origin}/`); } catch { /* existing host remains valid */ }
+          }
           if (typeof app.quit === 'function') app.quit();
           settled = true;
           resolve({ ...handle, server: null, existing: true, close: async () => {} });
@@ -459,7 +462,9 @@ async function start(config) {
     server.listen(profile.port, profile.bind_host, async () => {
       if (settled) return;
       settled = true;
-      try { await shell.openExternal(`${origin}/`); } catch { /* browser opening is best effort */ }
+      if (openBrowser) {
+        try { await shell.openExternal(`${origin}/`); } catch { /* browser opening is best effort */ }
+      }
       resolve(handle);
     });
   });
