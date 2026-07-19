@@ -447,3 +447,52 @@ test('executor aborts a stalled action, and stop clears execution', () => {
   assert.equal(executor.getStatus().phase, 'idle');
   assert.deepEqual(game.api.state.actionQueue, []);
 });
+
+test('executor time stop condition completes on the deadline regardless of production', () => {
+  const game = fakeGame();
+  const executor = createDirectExecutor(game.api, { ...game.timers });
+  executor.run([{
+    skillId: 'mine', actionId: 'ore', actionName: 'Ore', count: 100,
+    produceItemId: 'ore', produceQty: 100, interval: 10,
+    stopWhen: { type: 'time', ms: 50 },
+  }]);
+  assert.equal(executor.getStatus().phase, 'running');
+  game.timers.tick(50);
+  assert.equal(executor.getStatus().phase, 'complete');
+  assert.equal(game.api.state.inventory.ore ?? 0, 0);
+});
+
+test('executor time stop condition preserves remaining active time across a pause', () => {
+  const game = fakeGame();
+  const executor = createDirectExecutor(game.api, { ...game.timers });
+  executor.run([{
+    skillId: 'mine', actionId: 'ore', actionName: 'Ore', count: 100,
+    produceItemId: 'ore', produceQty: 100, interval: 10000,
+    stopWhen: { type: 'time', ms: 2000 },
+  }]);
+  game.timers.tick(200);
+  game.api.state.activeSkill = 'combat'; game.api.state.activeAction = 'attack'; game.emit();
+  game.timers.tick(1300);
+  assert.equal(executor.getStatus().phase, 'paused');
+  executor.resume();
+  assert.equal(game.api.state.activeAction, 'ore');
+  assert.equal(executor.getStatus().phase, 'running');
+  game.timers.tick(250);
+  assert.equal(executor.getStatus().phase, 'running');
+  game.timers.tick(250);
+  assert.equal(executor.getStatus().phase, 'complete');
+});
+
+test('executor xp stop condition ignores inventory and completes on the threshold', () => {
+  const game = fakeGame();
+  const executor = createDirectExecutor(game.api, { ...game.timers });
+  executor.run([{
+    skillId: 'mine', actionId: 'ore', actionName: 'Ore', count: 5,
+    produceItemId: 'ore', produceQty: 5, interval: 10,
+    stopWhen: { type: 'xp', skillId: 'mine', xpAtLeast: 150 },
+  }]);
+  game.produce('ore', 6);
+  assert.equal(executor.getStatus().phase, 'running');
+  game.api.state.skillXp = { mine: 150 }; game.emit();
+  assert.equal(executor.getStatus().phase, 'complete');
+});

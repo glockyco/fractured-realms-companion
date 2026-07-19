@@ -42,6 +42,9 @@ export function createDirectExecutor(api, options = {}) {
   let verifyTimer;
   let stallTimer;
   let mismatchTimer;
+  let stopTimer;
+  let stopDeadline = 0;
+  let stopRemainingMs = 0;
   let unsubscribe;
   let runToken = 0;
   let transitionBusy = false;
@@ -94,9 +97,11 @@ export function createDirectExecutor(api, options = {}) {
     clearTimer(verifyTimer);
     clearTimer(stallTimer);
     clearTimer(mismatchTimer);
+    clearTimer(stopTimer);
     verifyTimer = undefined;
     stallTimer = undefined;
     mismatchTimer = undefined;
+    stopTimer = undefined;
   };
   const detach = () => {
     if (typeof unsubscribe === 'function') {
@@ -119,6 +124,17 @@ export function createDirectExecutor(api, options = {}) {
   };
   const matching = (current, step) => current?.activeSkill === step?.skillId
     && current?.activeAction === step?.actionId;
+
+  const stopSatisfied = (step, current) => {
+    const stop = step?.stopWhen;
+    if (!stop) return false;
+    if (stop.type === 'time') return asNumber(now(), 0) >= stopDeadline;
+    if (stop.type === 'xp') {
+      const xp = current?.skillXp?.[stop.skillId] ?? state()?.skillXp?.[stop.skillId];
+      return asNumber(xp, 0) >= asNumber(stop.xpAtLeast, 0);
+    }
+    return false;
+  };
 
   const error = (message) => {
     const current = state();
@@ -203,7 +219,8 @@ export function createDirectExecutor(api, options = {}) {
     const step = steps[index];
     if (!step) return;
     const inventory = inventoryValue(current, step.produceItemId);
-    if (inventory >= target) {
+    const done = step.stopWhen ? stopSatisfied(step, current) : inventory >= target;
+    if (done) {
       if (status.phase === 'running') finishStep(runToken);
       return;
     }
@@ -238,7 +255,9 @@ export function createDirectExecutor(api, options = {}) {
           const latest = state();
           const active = steps[index];
           if (!active || matching(latest, active)) return;
-          if (inventoryValue(latest, active.produceItemId) >= target) { finishStep(token); return; }
+          const stepDone = active.stopWhen ? stopSatisfied(active, latest) : inventoryValue(latest, active.produceItemId) >= target;
+          if (stepDone) { finishStep(token); return; }
+          if (active.stopWhen?.type === 'time') stopRemainingMs = Math.max(0, stopDeadline - asNumber(now(), 0));
           clearStepTimers();
           update('paused', 'action changed in game', index, latest);
         }, MISMATCH_GRACE_MS);
@@ -262,6 +281,13 @@ export function createDirectExecutor(api, options = {}) {
     // A malformed/legacy step can still be executed using count and one output.
     if (target === stepStart && asNumber(step.count, 0) > 0) {
       target += asNumber(step.count, 0);
+    }
+    if (step.stopWhen?.type === 'time') {
+      stopRemainingMs = Math.max(0, asNumber(step.stopWhen.ms, 0));
+      stopDeadline = asNumber(now(), 0) + stopRemainingMs;
+      stopTimer = schedule(() => {
+        if (token === runToken && status.phase === 'running') finishStep(token);
+      }, stopRemainingMs);
     }
     lastProduced = stepStart;
     lastProgress = typeof step.progressItemId === 'string' && step.progressItemId
@@ -337,27 +363,37 @@ export function createDirectExecutor(api, options = {}) {
     if (status.phase !== 'paused' || index < 0 || index >= steps.length) return;
     const token = runToken;
     const current = state();
-    const currentInventory = inventoryValue(current, steps[index].produceItemId);
-    const remaining = Math.max(0, target - currentInventory);
-    if (remaining <= 0) {
-      update('running', `Finishing ${steps[index].actionName}`, index, current);
-      finishStep(token);
-      return;
+    const step = steps[index];
+    const currentInventory = inventoryValue(current, step.produceItemId);
+    if (!step.stopWhen) {
+      const remaining = Math.max(0, target - currentInventory);
+      if (remaining <= 0) {
+        update('running', `Finishing ${step.actionName}`, index, current);
+        finishStep(token);
+        return;
+      }
+      // Preserve target while recording remaining output for diagnostics. The
+      // live game starts the same action again; no queue is involved.
+      step.produceQty = remaining;
     }
-    // Preserve target while recording remaining output for diagnostics. The
-    // live game starts the same action again; no queue is involved.
-    steps[index].produceQty = remaining;
     lastProduced = currentInventory;
-    lastProgress = typeof steps[index].progressItemId === 'string' && steps[index].progressItemId
-      ? inventoryValue(current, steps[index].progressItemId) : 0;
+    lastProgress = typeof step.progressItemId === 'string' && step.progressItemId
+      ? inventoryValue(current, step.progressItemId) : 0;
     lastProgressAt = asNumber(now(), 0);
-    update('starting', `Resuming ${steps[index].actionName}`, index, current);
+    update('starting', `Resuming ${step.actionName}`, index, current);
     let result;
-    try { result = api.startAction(steps[index].skillId, steps[index].actionId); }
-    catch (cause) { error(cause instanceof Error ? cause.message : `Unable to resume ${steps[index].actionName}`); return; }
-    if (thenable(result)) result.catch((cause) => error(cause instanceof Error ? cause.message : `Unable to resume ${steps[index].actionName}`));
+    try { result = api.startAction(step.skillId, step.actionId); }
+    catch (cause) { error(cause instanceof Error ? cause.message : `Unable to resume ${step.actionName}`); return; }
+    if (thenable(result)) result.catch((cause) => error(cause instanceof Error ? cause.message : `Unable to resume ${step.actionName}`));
+    if (step.stopWhen?.type === 'time') {
+      stopDeadline = asNumber(now(), 0) + stopRemainingMs;
+      clearTimer(stopTimer);
+      stopTimer = schedule(() => {
+        if (token === runToken && status.phase === 'running') finishStep(token);
+      }, stopRemainingMs);
+    }
     verifyTimer = schedule(() => {
-      if (runToken === token && status.phase === 'starting') error(`Unable to start ${steps[index].actionName}`);
+      if (runToken === token && status.phase === 'starting') error(`Unable to start ${step.actionName}`);
     }, 1500);
     observe(state());
   };
