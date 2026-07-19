@@ -52,8 +52,21 @@ export function extractDatasets(source: string, archiveFiles: readonly string[])
   for (const id of ids) { const item = object(rawItems[id], 'items'); string(item.label, 'items'); string(item.type, 'items'); items[id] = { ...item, art: art.has(`dist/art/icons/items/${id}.png`) }; }
 
   const rawActions = object(extract(source, '={woodcutting:[{id:"chop_', 'actions'), 'actions');
+  const rawActionGates = object(extract(source, '={chop_witherwood:{mapId:', 'action gates'), 'action gates');
   for (const skill of ACTION_SKILLS) { const list = array(rawActions[skill], 'actions'); for (const action of list) { const item = object(action, 'actions'); string(item.id, 'actions'); number(item.levelReq, 'actions'); number(item.xp, 'actions'); number(item.interval, 'actions'); } }
-  const actions: Record<string, unknown[]> = Object.create(null) as Record<string, unknown[]>; for (const [key, value] of Object.entries(rawActions)) actions[key] = array(value, 'actions');
+  const actions: Record<string, unknown[]> = Object.create(null) as Record<string, unknown[]>;
+  for (const [key, value] of Object.entries(rawActions)) {
+    actions[key] = array(value, 'actions').map((entry) => {
+      const action = object(entry, 'actions');
+      const gateValue = rawActionGates[string(action.id, 'actions')];
+      if (gateValue === undefined) return action;
+      const gate = object(gateValue, 'action gates');
+      const gateLevelReq = number(gate.skillLevel, 'action gates');
+      const mapReq = gate.mapId;
+      if (mapReq !== null && typeof mapReq !== 'string') fail('action gates', 'expected mapId to be a string or null');
+      return { ...action, gateLevelReq, ...(mapReq ? { mapReq } : {}) };
+    });
+  }
 
   const skills = array(extract(source, '[{id:"hitpoints",name:"Hitpoints"', 'skills'), 'skills');
   if (skills.length < 15 || skills.length > 25) fail('skills', `expected 15–25 entries, got ${skills.length}`);

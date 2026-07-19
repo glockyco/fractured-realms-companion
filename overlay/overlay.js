@@ -149,7 +149,6 @@ svg {
 .identity { min-width: 0; display: flex; align-items: center; gap: var(--fr-s2); }
 .identity svg { color: var(--fr-harbor-400); width: var(--fr-icon-lg); height: var(--fr-icon-lg); }
 .identity strong { font-size: 0.9375rem; font-weight: 650; letter-spacing: -0.01em; }
-.identity span { color: var(--fr-neutral-300); font-size: 0.75rem; }
 .icon-button {
   width: var(--fr-control);
   height: var(--fr-control);
@@ -304,7 +303,7 @@ th, td { padding: var(--fr-s2) var(--fr-s3); border-bottom: 1px solid var(--fr-n
 th { position: sticky; top: 0; background: var(--fr-neutral-950); color: var(--fr-neutral-300); font-size: 0.75rem; font-weight: 650; }
 tbody tr:last-child td { border-bottom: 0; }
 .cell-title { display: block; color: var(--fr-neutral-100); font-weight: 600; }
-.cell-id { color: var(--fr-neutral-300); font-size: 0.6875rem; }
+.cell-id { display: block; margin-top: var(--fr-s1); color: var(--fr-neutral-300); font-size: 0.6875rem; }
 .plan-form { display: grid; grid-template-columns: minmax(0, 1fr) 6rem auto; align-items: end; gap: var(--fr-s2); padding-bottom: var(--fr-s4); border-bottom: 1px solid var(--fr-neutral-800); }
 .plan-summary { margin: var(--fr-s4) 0 var(--fr-s2); }
 .step-index { width: 1.625rem; height: 1.625rem; display: inline-grid; place-items: center; border-radius: 999px; background: var(--fr-neutral-900); color: var(--fr-neutral-300); font-size: 0.6875rem; }
@@ -333,7 +332,6 @@ tbody tr:last-child td { border-bottom: 0; }
 @keyframes loading { from { transform: translateX(-100%); } to { transform: translateX(300%); } }
 @media (max-width: 40rem) {
   .panel { width: calc(100vw - (2 * var(--fr-panel-gap))); height: min(78dvh, calc(100dvh - 5rem)); resize: vertical; }
-  .identity span { display: none; }
   .items-layout { display: block; }
   .item-browser { height: 48%; border-right: 0; border-bottom: 1px solid var(--fr-neutral-800); }
   .detail { height: 52%; }
@@ -364,8 +362,16 @@ function escapeHtml(value) {
     .replaceAll("'", '&#039;');
 }
 
+function humanizeId(id) {
+  return String(id ?? '')
+    .split(/[_-]+/u)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toLocaleUpperCase() + word.slice(1))
+    .join(' ') || 'Unknown';
+}
+
 function labelFor(items, id) {
-  return items[id]?.label || id;
+  return items[id]?.label || humanizeId(id);
 }
 
 function formatInterval(milliseconds) {
@@ -385,7 +391,7 @@ function quantityEntries(value, items) {
   return Object.entries(value || {})
     .sort(([left], [right]) => labelFor(items, left).localeCompare(labelFor(items, right)))
     .map(([id, qty]) => `${escapeHtml(labelFor(items, id))} <span class="data">×${escapeHtml(qty)}</span>`)
-    .join(', ') || '—';
+    .join('<br>') || '—';
 }
 
 export function buildIndexes(datasets) {
@@ -500,7 +506,7 @@ export function createOverlayShell(documentRef) {
   panel.hidden = true;
   const header = makeElement(documentRef, 'header', { class: 'panel-header' });
   const identity = makeElement(documentRef, 'div', {
-    class: 'identity', html: `${ICONS.helm}<div><strong>Fractured Realms Companion</strong><br><span>Build-matched wiki and planner</span></div>`,
+    class: 'identity', html: `${ICONS.helm}<strong>Fractured Realms Companion</strong>`,
   });
   const close = makeElement(documentRef, 'button', {
     class: 'icon-button', type: 'button', title: 'Close companion', 'aria-label': 'Close companion', html: ICONS.close,
@@ -586,6 +592,12 @@ function blockedText(blocked) {
   if (typeof blocked === 'string') return blocked;
   const reason = blocked.reason || blocked.type;
   if (reason === 'level') return `Requires ${blocked.skillName || blocked.skillId || 'skill'} level ${blocked.minLevel ?? blocked.levelReq ?? blocked.level ?? '—'}${blocked.actionName ? ` for ${blocked.actionName}` : ''}.`;
+  if (reason === 'tool') return `Unlock ${blocked.toolName || humanizeId(blocked.toolId)} in the Shop before running ${blocked.actionName}.`;
+  if (reason === 'pattern') return `Unlock the ${humanizeId(blocked.patternId)} glyph pattern before running ${blocked.actionName}.`;
+  if (reason === 'prayer') return `Reach Prayer level ${blocked.minPrayerLevel} before running ${blocked.actionName}.`;
+  if (reason === 'map') return `Chart ${humanizeId(blocked.mapId)} before running ${blocked.actionName}.`;
+  if (reason === 'recipe') return `Learn the ${blocked.actionName} recipe before running this step.`;
+  if (reason === 'bag-full') return 'Free at least one bag slot before running a plan.';
   if (reason === 'rare-only') return `Only available as a rare output${blocked.chances ? ` (${blocked.chances})` : ''}; rare drops are not automated.`;
   if (reason === 'no-source') return 'No deterministic source exists in this game build.';
   if (reason === 'cycle') return `A dependency cycle prevents a safe plan${blocked.itemId ? ` at ${blocked.itemId}` : ''}.`;
@@ -600,7 +612,7 @@ function createApplication(shell, datasets, api) {
   );
   const skillNames = Object.fromEntries((datasets.skills || []).map((skill) => [skill.id, skill.name || skill.label || skill.id]));
   const state = {
-    selectedItemId: sortedItems[0]?.[0] || null,
+    selectedItemId: null,
     query: '',
     currentPlan: null,
     executorStatus: { phase: 'idle', currentStep: null, message: 'Choose an item and build a plan.' },
@@ -619,7 +631,7 @@ function createApplication(shell, datasets, api) {
   itemsPanel.innerHTML = `
     <div class="items-layout">
       <section class="item-browser" aria-label="Item browser">
-        <div class="toolbar"><div class="field grow"><label for="fr-item-search">Search items</label><div class="search-control">${ICONS.search}<input id="fr-item-search" type="search" autocomplete="off" placeholder="Name or item ID"></div></div></div>
+        <div class="toolbar"><div class="field grow"><label for="fr-item-search">Search items</label><div class="search-control">${ICONS.search}<input id="fr-item-search" type="search" autocomplete="off" placeholder="Item name"></div></div></div>
         <p class="result-count" id="fr-result-count" aria-live="polite"></p>
         <ul class="item-list" id="fr-item-list"></ul>
       </section>
@@ -645,8 +657,8 @@ function createApplication(shell, datasets, api) {
       : `${matches.length.toLocaleString()} ${matches.length === 1 ? 'result' : 'results'}`;
     itemList.innerHTML = visible.length ? visible.map(([id, item]) => `
       <li><button class="item-row" type="button" data-item-id="${escapeHtml(id)}" aria-current="${id === state.selectedItemId}">
-        <span>${escapeHtml(item.label || id)}</span><code>${escapeHtml(id)}</code>
-      </button></li>`).join('') : '<li class="empty">No items match. Try a shorter name or an item ID.</li>';
+        <span>${escapeHtml(item.label || humanizeId(id))}</span>
+      </button></li>`).join('') : '<li class="empty">No items match. Try a shorter name.</li>';
   }
 
   function renderItemDetail() {
@@ -673,14 +685,13 @@ function createApplication(shell, datasets, api) {
     detail.innerHTML = `
       <div class="item-heading">
         ${item.art ? `<img class="item-art" src="/art/icons/items/${encodeURIComponent(id)}.png" alt="">` : ''}
-        <div><h2>${escapeHtml(item.label || id)}</h2><p class="meta"><span class="mono">${escapeHtml(id)}</span> · ${escapeHtml(item.type || 'Unknown type')}${item.subtype ? ` / ${escapeHtml(item.subtype)}` : ''}</p></div>
+        <div><h2>${escapeHtml(item.label || humanizeId(id))}</h2><p class="meta">${escapeHtml(item.type || 'Unknown type')}${item.subtype ? ` / ${escapeHtml(item.subtype)}` : ''}</p></div>
         <button class="button" id="fr-detail-plan" type="button" data-plan-item="${escapeHtml(id)}"${isExecutionLocked(state.executorStatus?.phase) ? ' disabled' : ''}>Plan this item</button>
       </div>
       <p class="prose">${escapeHtml(description)}</p>
       <dl class="facts">
         ${item.value != null ? `<div><dt>Value</dt><dd>${escapeHtml(item.value)}</dd></div>` : ''}
         ${item.healAmount != null ? `<div><dt>Healing</dt><dd>${escapeHtml(item.healAmount)}</dd></div>` : ''}
-        ${item.icon ? `<div><dt>Icon</dt><dd>${escapeHtml(item.icon)}</dd></div>` : ''}
       </dl>
       <h3>Sources</h3><ul class="record-list">${sourceRows}</ul>
       <h3>Uses</h3><ul class="record-list">${useRows}</ul>`;
@@ -720,8 +731,8 @@ function createApplication(shell, datasets, api) {
       return;
     }
     skillTable.innerHTML = `<div class="table-wrap"><table><caption>${escapeHtml(skillNames[skillId] || skillId)} actions · ${actions.length.toLocaleString()} total</caption><thead><tr><th scope="col">Action</th><th scope="col">Level</th><th scope="col">Interval</th><th scope="col">Inputs</th><th scope="col">Outputs</th><th scope="col">Tool</th></tr></thead><tbody>${actions.map((action) => {
-      const rare = (action.rareOutputs || []).map((entry) => `${escapeHtml(labelFor(items, entry.item))} <span class="data">×${escapeHtml(entry.qty ?? 1)}</span> <span class="badge warning">${escapeHtml(formatChance(entry.chance))}</span>`).join(', ');
-      return `<tr><td><span class="cell-title">${escapeHtml(action.name || action.id)}</span><span class="cell-id mono">${escapeHtml(action.id)}</span>${action.spot ? `<br><span class="cell-id">${escapeHtml(datasets.strings?.[`name.${action.spot}`] || action.spot)}</span>` : ''}</td><td class="data">${escapeHtml(action.levelReq)}</td><td class="data">${escapeHtml(formatInterval(action.interval))}</td><td>${quantityEntries(action.inputs, items)}</td><td>${quantityEntries(action.outputs, items)}${rare ? `<br>${rare}` : ''}</td><td>${action.toolReq ? escapeHtml(labelFor(items, action.toolReq)) : '—'}</td></tr>`;
+      const rare = (action.rareOutputs || []).map((entry) => `${escapeHtml(labelFor(items, entry.item))} <span class="data">×${escapeHtml(entry.qty ?? 1)}</span> <span class="badge warning">${escapeHtml(formatChance(entry.chance))}</span>`).join('<br>');
+      return `<tr><td><span class="cell-title">${escapeHtml(action.name || humanizeId(action.id))}</span>${action.spot ? `<span class="cell-id">${escapeHtml(datasets.strings?.[`name.${action.spot}`] || humanizeId(action.spot))}</span>` : ''}</td><td class="data">${escapeHtml(action.levelReq)}</td><td class="data">${escapeHtml(formatInterval(action.interval))}</td><td>${quantityEntries(action.inputs, items)}</td><td>${quantityEntries(action.outputs, items)}${rare ? `<br>${rare}` : ''}</td><td>${action.toolReq ? escapeHtml(datasets.strings?.[`name.${action.toolReq}`] || labelFor(items, action.toolReq)) : '—'}</td></tr>`;
     }).join('')}</tbody></table></div>`;
   }
   skillSelect.addEventListener('change', renderSkillTable);
@@ -730,11 +741,11 @@ function createApplication(shell, datasets, api) {
   planPanel.innerHTML = `
     <div class="plan-view">
       <form class="plan-form" id="fr-plan-form">
-        <div class="field"><label for="fr-plan-item">Desired item</label><select class="control" id="fr-plan-item"></select></div>
+        <div class="field"><label for="fr-plan-item">Desired item</label><select class="control" id="fr-plan-item" required></select></div>
         <div class="field"><label for="fr-plan-qty">Quantity</label><input class="control data" id="fr-plan-qty" type="number" min="1" step="1" value="1" inputmode="numeric"></div>
-        <button class="button" id="fr-resolve-plan" type="submit">Resolve plan</button>
+        <button class="button" id="fr-resolve-plan" type="submit">Build plan</button>
       </form>
-      <div id="fr-plan-result"><div class="empty">Choose an item and quantity. The planner will account for inventory, skill levels, and deterministic dependencies.</div></div>
+      <div id="fr-plan-result"><div class="empty">Choose an item and quantity. The planner checks your inventory and skill levels, then lists each required action.</div></div>
       <div class="executor" aria-label="Direct action controls">
         <div class="executor-status" role="status" aria-live="polite" aria-atomic="true"><strong id="fr-executor-phase">Ready</strong><p id="fr-executor-message">Choose an item and build a plan.</p></div>
         <div class="executor-actions"><button class="button primary" id="fr-run" type="button" disabled>${ICONS.play}Run</button><button class="button" id="fr-resume" type="button" hidden>${ICONS.resume}Resume</button><button class="button danger" id="fr-stop" type="button" disabled>${ICONS.stop}Stop</button></div>
@@ -750,14 +761,17 @@ function createApplication(shell, datasets, api) {
   const runButton = planPanel.querySelector('#fr-run');
   const resumeButton = planPanel.querySelector('#fr-resume');
   const stopButton = planPanel.querySelector('#fr-stop');
-  planItem.innerHTML = sortedItems.map(([id, item]) => `<option value="${escapeHtml(id)}">${escapeHtml(item.label || id)} · ${escapeHtml(id)}</option>`).join('');
+  planItem.innerHTML = `<option value="">Choose an item</option>${sortedItems.map(([id, item]) => `<option value="${escapeHtml(id)}">${escapeHtml(item.label || humanizeId(id))}</option>`).join('')}`;
 
   function renderExecutor() {
     const status = state.executorStatus || { phase: 'idle', message: '' };
     const phaseLabels = { idle: 'Ready', starting: 'Starting action', running: 'Running plan', paused: 'Plan paused', complete: 'Plan complete', error: 'Plan stopped' };
     const total = state.currentPlan?.steps?.length || 0;
     const step = Number.isInteger(status.currentStep) ? Number(status.currentStep) + 1 : null;
-    executorPhase.textContent = `${phaseLabels[status.phase] || status.phase}${step && total ? ` · step ${step} of ${total}` : ''}`;
+    const phaseLabel = status.phase === 'idle' && state.currentPlan && !state.currentPlan.ok
+      ? 'Blocked'
+      : phaseLabels[status.phase] || status.phase;
+    executorPhase.textContent = `${phaseLabel}${step && total ? ` · step ${step} of ${total}` : ''}`;
     executorMessage.textContent = status.message || 'Direct actions are idle.';
     const locked = isExecutionLocked(status.phase);
     planItem.disabled = locked;
@@ -773,7 +787,7 @@ function createApplication(shell, datasets, api) {
   function renderPlan() {
     const plan = state.currentPlan;
     if (!plan) {
-      planResult.innerHTML = '<div class="empty">Choose an item and quantity. The planner will account for inventory, skill levels, and deterministic dependencies.</div>';
+      planResult.innerHTML = '<div class="empty">Choose an item and quantity. The planner checks your inventory and skill levels, then lists each required action.</div>';
       renderExecutor();
       return;
     }
@@ -781,9 +795,15 @@ function createApplication(shell, datasets, api) {
     const topBlock = blockedText(plan.blocked || plan.reason);
     const rows = steps.map((step, index) => {
       const block = blockedText(step.blocked);
-      return `<li class="plan-step"><div class="step-top"><span class="step-index data">${index + 1}</span><span class="step-name">${escapeHtml(step.actionName || step.actionId)}</span><span class="step-qty data">×${escapeHtml(step.count)}</span></div><p>${escapeHtml(skillNames[step.skillId] || step.skillId)} · produces ${escapeHtml(labelFor(items, step.produceItemId))} <span class="data">×${escapeHtml(step.produceQty)}</span></p>${step.warning?.tool ? `<p class="step-note">${ICONS.warning}<span>Tool not equipped or in inventory: ${escapeHtml(labelFor(items, step.warning.tool))}</span></p>` : ''}${block ? `<p class="step-note">${ICONS.error}<span>${escapeHtml(block)}</span></p>` : ''}</li>`;
+      const count = Number(step.count);
+      const produced = Number(step.produceQty);
+      const quantity = count > 0 ? `×${escapeHtml(count)}` : 'Locked';
+      const production = produced > 0
+        ? `produces ${escapeHtml(labelFor(items, step.produceItemId))} <span class="data">×${escapeHtml(produced)}</span>`
+        : `would produce ${escapeHtml(labelFor(items, step.produceItemId))}`;
+      return `<li class="plan-step"><div class="step-top"><span class="step-index data">${index + 1}</span><span class="step-name">${escapeHtml(step.actionName || humanizeId(step.actionId))}</span><span class="step-qty data">${quantity}</span></div><p>${escapeHtml(skillNames[step.skillId] || humanizeId(step.skillId))} · ${production}</p>${block ? `<p class="step-note">${ICONS.error}<span>${escapeHtml(block)}</span></p>` : ''}</li>`;
     }).join('');
-    planResult.innerHTML = `<div class="plan-summary"><strong>${plan.ok ? `${steps.length} ${steps.length === 1 ? 'action' : 'actions'} resolved` : 'Plan blocked'}</strong>${topBlock ? `<p class="step-note">${ICONS.error}<span>${escapeHtml(topBlock)}</span></p>` : ''}</div>${rows ? `<ol class="plan-list">${rows}</ol>` : '<div class="empty">No executable steps were produced. Current inventory may already satisfy the request.</div>'}`;
+    planResult.innerHTML = `<div class="plan-summary"><strong>${plan.ok ? `${steps.length} ${steps.length === 1 ? 'action' : 'actions'} resolved` : 'Plan blocked'}</strong>${topBlock && !rows ? `<p class="step-note">${ICONS.error}<span>${escapeHtml(topBlock)}</span></p>` : ''}</div>${rows ? `<ol class="plan-list">${rows}</ol>` : '<div class="empty">No executable steps were produced. Current inventory may already satisfy the request.</div>'}`;
     renderExecutor();
   }
 

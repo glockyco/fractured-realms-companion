@@ -242,6 +242,8 @@ test('active execution phases preserve the plan, executor status, and Run state'
   const qty = panel.querySelector('#fr-plan-qty');
   const resolve = panel.querySelector('#fr-resolve-plan');
   const run = panel.querySelector('#fr-run');
+  app.state.selectedItemId = 'log';
+  app.renderItemDetail();
   const detailPlan = shell.panels.items.querySelector('#fr-item-detail').querySelector('#fr-detail-plan');
   const originalPlan = { ok: true, steps: [{ skillId: 'woodcutting', actionId: 'chop_log', actionName: 'Chop Harbor Tree', produceItemId: 'log', produceQty: 1 }] };
 

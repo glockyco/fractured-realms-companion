@@ -135,17 +135,102 @@ test('reports dependency cycles explicitly', () => {
   assert.equal(plan.ok, false); assert.equal(plan.steps.at(-1).blocked.reason, 'cycle');
 });
 
-test('uses stable skill/action tie-breakers and emits a tool warning', () => {
+test('treats Shop tools as permanent unlocks, not inventory items', () => {
+  const onlyToolSource = {
+    mining: [action('mining', 'mine-ore', 'Mine Ore', 'ore', {}, { toolReq: 'bronze_pick' })],
+  };
+  const toolData = {
+    ...data(onlyToolSource),
+    strings: { 'name.bronze_pick': 'Bronze Pickaxe' },
+  };
+  const locked = createPlan(toolData, snapshot({ bronze_pick: 1 }), { itemId: 'ore', qty: 1 });
+  assert.equal(locked.ok, false);
+  assert.equal(locked.blocked.reason, 'tool');
+  assert.equal(locked.blocked.toolId, 'bronze_pick');
+  assert.match(locked.message, /unlocked tool Bronze Pickaxe/);
+
+  const unlocked = createPlan(
+    toolData,
+    { inventory: {}, equipment: { bronze_pick: 1 }, skillXp: {} },
+    { itemId: 'ore', qty: 1 },
+  );
+  assert.equal(unlocked.ok, true);
+  assert.equal(unlocked.steps[0].actionId, 'mine-ore');
+});
+
+test('falls back to an unlocked source before reporting a tool blocker', () => {
   const actions = {
     zskill: [action('zskill', 'z-action', 'Z', 'ore')],
     askill: [action('askill', 'a-action', 'A', 'ore', {}, { toolReq: 'pickaxe' })],
   };
-  const plan = createPlan(data(actions), snapshot(), { itemId: 'ore', qty: 1 });
-  assert.equal(plan.ok, true);
-  assert.equal(plan.steps[0].skillId, 'askill');
-  assert.deepEqual(plan.steps[0].warning, { tool: 'pickaxe' });
+  const locked = createPlan(data(actions), snapshot(), { itemId: 'ore', qty: 1 });
+  assert.equal(locked.ok, true);
+  assert.equal(locked.steps[0].skillId, 'zskill');
+
+  const unlocked = createPlan(
+    data(actions),
+    { inventory: {}, equipment: { pickaxe: 1 }, skillXp: {} },
+    { itemId: 'ore', qty: 1 },
+  );
+  assert.equal(unlocked.ok, true);
+  assert.equal(unlocked.steps[0].skillId, 'askill');
 });
 
+test('preflights runtime level, pattern, Prayer, and map gates', () => {
+  const gated = {
+    glyphweaving: [action('glyphweaving', 'seal', 'Ancient Seal', 'seal', {}, {
+      gateLevelReq: 20,
+      patternReq: 'ancient_script',
+      prayerReq: 10,
+      mapReq: 'ancient_heartlands',
+    })],
+  };
+  const baseState = { inventory: {}, equipment: {}, skillXp: { glyphweaving: 2500, prayer: 2500 } };
+
+  const levelBlocked = createPlan(data(gated), { ...baseState, skillXp: { glyphweaving: 1500, prayer: 2500 } }, { itemId: 'seal', qty: 1 });
+  assert.equal(levelBlocked.reason, 'level');
+  assert.equal(levelBlocked.blocked.minLevel, 20);
+
+  const patternBlocked = createPlan(data(gated), baseState, { itemId: 'seal', qty: 1 });
+  assert.equal(patternBlocked.reason, 'pattern');
+
+  const prayerBlocked = createPlan(data(gated), { ...baseState, unlockedGlyphPatterns: ['ancient_script'], skillXp: { glyphweaving: 2500, prayer: 500 } }, { itemId: 'seal', qty: 1 });
+  assert.equal(prayerBlocked.reason, 'prayer');
+  assert.equal(prayerBlocked.blocked.minPrayerLevel, 10);
+
+  const mapBlocked = createPlan(data(gated), { ...baseState, unlockedGlyphPatterns: ['ancient_script'] }, { itemId: 'seal', qty: 1 });
+  assert.equal(mapBlocked.reason, 'map');
+
+  const ready = createPlan(data(gated), { ...baseState, unlockedGlyphPatterns: ['ancient_script'], chartedMaps: ['ancient_heartlands'] }, { itemId: 'seal', qty: 1 });
+  assert.equal(ready.ok, true);
+});
+
+test('requires learned recipe state instead of bypassing the cooking UI', () => {
+  const cooking = {
+    cooking: [action('cooking', 'meal_hunters_stew', "Hunter's Stew", 'hunters_stew', {}, { recipeScroll: 'recipe_hunters_stew' })],
+  };
+  const locked = createPlan(data(cooking), snapshot(), { itemId: 'hunters_stew', qty: 1 });
+  assert.equal(locked.reason, 'recipe');
+  assert.equal(locked.blocked.recipeScrollId, 'recipe_hunters_stew');
+
+  const learned = createPlan(data(cooking), { ...snapshot(), unlockedRecipes: ['meal_hunters_stew'] }, { itemId: 'hunters_stew', qty: 1 });
+  assert.equal(learned.ok, true);
+});
+
+test('blocks a new plan when the game bag has no free slot', () => {
+  const actions = { gather: [action('gather', 'herb', 'Gather Herb', 'herb')] };
+  const full = createPlan(data(actions), { inventory: { ore: 2 }, equipment: {}, skillXp: {}, bagSize: 1 }, { itemId: 'herb', qty: 1 });
+  assert.equal(full.reason, 'bag-full');
+
+  const equippedCopyDoesNotOccupySlot = createPlan(data(actions), {
+    inventory: { sword: 1 },
+    equipment: {},
+    skillXp: {},
+    bagSize: 1,
+    combatWeapon: 'sword',
+  }, { itemId: 'herb', qty: 1 });
+  assert.equal(equippedCopyDoesNotOccupySlot.ok, true);
+});
 test('executor reports a start refusal after the verification window', () => {
   const game = fakeGame();
   game.api.startAction = () => {}; // game refuses without changing active state

@@ -56,8 +56,12 @@ function itemName(items, itemId) {
   return items?.[itemId]?.label ?? itemId;
 }
 
+function requiredLevel(action) {
+  return Math.max(number(action?.levelReq, 0), number(action?.gateLevelReq, 0));
+}
+
 function sourceCompare(left, right) {
-  const level = number(left.action.levelReq, 0) - number(right.action.levelReq, 0);
+  const level = requiredLevel(left.action) - requiredLevel(right.action);
   if (level) return level;
   const interval = number(left.action.interval, Number.POSITIVE_INFINITY)
     - number(right.action.interval, Number.POSITIVE_INFINITY);
@@ -66,15 +70,28 @@ function sourceCompare(left, right) {
   return skill || String(left.action.id ?? '').localeCompare(String(right.action.id ?? ''));
 }
 
-function warningFor(action, inventory, equipment) {
+function requiredTool(action) {
   const required = action?.toolReq;
-  if (required == null || required === '') return undefined;
-  const tools = Array.isArray(required) ? required : [required];
-  for (const value of tools) {
-    const tool = typeof value === 'string' ? value : value?.item ?? value?.id;
-    if (tool && quantity(inventory, tool) + quantity(equipment, tool) <= 0) return { tool };
-  }
-  return undefined;
+  if (required == null || required === '') return null;
+  if (typeof required === 'string') return required;
+  return required?.item ?? required?.id ?? null;
+}
+
+function hasToolUnlock(action, equipment) {
+  const toolId = requiredTool(action);
+  return !toolId || quantity(equipment, toolId) > 0;
+}
+
+function isBagFull(snapshot) {
+  const inventory = snapshot?.inventory && typeof snapshot.inventory === 'object' ? snapshot.inventory : {};
+  const reserved = new Set();
+  if (snapshot?.combatWeapon && snapshot.combatWeapon !== 'fists') reserved.add(snapshot.combatWeapon);
+  const armour = snapshot?.equippedArmour && typeof snapshot.equippedArmour === 'object' ? snapshot.equippedArmour : {};
+  for (const [slot, itemId] of Object.entries(armour)) if (slot !== 'ammo' && itemId) reserved.add(itemId);
+  const occupied = Object.entries(inventory).reduce((count, [itemId, value]) => (
+    number(value, 0) - (reserved.has(itemId) ? 1 : 0) > 0 ? count + 1 : count
+  ), 0);
+  return occupied >= Math.max(0, number(snapshot?.bagSize, 48));
 }
 
 function blockedStep(itemId, items, reason, details = {}) {
@@ -85,7 +102,7 @@ function blockedStep(itemId, items, reason, details = {}) {
     count: 0,
     produceItemId: itemId,
     produceQty: 0,
-    levelReq: number(details.levelReq, 0),
+    levelReq: requiredLevel(details),
     interval: number(details.interval, 0),
     blocked: { reason, ...details },
   };
@@ -100,6 +117,9 @@ export function createPlan(datasets = {}, snapshot = {}, request = {}) {
   const inventory = snapshot?.inventory && typeof snapshot.inventory === 'object' ? snapshot.inventory : {};
   const equipment = snapshot?.equipment && typeof snapshot.equipment === 'object' ? snapshot.equipment : {};
   const skillXp = snapshot?.skillXp && typeof snapshot.skillXp === 'object' ? snapshot.skillXp : {};
+  const unlockedGlyphPatterns = new Set(Array.isArray(snapshot?.unlockedGlyphPatterns) ? snapshot.unlockedGlyphPatterns : []);
+  const unlockedRecipes = new Set(Array.isArray(snapshot?.unlockedRecipes) ? snapshot.unlockedRecipes : []);
+  const chartedMaps = new Set(Array.isArray(snapshot?.chartedMaps) ? snapshot.chartedMaps : []);
   const projected = Object.create(null);
   for (const [id, value] of Object.entries(inventory)) projected[id] = Math.max(0, number(value, 0));
 
@@ -141,11 +161,9 @@ export function createPlan(datasets = {}, snapshot = {}, request = {}) {
       count,
       produceItemId: itemId,
       produceQty,
-      levelReq: number(action.levelReq, 0),
+      levelReq: requiredLevel(action),
       interval: number(action.interval, 0),
     };
-    const warning = warningFor(action, inventory, equipment);
-    if (warning) step.warning = warning;
     indexes.set(key, steps.length);
     steps.push(step);
     return step;
@@ -160,7 +178,8 @@ export function createPlan(datasets = {}, snapshot = {}, request = {}) {
         skillId: source.skillId,
         actionId: action?.id ?? '',
         actionName: action?.name ?? action?.label ?? action?.id ?? itemName(datasets.items, itemId),
-        levelReq: action?.levelReq,
+        levelReq: requiredLevel(action),
+        gateLevelReq: action?.gateLevelReq,
         interval: action?.interval,
       } : {}),
     }));
@@ -176,12 +195,12 @@ export function createPlan(datasets = {}, snapshot = {}, request = {}) {
 
     const sources = deterministic.get(itemId) ?? [];
     const levels = sources.map((source) => ({ source, level: levelForXp(datasets.xp, skillXp[source.skillId]) }));
-    const eligible = levels.filter(({ source, level }) => level >= number(source.action.levelReq, 0));
-    if (!eligible.length) {
+    const levelEligible = levels.filter(({ source, level }) => level >= requiredLevel(source.action));
+    if (!levelEligible.length) {
       if (sources.length) {
         const source = [...sources].sort(sourceCompare)[0];
         return fail(itemId, 'level', {
-          minLevel: number(source.action.levelReq, 0),
+          minLevel: requiredLevel(source.action),
           actionName: source.action.name ?? source.action.id ?? itemName(datasets.items, itemId),
           currentLevel: levelForXp(datasets.xp, skillXp[source.skillId]),
           skillId: source.skillId,
@@ -199,6 +218,46 @@ export function createPlan(datasets = {}, snapshot = {}, request = {}) {
         return fail(itemId, 'rare-only', { chances }, rareSources[0]);
       }
       return fail(itemId, 'no-source');
+    }
+
+    let eligible = levelEligible.filter(({ source }) => hasToolUnlock(source.action, equipment));
+    if (!eligible.length) {
+      const source = levelEligible.map(({ source: candidate }) => candidate).sort(sourceCompare)[0];
+      const toolId = requiredTool(source.action);
+      return fail(itemId, 'tool', {
+        toolId,
+        toolName: datasets.strings?.[`name.${toolId}`] ?? itemName(datasets.items, toolId),
+      }, source);
+    }
+
+    const patternCandidates = eligible;
+    eligible = patternCandidates.filter(({ source }) => !source.action.patternReq || unlockedGlyphPatterns.has(source.action.patternReq));
+    if (!eligible.length) {
+      const source = patternCandidates.map(({ source: candidate }) => candidate).sort(sourceCompare)[0];
+      return fail(itemId, 'pattern', { patternId: source.action.patternReq }, source);
+    }
+
+    const prayerCandidates = eligible;
+    eligible = prayerCandidates.filter(({ source }) => (
+      !source.action.prayerReq || levelForXp(datasets.xp, skillXp.prayer) >= number(source.action.prayerReq, 0)
+    ));
+    if (!eligible.length) {
+      const source = prayerCandidates.map(({ source: candidate }) => candidate).sort(sourceCompare)[0];
+      return fail(itemId, 'prayer', { minPrayerLevel: number(source.action.prayerReq, 0) }, source);
+    }
+
+    const mapCandidates = eligible;
+    eligible = mapCandidates.filter(({ source }) => !source.action.mapReq || chartedMaps.has(source.action.mapReq));
+    if (!eligible.length) {
+      const source = mapCandidates.map(({ source: candidate }) => candidate).sort(sourceCompare)[0];
+      return fail(itemId, 'map', { mapId: source.action.mapReq }, source);
+    }
+
+    const recipeCandidates = eligible;
+    eligible = recipeCandidates.filter(({ source }) => !source.action.recipeScroll || unlockedRecipes.has(source.action.id));
+    if (!eligible.length) {
+      const source = recipeCandidates.map(({ source: candidate }) => candidate).sort(sourceCompare)[0];
+      return fail(itemId, 'recipe', { recipeScrollId: source.action.recipeScroll }, source);
     }
 
     const source = eligible.map(({ source }) => source).sort(sourceCompare)[0];
@@ -226,11 +285,19 @@ export function createPlan(datasets = {}, snapshot = {}, request = {}) {
   const itemId = request?.itemId;
   const requested = number(request?.qty, 0);
   if (!itemId || requested <= 0) return { ok: true, steps: [] };
-  if (ensure(itemId, requested).ok) return { ok: true, steps };
+  if (quantity(inventory, itemId) < requested && isBagFull(snapshot)) {
+    fail(itemId, 'bag-full', { bagSize: Math.max(0, number(snapshot?.bagSize, 48)) });
+  } else if (ensure(itemId, requested).ok) return { ok: true, steps };
   const message = failure?.reason === 'level'
     ? `Requires level ${failure.minLevel} (${failure.actionName})`
-    : failure?.reason === 'rare-only' ? 'Only available as a rare drop'
-      : failure?.reason === 'cycle' ? 'Dependency cycle detected'
-        : `No deterministic source for ${itemName(datasets.items, itemId)}`;
+    : failure?.reason === 'tool' ? `Requires unlocked tool ${failure.toolName}`
+      : failure?.reason === 'pattern' ? `Requires glyph pattern ${failure.patternId}`
+        : failure?.reason === 'prayer' ? `Requires Prayer level ${failure.minPrayerLevel}`
+          : failure?.reason === 'map' ? `Requires charted map ${failure.mapId}`
+            : failure?.reason === 'recipe' ? `Requires learned recipe ${failure.actionName}`
+              : failure?.reason === 'bag-full' ? 'Requires at least one free bag slot'
+                : failure?.reason === 'rare-only' ? 'Only available as a rare drop'
+                  : failure?.reason === 'cycle' ? 'Dependency cycle detected'
+                    : `No deterministic source for ${itemName(datasets.items, itemId)}`;
   return { ok: false, steps, blocked: failure, reason: failure?.reason, message };
 }
