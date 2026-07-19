@@ -70,6 +70,14 @@ fractured-companion launch
 fractured-companion launch --no-open
 ```
 
+Launching is idempotent: if a companion on the current revision is already running, `launch` reuses it instead of starting a second copy. When the game is running an outdated payload, cycle it onto a fresh build with:
+
+```sh
+fractured-companion relaunch
+```
+
+`relaunch` quits the running companion, refreshes the data pack and patch, and launches again. It accepts the same options as `launch`, including `--no-open`.
+
 Useful options must follow their command:
 
 ```sh
