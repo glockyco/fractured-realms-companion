@@ -511,6 +511,60 @@ test('preemption reverts when the executor is no longer running', async () => {
   assert.match(planResult.innerHTML, /advanced while editing/);
 });
 
+async function runningQueueWithCompletedPlan() {
+  const document = new FakeDocument();
+  const calls = [];
+  const liveApi = {
+    getState: () => ({ inventory: {}, equipment: {}, skillXp: { woodcutting: 100, crafting: 100 } }),
+    startAction(skillId, actionId) { calls.push(['start', skillId, actionId]); },
+    stopAction() { calls.push(['stop']); },
+    subscribe() { return () => {}; },
+  };
+  const result = await bootOverlay({ document, window: { __frCompanion: liveApi }, fetch: fetchFor(datasets()) });
+  const { app, shell } = result;
+  const form = shell.panels.plan.querySelector('#fr-plan-form');
+  const qty = shell.panels.plan.querySelector('#fr-plan-qty');
+  const run = shell.queueControls.querySelector('#fr-run');
+  const planResult = shell.panels.plan.querySelector('#fr-plan-result');
+  app.state.planItemId = 'log';
+  qty.value = '3';
+  form.dispatch('submit');
+  app.state.planItemId = 'plank';
+  qty.value = '1';
+  form.dispatch('submit');
+  run.dispatch('click');
+  // Report the executor as deep into plan 2 so plan 1 counts as completed.
+  const lastStep = app.state.executionSteps.length - 1;
+  app.state.executorStatus = { phase: 'running', currentStep: lastStep, stepTarget: 1, stepProduced: 0 };
+  app.renderPlan();
+  calls.length = 0;
+  return { app, planResult, calls };
+}
+
+test('deletes a completed plan mid-run and re-resolves from live inventory', async () => {
+  const { app, planResult, calls } = await runningQueueWithCompletedPlan();
+  assert.equal(app.state.planQueue.length, 2);
+
+  planResult.dispatch('click', { target: { closest: () => ({ disabled: false, dataset: { queueAction: 'remove', planId: 'plan-1' } }) } });
+
+  assert.equal(app.state.queueGoals.length, 1);
+  assert.equal(app.state.queueGoals[0].id, 'plan-2');
+  assert.equal(app.state.planQueue.length, 1);
+  assert.ok(calls.some(([kind]) => kind === 'stop'));
+  assert.ok(calls.some(([kind]) => kind === 'start'));
+  app.executor.stop();
+});
+
+test('moves a completed plan back into the pending section', async () => {
+  const { app, planResult, calls } = await runningQueueWithCompletedPlan();
+
+  planResult.dispatch('click', { target: { closest: () => ({ disabled: false, dataset: { queueAction: 'down', planId: 'plan-1' } }) } });
+
+  assert.deepEqual(app.state.queueGoals.map((goal) => goal.id), ['plan-2', 'plan-1']);
+  assert.ok(calls.some(([kind]) => kind === 'stop'));
+  app.executor.stop();
+});
+
 test('floating controls clamp to the viewport and suppress click after dragging', () => {
   // Partial off-screen is allowed: a negative left is kept (window tucked past the left edge)
   // while the top edge stays reachable and a minimum sliver remains on screen.

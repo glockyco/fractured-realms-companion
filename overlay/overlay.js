@@ -1596,10 +1596,10 @@ function createApplication(shell, datasets, api) {
         return `<li class="queue-step" data-state="${stepState}" data-step-global="${stepIndex}"><span class="queue-step-marker">${marker}</span><span>${escapeHtml(step.actionName || humanizeId(step.actionId))}${chanceBadge} <span class="data">${quantity}</span></span><span class="queue-step-time data">${escapeHtml(time)}</span>${activeProgress}</li>`;
       }).join('');
       const locked = isExecutionLocked(status.phase);
-      const mutable = !locked || planIndex > currentPlanIndex;
+      const mutable = !locked || planIndex !== currentPlanIndex;
       const label = labelFor(items, entry.itemId);
       const upIsPromote = locked && planIndex - 1 === currentPlanIndex;
-      const upDisabled = !mutable || planIndex === 0 || (locked && planIndex - 1 < currentPlanIndex);
+      const upDisabled = !mutable || planIndex === 0;
       const upLabel = upIsPromote ? 'Run now — interrupts the current plan' : `Move ${label} up`;
       const upTitle = upIsPromote ? 'Run now — interrupts the current plan' : 'Move up';
       const downDisabled = !mutable || planIndex === state.planQueue.length - 1;
@@ -1719,50 +1719,81 @@ function createApplication(shell, datasets, api) {
     return true;
   };
 
+  const rebuildFromLive = () => {
+    const resolved = resolvePlanQueue(datasets, api.getState(), state.queueGoals);
+    const blocked = resolved.find((entry) => !entry.plan?.ok);
+    if (blocked) {
+      state.planNotice = { itemId: blocked.itemId, qty: blocked.qty, plan: blocked.plan };
+      renderPlan();
+      return false;
+    }
+    state.planQueue = resolved;
+    state.executionSteps = flattenQueue();
+    state.planNotice = null;
+    if (!state.executionSteps.length) {
+      executor.stop();
+      persistQueue();
+      renderPlan();
+      return true;
+    }
+    if (!executor.jump(state.executionSteps, 0)) {
+      state.planNotice = { itemId: '', qty: 0, plan: { ok: false, steps: [], reason: 'The queue advanced while editing. Try again.' } };
+      renderPlan();
+      return false;
+    }
+    persistQueue();
+    renderPlan();
+    return true;
+  };
+
   planResult.addEventListener('click', (event) => {
     const control = event.target.closest?.('[data-queue-action][data-plan-id]');
     if (!control || control.disabled) return;
     const index = state.queueGoals.findIndex((goal) => goal.id === control.dataset.planId);
     if (index < 0) return;
-    const locked = isExecutionLocked(state.executorStatus?.phase);
+    const view = queueView();
+    const locked = view.locked;
     const action = control.dataset.queueAction;
-    if (action === 'up') {
-      const view = queueView();
-      if (view.locked && index - 1 === view.currentPlanIndex) {
-        promotePlan(control.dataset.planId, view);
-        return;
-      }
+    // First pending plan promoted over the running one keeps the targeted, mostly
+    // non-disruptive preemption path.
+    if (action === 'up' && locked && index - 1 === view.currentPlanIndex) {
+      promotePlan(control.dataset.planId, view);
+      return;
     }
+    const previousGoals = [...state.queueGoals];
+    // Editing anything at or before the running plan re-resolves the whole queue
+    // from live inventory; pure pending edits stay on the non-disruptive splice.
+    let touchesFrozen;
     if (action === 'edit') {
       const goal = state.queueGoals[index];
+      touchesFrozen = locked && index <= view.currentPlanIndex;
       selectPlanTarget(goal.itemId);
       planQty.value = String(goal.qty);
       state.queueGoals.splice(index, 1);
-      persistQueue();
-      state.planNotice = null;
-      if (locked) rebuildPending();
-      else {
-        rebuildQueue();
-        state.executorStatus = { phase: 'idle', currentStep: null, message: state.planQueue.length ? 'Queue updated.' : 'Queue cleared.' };
-        renderPlan();
-      }
-      planItem.focus?.();
-      return;
-    }
-    if (action === 'remove') state.queueGoals.splice(index, 1);
-    else {
+    } else if (action === 'remove') {
+      touchesFrozen = locked && index <= view.currentPlanIndex;
+      state.queueGoals.splice(index, 1);
+    } else {
       const target = action === 'up' ? index - 1 : index + 1;
       if (target < 0 || target >= state.queueGoals.length) return;
+      touchesFrozen = locked && Math.min(index, target) <= view.currentPlanIndex;
       [state.queueGoals[index], state.queueGoals[target]] = [state.queueGoals[target], state.queueGoals[index]];
     }
     persistQueue();
     state.planNotice = null;
-    if (locked) rebuildPending();
-    else {
+    if (locked) {
+      const rebuilt = touchesFrozen ? rebuildFromLive() : rebuildPending();
+      if (!rebuilt && touchesFrozen) {
+        state.queueGoals = previousGoals;
+        persistQueue();
+        renderPlan();
+      }
+    } else {
       rebuildQueue();
       state.executorStatus = { phase: 'idle', currentStep: null, message: state.planQueue.length ? 'Queue updated.' : 'Queue cleared.' };
       renderPlan();
     }
+    if (action === 'edit') planItem.focus?.();
   });
 
   runButton.addEventListener('click', () => {
