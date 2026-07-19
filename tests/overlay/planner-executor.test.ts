@@ -160,6 +160,8 @@ test('reports level and no-source blockers while planning rare drops', () => {
       { actionId: 'trap_talon', count: 10, rare: true, progressItemId: 'feathers' },
     ],
   );
+  assert.deepEqual(inputRare.steps[1].inputs, { seed: 1 });
+  assert.equal(rare.steps[0].inputs, undefined);
   const zeroChance = createPlan(data({
     trapping: [action('trapping', 'trap_talon', 'Trap Talon', 'feathers', {}, { rareOutputs: [{ item: 'talon', qty: 1, chance: 0 }] })],
   }), snapshot(), { itemId: 'talon', qty: 1 });

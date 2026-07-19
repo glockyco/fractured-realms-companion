@@ -368,6 +368,7 @@ export function createPlan(datasets = {}, snapshot = {}, request = {}) {
         progressItemId: Object.keys(source.action.outputs ?? {})[0] ?? null,
         levelReq: requiredLevel(source.action),
         interval: number(source.action.interval, 0),
+        ...(Object.keys(source.action.inputs ?? {}).length ? { inputs: { ...source.action.inputs } } : {}),
       });
       projected[itemId] = quantity(projected, itemId) + need;
       return { ok: true };
