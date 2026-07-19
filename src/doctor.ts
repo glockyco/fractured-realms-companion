@@ -14,6 +14,7 @@ const HEALTH_TIMEOUT_MS = 1500;
 const DATA_FILES = ['items.json', 'actions.json', 'skills.json', 'xp.json', 'buildings.json', 'digsites.json', 'strings-en.json'] as const;
 const PACK_ROOT = ['pack.json', 'overlay.js', 'planner.js', 'executor.js', 'data'] as const;
 const METADATA_KEYS = ['metadata_version', 'profile_id', 'profile_revision', 'marker', 'steam_build_id', 'timestamp', 'original', 'patched', 'backup'] as const;
+const METADATA_KEYS_V3 = [...METADATA_KEYS, 'payload_revision'] as const;
 const RECORD_KEYS = ['sha256', 'size'] as const;
 const BACKUP_KEYS = ['path', 'sha256', 'size'] as const;
 const SHA256 = /^[0-9a-f]{64}$/iu;
@@ -180,7 +181,10 @@ function metadataOriginal(value: AnyRecord | undefined): { sha256: string; size:
 }
 
 function metadataIsOwn(value: AnyRecord, buildId: string, live: Fingerprint, state: string, fs: Required<DoctorFileSystem>, fingerprint: (path: string, marker?: string | Uint8Array) => Fingerprint): string | undefined {
-  if (!exactKeys(value, METADATA_KEYS) || value.metadata_version !== 2 || value.profile_id !== 'fractured-realms' || value.profile_revision !== MARKER || value.marker !== SERVICE || value.steam_build_id !== buildId) return 'state metadata schema, marker, or Steam build does not match';
+  const validVersion = (value.metadata_version === 2 && exactKeys(value, METADATA_KEYS))
+    || (value.metadata_version === 3 && exactKeys(value, METADATA_KEYS_V3)
+      && typeof value.payload_revision === 'string' && SHA256.test(value.payload_revision));
+  if (!validVersion || value.profile_id !== 'fractured-realms' || value.profile_revision !== MARKER || value.marker !== SERVICE || value.steam_build_id !== buildId) return 'state metadata schema, marker, or Steam build does not match';
   if (typeof value.timestamp !== 'string' || !Number.isFinite(Date.parse(value.timestamp))) return 'state metadata timestamp is invalid';
   if (!validRecord(value.original) || !validRecord(value.patched) || !record(value.backup) || !exactKeys(value.backup, BACKUP_KEYS) || !validRecord({ sha256: value.backup.sha256, size: value.backup.size })) return 'state metadata archive records are invalid';
   const original = value.original;
@@ -208,7 +212,10 @@ function expectedPristineRecord(metadata: AnyRecord | undefined, buildId: string
 }
 
 function validRetainedMetadata(value: AnyRecord | undefined, buildId: string, state: string, fs: Required<DoctorFileSystem>, fingerprint: (path: string, marker?: string | Uint8Array) => Fingerprint): boolean {
-  if (!value || !exactKeys(value, METADATA_KEYS) || value.metadata_version !== 2 || value.profile_id !== 'fractured-realms' || value.profile_revision !== MARKER || value.marker !== SERVICE || value.steam_build_id !== buildId) return false;
+  const validVersion = value !== undefined && ((value.metadata_version === 2 && exactKeys(value, METADATA_KEYS))
+    || (value.metadata_version === 3 && exactKeys(value, METADATA_KEYS_V3)
+      && typeof value.payload_revision === 'string' && SHA256.test(value.payload_revision)));
+  if (!validVersion || value === undefined || value.profile_id !== 'fractured-realms' || value.profile_revision !== MARKER || value.marker !== SERVICE || value.steam_build_id !== buildId) return false;
   if (typeof value.timestamp !== 'string' || !Number.isFinite(Date.parse(value.timestamp)) || !validRecord(value.original) || !validRecord(value.patched) || !record(value.backup) || !exactKeys(value.backup, BACKUP_KEYS) || !validRecord({ sha256: value.backup.sha256, size: value.backup.size })) return false;
   const original = value.original;
   const backup = value.backup;

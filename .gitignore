@@ -1,5 +1,6 @@
 node_modules/
 /dist/
 src/generated/
+runtime/fractured-companion-host-*/
 .DS_Store
 *.log

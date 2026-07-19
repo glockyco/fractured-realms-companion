@@ -46,7 +46,7 @@ function record(path: string, marker?: string): { sha256: string; size: number }
   return { sha256: fp.sha256, size: fp.size };
 }
 
-function ownMetadata(f: Fixture): void {
+function ownMetadata(f: Fixture, version: 2 | 3 = 2): void {
   const originalPath = join(f.root, 'original.asar');
   writeFileSync(originalPath, 'pristine archive');
   const original = record(originalPath);
@@ -55,7 +55,8 @@ function ownMetadata(f: Fixture): void {
   const backup = join(f.state, 'backups', `app.asar-${original.sha256}.original`);
   writeFileSync(backup, readFileSync(originalPath));
   mkdirSync(f.state, { recursive: true });
-  writeFileSync(join(f.state, 'metadata.json'), JSON.stringify({ metadata_version: 2, profile_id: 'fractured-realms', profile_revision: MARKER, marker: MARKER, steam_build_id: 'build-1', timestamp: '2026-01-01T00:00:00.000Z', original, patched, backup: { path: `backups/app.asar-${original.sha256}.original`, ...original } }));
+  const metadata = { metadata_version: version, profile_id: 'fractured-realms', profile_revision: MARKER, marker: MARKER, steam_build_id: 'build-1', timestamp: '2026-01-01T00:00:00.000Z', original, patched, backup: { path: `backups/app.asar-${original.sha256}.original`, ...original }, ...(version === 3 ? { payload_revision: 'a'.repeat(64) } : {}) };
+  writeFileSync(join(f.state, 'metadata.json'), JSON.stringify(metadata));
 }
 
 function archiveRow(result: DoctorResult): DoctorResult['rows'][number] | undefined {
@@ -91,6 +92,15 @@ test('verified own patch passes and stale or missing pack fails', async () => {
   const missing = fixture(`patched ${MARKER}`);
   ownMetadata(missing);
   assert.equal((await runDoctor(base(missing))).rows.find((value) => value.check === 'pack')?.status, 'FAIL');
+});
+
+
+test('verified own v3 metadata passes', async () => {
+  const f = fixture(`patched ${MARKER}`);
+  ownMetadata(f, 3);
+  pack(f.state);
+  const result = await runDoctor(base(f));
+  assert.equal(archiveRow(result)?.status, 'PASS');
 });
 
 test('foreign marker and unknown archive fail closed', async () => {

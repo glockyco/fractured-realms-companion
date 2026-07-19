@@ -12,13 +12,14 @@ import {
 import { randomUUID } from 'node:crypto';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { extractDatasets, type ExtractedDatasets } from './extract/datasets.ts';
-import { EXECUTOR_SOURCE, OVERLAY_SOURCE, PLANNER_SOURCE } from './generated/embedded.ts';
+import { ELECTRON_HOST_SOURCE, EXECUTOR_SOURCE, FRACTURED_ADAPTER_SOURCE, OVERLAY_SOURCE, PLANNER_SOURCE } from './generated/embedded.ts';
 import { readSteamManifest, type SteamManifest } from './lib/acf.ts';
 import { extractFile, listFiles } from './lib/asar.ts';
 import { OperationalError } from './lib/errors.ts';
 import { createFracturedApply } from './patch/fracturedAdapter.ts';
 import { FOREIGN_MARKER_PREFIX, MARKER, streamFingerprint, type Fingerprint } from './patch/fingerprint.ts';
 import { PatchManager, type PatchRequest, type PatchResult } from './patch/manager.ts';
+import { computePayloadRevision } from './patch/revision.ts';
 import { discoverInstall, type DiscoverInstallOptions, type SteamInstall } from './platform/steam.ts';
 import { stateDir } from './platform/state.ts';
 
@@ -31,7 +32,7 @@ const DATA_FILES = [
   ['digsites', 'digsites.json'],
   ['stringsEn', 'strings-en.json'],
 ] as const;
-const METADATA_KEYS = new Set([
+const METADATA_KEYS_V2 = new Set([
   'metadata_version',
   'profile_id',
   'profile_revision',
@@ -42,6 +43,7 @@ const METADATA_KEYS = new Set([
   'patched',
   'backup',
 ]);
+const METADATA_KEYS_V3 = new Set([...METADATA_KEYS_V2, 'payload_revision']);
 const RECORD_KEYS = new Set(['sha256', 'size']);
 const BACKUP_KEYS = new Set(['path', 'sha256', 'size']);
 const SHA256 = /^[0-9a-f]{64}$/i;
@@ -174,8 +176,12 @@ function metadataForBackup(stateDirectory: string, buildId: string, live: Finger
   const metadataPath = join(stateDirectory, 'metadata.json');
   let parsed: unknown;
   try { parsed = JSON.parse(readFileSync(metadataPath, 'utf8')); } catch (error) { fail(`state metadata could not be read: ${metadataPath}`, error); }
-  if (!isRecord(parsed) || !exactKeys(parsed, METADATA_KEYS)) fail(`state metadata has unexpected keys: ${metadataPath}`);
-  if (parsed.metadata_version !== 2 || parsed.profile_id !== 'fractured-realms' || parsed.profile_revision !== MARKER || parsed.marker !== MARKER) {
+  if (!isRecord(parsed)) fail(`state metadata has unexpected keys: ${metadataPath}`);
+  const metadataVersionValid = (parsed.metadata_version === 2 && exactKeys(parsed, METADATA_KEYS_V2))
+    || (parsed.metadata_version === 3 && exactKeys(parsed, METADATA_KEYS_V3)
+      && typeof parsed.payload_revision === 'string' && SHA256.test(parsed.payload_revision));
+  if (!metadataVersionValid) fail(`state metadata has unexpected keys: ${metadataPath}`);
+  if (parsed.profile_id !== 'fractured-realms' || parsed.profile_revision !== MARKER || parsed.marker !== MARKER) {
     fail(`state metadata does not describe the ${MARKER} patch profile`);
   }
   if (parsed.steam_build_id !== buildId) fail('state metadata Steam build does not match installed build');
@@ -330,6 +336,7 @@ export function refreshCompanion(options: RefreshOptions = {}): RefreshResult {
   if (typeof overlay !== 'string' || overlay.length === 0) fail('embedded companion overlay source is unavailable');
   if (typeof planner !== 'string' || planner.length === 0) fail('embedded companion planner source is unavailable');
   if (typeof executor !== 'string' || executor.length === 0) fail('embedded companion executor source is unavailable');
+  const payloadRevision = computePayloadRevision([ELECTRON_HOST_SOURCE, FRACTURED_ADAPTER_SOURCE, overlay, planner, executor]);
   const pack = publishPack(state, manifest.buildid, datasets, generatedAt, overlay, planner, executor, options.fileSystem ?? options.dependencies?.fileSystem ?? {});
 
   const expectedOriginal = { sha256: original.sha256.toLowerCase(), size: original.size };
@@ -342,7 +349,8 @@ export function refreshCompanion(options: RefreshOptions = {}): RefreshResult {
     stateDirectory: state,
     expectedBuildId: manifest.buildid,
     expectedOriginal,
-    apply: applyFactory({ buildId: manifest.buildid, packDirectory: pack }),
+    payloadRevision,
+    apply: applyFactory({ buildId: manifest.buildid, packDirectory: pack, payloadRevision }),
   });
   return { install, stateDirectory: state, packDirectory: pack, buildId: manifest.buildid, original: expectedOriginal, changed: patch.changed };
 }

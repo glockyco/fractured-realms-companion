@@ -7,7 +7,8 @@ import { readSteamManifest } from '../lib/acf.ts';
 import { OperationalError } from '../lib/errors.ts';
 import { FOREIGN_MARKER_PREFIX, MARKER, streamFingerprint, type Fingerprint } from './fingerprint.ts';
 
-const METADATA_KEYS = new Set(['metadata_version', 'profile_id', 'profile_revision', 'marker', 'steam_build_id', 'timestamp', 'original', 'patched', 'backup']);
+const METADATA_KEYS_V2 = new Set(['metadata_version', 'profile_id', 'profile_revision', 'marker', 'steam_build_id', 'timestamp', 'original', 'patched', 'backup']);
+const METADATA_KEYS_V3 = new Set([...METADATA_KEYS_V2, 'payload_revision']);
 const RECORD_KEYS = new Set(['sha256', 'size']);
 const BACKUP_KEYS = new Set(['path', 'sha256', 'size']);
 const SHA256 = /^[0-9a-fA-F]{64}$/;
@@ -18,6 +19,7 @@ export interface PatchRequest {
   stateDirectory: string;
   expectedBuildId: string;
   expectedOriginal: { sha256: string; size: number };
+  payloadRevision: string;
   apply(extractedRoot: string): void;
 }
 export interface RestoreRequest {
@@ -105,11 +107,13 @@ export class PatchManager {
     if (manifest.buildid !== request.expectedBuildId) throw opError(`Steam build ID ${manifest.buildid} does not match expected ${request.expectedBuildId}`);
     return manifest.buildid;
   }
-  private readMetadata(request: Request): { metadata: Record<string, unknown>; original: { sha256: string; size: number }; patched: { sha256: string; size: number }; backupPath: string } {
+  private readMetadata(request: Request): { metadata: Record<string, unknown>; original: { sha256: string; size: number }; patched: { sha256: string; size: number }; backupPath: string; payloadRevision: string | null } {
     const path = this.metadataPath(request); let metadata: unknown;
     try { metadata = JSON.parse(readFileSync(path, 'utf8')); } catch (error) { throw opError(`state metadata could not be read: ${path}`, error); }
-    if (!keySet(metadata) || !sameKeys(metadata, METADATA_KEYS)) throw opError(`state metadata has unexpected keys: ${path}`);
-    if (metadata.metadata_version !== 2) throw opError(`unsupported state metadata version: ${path}`);
+    if (!keySet(metadata)) throw opError(`state metadata has unexpected keys: ${path}`);
+    const legacy = metadata.metadata_version === 2 && sameKeys(metadata, METADATA_KEYS_V2);
+    const current = metadata.metadata_version === 3 && sameKeys(metadata, METADATA_KEYS_V3);
+    if (!legacy && !current) throw opError(`unsupported or malformed state metadata version: ${path}`);
     if (metadata.profile_id !== 'fractured-realms') throw opError('state metadata profile does not match this profile');
     if (metadata.profile_revision !== MARKER || metadata.marker !== MARKER) throw opError('state metadata marker does not match this patch profile');
     if (typeof metadata.steam_build_id !== 'string' || metadata.steam_build_id.length === 0) throw opError('state metadata has no valid Steam build ID');
@@ -120,7 +124,10 @@ export class PatchManager {
     if (typeof backupPath !== 'string' || backupPath !== `backups/app.asar-${original.sha256}.original`) throw opError('state metadata points at an unexpected original backup');
     const backup = validateRecord({ sha256: metadata.backup.sha256, size: metadata.backup.size }, 'backup');
     if (backup.sha256 !== original.sha256 || backup.size !== original.size) throw opError('state metadata backup does not match the original archive');
-    return { metadata, original, patched, backupPath };
+    const payloadRevision = current && typeof metadata.payload_revision === 'string' && SHA256.test(metadata.payload_revision)
+      ? metadata.payload_revision.toLowerCase()
+      : current ? (() => { throw opError('state metadata has an invalid payload revision'); })() : null;
+    return { metadata, original, patched, backupPath, payloadRevision };
   }
   private verifyBackup(path: string, expected: { sha256: string; size: number }): void {
     try { const stat = lstatSync(path); if (stat.isSymbolicLink() || !stat.isFile()) throw new Error('not a regular file'); } catch (error) { throw opError(`immutable original backup not found: ${path}`, error); }
@@ -135,8 +142,9 @@ export class PatchManager {
     } catch (error) { if (created) { try { unlinkSync(path); } catch { /* best effort */ } } throw error; }
   }
   private makeMetadata(request: PatchRequest, original: { sha256: string; size: number }, patched: { sha256: string; size: number }): string {
-    const metadata = { metadata_version: 2, profile_id: 'fractured-realms', profile_revision: MARKER, marker: MARKER, steam_build_id: request.expectedBuildId, timestamp: utcTimestamp(this.clock), original, patched, backup: { path: `backups/app.asar-${original.sha256}.original`, sha256: original.sha256, size: original.size } };
-    if (!sameKeys(metadata, METADATA_KEYS)) throw opError('patch metadata payload is incomplete');
+    if (!SHA256.test(request.payloadRevision)) throw opError('payload revision has an invalid hash');
+    const metadata = { metadata_version: 3, profile_id: 'fractured-realms', profile_revision: MARKER, marker: MARKER, payload_revision: request.payloadRevision.toLowerCase(), steam_build_id: request.expectedBuildId, timestamp: utcTimestamp(this.clock), original, patched, backup: { path: `backups/app.asar-${original.sha256}.original`, sha256: original.sha256, size: original.size } };
+    if (!sameKeys(metadata, METADATA_KEYS_V3)) throw opError('patch metadata payload is incomplete');
     JSON.parse(JSON.stringify(metadata)); return `${JSON.stringify(metadata, null, 2)}\n`;
   }
   private rollback(archive: string, candidate: string, packed: Fingerprint, original: { sha256: string; size: number }, cause: unknown, context: string): never {
@@ -149,8 +157,78 @@ export class PatchManager {
     catch (error) { throw opError(`${context}; rollback to the verified original failed: ${error instanceof Error ? error.message : String(error)}`, cause); }
     throw opError(`${context}; verified original restored: ${cause instanceof Error ? cause.message : String(cause)}`, cause);
   }
+  private rollbackPatched(archive: string, candidate: string, packed: Fingerprint, previous: { sha256: string; size: number }, cause: unknown, context: string, metadataPath: string, previousMetadata: string, metadataCommitted: boolean): never {
+    let live: Fingerprint;
+    try { live = this.fingerprint(archive); } catch { throw opError(`${context}; live archive is missing or unreadable, so rollback was not attempted: ${archive}`, cause); }
+    if (!sameFingerprint(live, previous, true)) {
+      if (sameFingerprint(live, packed, true)) {
+        if (!sameFingerprint(this.fingerprint(candidate), previous, true)) throw opError(`${context}; previous patch rollback candidate verification failed`, cause);
+        try {
+          this.operations.atomicCopy(candidate, archive);
+          if (!sameFingerprint(this.fingerprint(archive), previous, true)) throw new Error('previous patch rollback verification failed');
+        } catch (error) { throw opError(`${context}; rollback to the verified previous patch failed: ${error instanceof Error ? error.message : String(error)}`, cause); }
+      } else {
+        throw opError(`${context}; archive changed concurrently, so rollback was not attempted: ${archive}`, cause);
+      }
+    }
+    if (metadataCommitted) {
+      try { this.operations.atomicWriteText(metadataPath, previousMetadata, 0o600); }
+      catch (error) { throw opError(`${context}; previous patch was restored but metadata rollback failed: ${error instanceof Error ? error.message : String(error)}`, cause); }
+    }
+    throw opError(`${context}; verified previous patch restored: ${cause instanceof Error ? cause.message : String(cause)}`, cause);
+  }
+
+  private repatch(request: PatchRequest, state: ReturnType<PatchManager['readMetadata']>, live: Fingerprint): PatchResult {
+    const metadataPath = this.metadataPath(request);
+    const previousMetadata = readFileSync(metadataPath, 'utf8');
+    const backupPath = join(request.stateDirectory, state.backupPath);
+    const workspace = mkdtempSync(join(tmpdir(), 'fractured-realms-repatch-'));
+    const extracted = join(workspace, 'app');
+    const packedPath = join(workspace, 'app.asar');
+    const rollbackCandidate = join(workspace, 'previous.asar');
+    try {
+      this.verifyBackup(backupPath, state.original);
+      this.operations.extractAll(backupPath, extracted);
+      request.apply(extracted);
+      this.operations.packDirInline(extracted, packedPath);
+      const packed = this.fingerprint(packedPath);
+      if (!packed.markerFound) throw opError('repacked archive is missing the patch marker; refusing replacement');
+      const metadataText = this.makeMetadata(request, state.original, { sha256: packed.sha256, size: packed.size });
+      this.callHook('before_replace', request.archivePath);
+      this.manifest(request);
+      if (!sameFingerprint(this.fingerprint(request.archivePath), live, true)) throw opError('installed patched archive changed while preparing the replacement; refusing replacement');
+      this.operations.atomicCopy(request.archivePath, rollbackCandidate);
+      if (!sameFingerprint(this.fingerprint(rollbackCandidate), state.patched, true)) throw opError('previous patch rollback candidate verification failed');
+      try {
+        this.operations.atomicCopy(packedPath, request.archivePath);
+        if (!sameFingerprint(this.fingerprint(request.archivePath), packed, true)) throw opError('atomically installed replacement archive failed verification; state metadata was not written');
+      } catch (error) {
+        this.rollbackPatched(request.archivePath, rollbackCandidate, packed, state.patched, error, 'archive replacement failed after repatch transition', metadataPath, previousMetadata, false);
+      }
+      try {
+        this.callHook('after_replace', request.archivePath);
+        this.verifyBackup(backupPath, state.original);
+        this.callHook('before_metadata_commit', metadataPath);
+        this.operations.atomicWriteText(metadataPath, metadataText, 0o600);
+      } catch (error) {
+        this.rollbackPatched(request.archivePath, rollbackCandidate, packed, state.patched, error, 'metadata commit failed after repatch', metadataPath, previousMetadata, false);
+      }
+      try {
+        this.callHook('after_metadata_commit', metadataPath);
+        this.verifyBackup(backupPath, state.original);
+        this.manifest(request);
+        if (!sameFingerprint(this.fingerprint(request.archivePath), packed, true)) throw opError('installed replacement archive changed after patch commit');
+      } catch (error) {
+        this.rollbackPatched(request.archivePath, rollbackCandidate, packed, state.patched, error, 'repatch final verification failed', metadataPath, previousMetadata, true);
+      }
+      return { changed: true, archivePath: request.archivePath, metadataPath };
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  }
+
   patch(request: PatchRequest): PatchResult {
-    const original = expectedOriginal(request); this.manifest(request); const metadataPath = this.metadataPath(request); let live = this.fingerprint(request.archivePath);
+    const original = expectedOriginal(request); if (!SHA256.test(request.payloadRevision)) throw opError('payload revision has an invalid hash'); this.manifest(request); const metadataPath = this.metadataPath(request); let live = this.fingerprint(request.archivePath);
     if (this.fingerprint(request.archivePath, FOREIGN_MARKER_PREFIX).markerFound) throw opError("archive is patched by crossover-electron-bridge; run 'crossover-electron-bridge restore fractured-realms' first");
     if (live.markerFound) {
       try {
@@ -160,7 +238,9 @@ export class PatchManager {
         this.verifyBackup(join(request.stateDirectory, state.backupPath), state.original); this.manifest(request); live = this.fingerprint(request.archivePath);
         if (!sameFingerprint(live, state.patched, true)) throw opError('installed patched archive: fingerprint verification failed'); this.verifyBackup(join(request.stateDirectory, state.backupPath), state.original);
       } catch (error) { throw opError(`installed archive is marked patched but its recovery state cannot be verified: ${error instanceof Error ? error.message : String(error)}`, error); }
-      return { changed: false, archivePath: request.archivePath, metadataPath };
+      const state = this.readMetadata(request);
+      if (state.payloadRevision === request.payloadRevision.toLowerCase()) return { changed: false, archivePath: request.archivePath, metadataPath };
+      return this.repatch(request, state, live);
     }
     if (!sameFingerprint(live, original, false)) throw opError(`Unsupported Steam build ${request.expectedBuildId} for fractured-realms`);
     const workspace = mkdtempSync(join(tmpdir(), 'fractured-realms-patch-')); const extracted = join(workspace, 'app'); const packedPath = join(workspace, 'app.asar'); const rollbackCandidate = join(workspace, 'original.asar');

@@ -72,11 +72,14 @@ test('noPatch builds a stable pack and leaves the pristine ASAR untouched', () =
 test('pristine refresh invokes the patch manager with the expected original', () => {
   const f = fixture();
   let request: any;
-  const result = refreshCompanion({ steamRoot: f.root, platform: 'linux', stateDirectory: f.state, dependencies: { ...deps(), patchManager: { patch(value: any) { request = value; return { changed: true, archivePath: f.archive, metadataPath: join(f.state, 'metadata.json') }; } }, createApply: () => () => undefined } });
+  let applyOptions: any;
+  const result = refreshCompanion({ steamRoot: f.root, platform: 'linux', stateDirectory: f.state, dependencies: { ...deps(), patchManager: { patch(value: any) { request = value; return { changed: true, archivePath: f.archive, metadataPath: join(f.state, 'metadata.json') }; } }, createApply: (options: any) => { applyOptions = options; return () => undefined; } } });
   assert.equal(result.changed, true);
   assert.equal(request.expectedBuildId, '24185239');
   assert.deepEqual(request.expectedOriginal, result.original);
   assert.equal(request.archivePath, f.archive);
+  assert.match(request.payloadRevision, /^[0-9a-f]{64}$/u);
+  assert.equal(applyOptions.payloadRevision, request.payloadRevision);
 });
 
 test('own-marker refresh reads only a verified immutable backup as source', () => {
