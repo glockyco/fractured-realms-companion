@@ -12,6 +12,7 @@ import {
   estimatePlanDuration,
   fitWithinViewport,
   formatDuration,
+  formatFinishTime,
   isExecutionLocked,
   projectPlanState,
   projectSteps,
@@ -69,7 +70,21 @@ class FakeElement {
   appendChild(child) { this.append(child); return child; }
   attachShadow() { this.shadowRoot = new FakeElement('shadow-root', this.ownerDocument); return this.shadowRoot; }
   addEventListener(type, listener) { (this.listeners.get(type) || this.listeners.set(type, []).get(type)).push(listener); }
-  querySelector(selector) { return this.synthetic?.get(selector) || null; }
+  querySelector(selector) {
+    const synthetic = this.synthetic?.get(selector);
+    if (synthetic) return synthetic;
+    if (!String(selector).startsWith('#')) return null;
+    const id = String(selector).slice(1);
+    const visit = (node) => {
+      for (const child of node.children || []) {
+        if (child.id === id) return child;
+        const nested = visit(child);
+        if (nested) return nested;
+      }
+      return null;
+    };
+    return visit(this);
+  }
   matches() { return false; }
   contains(element) { return element === this || this.children.includes(element) || [...(this.synthetic?.values() || [])].includes(element); }
   getBoundingClientRect() { return { left: 10, right: 310, top: 10, bottom: 46, width: 300, height: 36 }; }
@@ -91,6 +106,16 @@ class FakeElement {
 class FakeDocument {
   constructor() {
     this.byId = new Map();
+    const values = new Map();
+    this.defaultView = {
+      localStorage: {
+        getItem: (key) => values.has(key) ? values.get(key) : null,
+        setItem: (key, value) => values.set(key, String(value)),
+      },
+      innerWidth: 1024,
+      innerHeight: 768,
+      addEventListener() {},
+    };
     this.body = new FakeElement('body', this);
     this.activeElement = this.body;
   }
@@ -227,6 +252,42 @@ test('planner target combobox supports keyboard selection and submission', async
   assert.deepEqual(result.app.state.currentPlan.steps.map((step) => step.actionId), ['chop_log', 'make_plank']);
   assert.deepEqual(result.app.state.recentPlanItemIds, ['plank']);
 });
+test('restores and persists queued goals and formats finish times', async () => {
+  const document = new FakeDocument();
+  document.defaultView.localStorage.setItem('fractured-realms-companion.queue.v1', JSON.stringify({
+    goals: [
+      { id: 'plan-4', itemId: 'log', qty: 2 },
+      { id: 'plan-5', itemId: 'plank', qty: 1 },
+    ],
+    nextPlanId: 5,
+  }));
+  const result = await bootOverlay({ document, window: { __frCompanion: api() }, fetch: fetchFor(datasets()) });
+  assert.equal(result.app.state.planQueue.length, 2);
+  assert.equal(result.app.state.executorStatus.message, 'Restored 2 queued plan(s).');
+
+  const panel = result.shell.panels.plan;
+  result.app.state.planItemId = 'log';
+  panel.querySelector('#fr-plan-qty').value = '1';
+  panel.querySelector('#fr-plan-form').dispatch('submit');
+  const stored = JSON.parse(document.defaultView.localStorage.getItem('fractured-realms-companion.queue.v1'));
+  assert.equal(stored.goals.at(-1).itemId, 'log');
+  assert.match(formatFinishTime(60_000, 0), /\d{1,2}:\d{2}/u);
+});
+
+test('compact mode toggles and persists its panel preference', () => {
+  const document = new FakeDocument();
+  const shell = createOverlayShell(document);
+  const toggle = shell.compactToggle || shell.panel.querySelector('#fr-compact-toggle');
+  assert.equal(shell.panel.dataset.compact, 'false');
+  toggle.dispatch('click');
+  assert.equal(shell.panel.dataset.compact, 'true');
+  assert.equal(toggle.getAttribute('aria-pressed'), 'true');
+  assert.equal(JSON.parse(document.defaultView.localStorage.getItem('fractured-realms-companion.positions.v1')).compactMode, true);
+  toggle.dispatch('click');
+  assert.equal(shell.panel.dataset.compact, 'false');
+});
+
+
 test('queued plans project earlier deterministic outputs and estimate duration', () => {
   const goals = [
     { id: 'plan-1', itemId: 'log', qty: 2 },

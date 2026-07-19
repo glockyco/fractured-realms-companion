@@ -13,6 +13,7 @@ export const DATA_FILES = Object.freeze([
 
 const HOST_ID = 'fractured-realms-companion';
 const POSITION_STORAGE_KEY = 'fractured-realms-companion.positions.v1';
+const QUEUE_STORAGE_KEY = 'fractured-realms-companion.queue.v1';
 const TAB_IDS = Object.freeze(['items', 'skills', 'plan']);
 const LIST_LIMIT = 120;
 const SEARCH_LIMIT = 240;
@@ -20,6 +21,7 @@ const SEARCH_LIMIT = 240;
 const ICONS = Object.freeze({
   helm: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 17.5V9.8a8 8 0 0 1 16 0v7.7M7 18v-7a5 5 0 0 1 10 0v7M3 18h18M9 18v3m6-3v3"/></svg>',
   close: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>',
+  collapse: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4v5H4m11 11v-5h5"/></svg>',
   search: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>',
   play: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 5 11 7-11 7Z"/></svg>',
   stop: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>',
@@ -407,6 +409,25 @@ tbody tr:last-child td { border-bottom: 0; }
 .executor-note { margin-top: var(--fr-s2) !important; white-space: normal !important; }
 .executor-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--fr-s2); }
 .loading-line { height: 0.25rem; overflow: hidden; background: var(--fr-neutral-900); }
+.compact-strip { display: none; }
+.panel[data-compact="true"] {
+  width: min(22rem, calc(100vw - 1rem));
+  height: auto;
+  min-height: 0;
+  resize: none;
+  grid-template-rows: auto auto;
+}
+.panel[data-compact="true"] .tabs,
+.panel[data-compact="true"] .tabpanels,
+.panel[data-compact="true"] .loading-line { display: none; }
+.panel[data-compact="true"] .compact-strip {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--fr-s2);
+  padding: var(--fr-s3) var(--fr-s4);
+}
+.panel[data-compact="true"] .compact-strip p { margin: 0; overflow: hidden; color: var(--fr-neutral-300); font-size: 0.75rem; text-overflow: ellipsis; white-space: nowrap; }
 .loading-line::after { content: ""; display: block; width: 35%; height: 100%; background: var(--fr-harbor-400); animation: loading 1.2s linear infinite; }
 @keyframes loading { from { transform: translateX(-100%); } to { transform: translateX(300%); } }
 @media (max-width: 40rem) {
@@ -486,6 +507,13 @@ export function formatDuration(milliseconds) {
   const seconds = totalSeconds % 60;
   if (hours) return `${hours}h ${minutes}m`;
   return seconds ? `${minutes}m ${seconds}s` : `${minutes}m`;
+}
+
+export function formatFinishTime(remainingMs, now = Date.now()) {
+  return new Date(now + Math.max(0, Number(remainingMs) || 0)).toLocaleTimeString(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
 export function estimatePlanDuration(plan) {
@@ -742,7 +770,7 @@ export function createOverlayShell(documentRef) {
   const style = makeElement(documentRef, 'style', { text: CSS });
   const launcher = makeElement(documentRef, 'button', {
     class: 'launcher', type: 'button', 'aria-expanded': 'false', 'aria-controls': 'fr-panel',
-    'aria-label': 'Open Fractured Realms Companion', html: `${ICONS.helm}<span class="launcher-label">Companion</span>`,
+    'aria-label': 'Open Fractured Realms Companion', html: `${ICONS.helm}<span class="launcher-label" id="fr-launcher-label">Companion</span>`,
   });
   launcher.dataset.state = 'loading';
 
@@ -755,10 +783,14 @@ export function createOverlayShell(documentRef) {
     class: 'identity panel-drag-handle', title: 'Drag companion window',
     html: `${ICONS.helm}<strong>Fractured Realms Companion</strong>`,
   });
+  const compactToggle = makeElement(documentRef, 'button', {
+    class: 'icon-button', type: 'button', id: 'fr-compact-toggle', 'aria-pressed': 'false',
+    title: 'Compact mode', 'aria-label': 'Compact mode', html: ICONS.collapse,
+  });
   const close = makeElement(documentRef, 'button', {
     class: 'icon-button', type: 'button', title: 'Close companion', 'aria-label': 'Close companion', html: ICONS.close,
   });
-  header.append(identity, close);
+  header.append(identity, compactToggle, close);
 
   const loading = makeElement(documentRef, 'div', { class: 'loading-line', 'aria-label': 'Loading companion data' });
   const error = makeElement(documentRef, 'div', { class: 'banner', role: 'alert' });
@@ -784,7 +816,11 @@ export function createOverlayShell(documentRef) {
     tabpanels.append(region);
     return [tabId, region];
   }));
-  panel.append(header, loading, error, tabs, tabpanels);
+  const compactStrip = makeElement(documentRef, 'div', {
+    class: 'compact-strip',
+    html: '<strong id="fr-compact-phase"></strong><p id="fr-compact-message"></p><progress class="executor-progress" id="fr-compact-progress" max="1" value="0"></progress><button class="button danger" id="fr-compact-stop" type="button">Stop</button>',
+  });
+  panel.append(header, loading, error, tabs, tabpanels, compactStrip);
   shadow.append(style, launcher, panel);
   documentRef.body.append(host);
 
@@ -830,9 +866,19 @@ export function createOverlayShell(documentRef) {
     try { storage?.setItem(POSITION_STORAGE_KEY, JSON.stringify(positions)); } catch { /* persistence is optional */ }
   };
   applyPosition(launcher, positions.launcher);
+  panel.dataset.compact = positions.compactMode === true ? 'true' : 'false';
+  compactToggle.setAttribute('aria-pressed', panel.dataset.compact === 'true' ? 'true' : 'false');
   const launcherDrag = enableFloatingDrag(documentRef, launcher, launcher, (position) => savePosition('launcher', position));
   enableFloatingDrag(documentRef, panel, identity, (position) => savePosition('panel', position), fitPanel);
 
+  const setCompact = (compact) => {
+    const enabled = Boolean(compact);
+    panel.dataset.compact = String(enabled);
+    compactToggle.setAttribute('aria-pressed', String(enabled));
+    savePosition('compactMode', enabled);
+    fitPanel();
+  };
+  compactToggle.addEventListener('click', () => setCompact(panel.dataset.compact !== 'true'));
   const setOpen = (open, restoreFocus = false) => {
     panel.hidden = !open;
     if (open) {
@@ -856,7 +902,7 @@ export function createOverlayShell(documentRef) {
   const showError = (title, message) => {
     loading.hidden = true;
     launcher.dataset.state = 'error';
-    launcher.innerHTML = `${ICONS.error}<span class="launcher-label">Companion unavailable</span>`;
+    launcher.innerHTML = `${ICONS.error}<span class="launcher-label" id="fr-launcher-label">Companion unavailable</span>`;
     error.innerHTML = `${ICONS.error}<div><strong>${escapeHtml(title)}</strong><p>${escapeHtml(message)}</p></div>`;
     error.hidden = false;
     setOpen(true, false);
@@ -889,7 +935,7 @@ export function createOverlayShell(documentRef) {
     if (!panel.hidden) fitPanel();
   });
 
-  return { host, shadow, launcher, panel, header, identity, close, loading, error, tabs, tabButtons, panels, setOpen, selectTab, showError };
+  return { host, shadow, launcher, panel, header, identity, compactToggle, compactStrip, close, loading, error, tabs, tabButtons, panels, setOpen, setCompact, selectTab, showError };
 }
 
 function blockedText(blocked) {
@@ -932,11 +978,46 @@ function createApplication(shell, datasets, api) {
     executorStatus: { phase: 'idle', currentStep: null, message: 'Add one or more plans to the queue.' },
   };
 
+  const storage = shell.panel.ownerDocument.defaultView?.localStorage;
+  const persistQueue = () => {
+    try {
+      storage?.setItem(QUEUE_STORAGE_KEY, JSON.stringify({ goals: state.queueGoals, nextPlanId: state.nextPlanId }));
+    } catch { /* persistence is optional */ }
+  };
+  const restoreQueue = () => {
+    try {
+      const parsed = JSON.parse(storage?.getItem(QUEUE_STORAGE_KEY) || 'null');
+      if (!parsed || !Array.isArray(parsed.goals)) return false;
+      const goals = parsed.goals;
+      if (!goals.every((goal) => goal && typeof goal === 'object' && typeof goal.id === 'string'
+        && Object.prototype.hasOwnProperty.call(items, goal.itemId) && Number.isInteger(goal.qty) && goal.qty >= 1)) return false;
+      const maxGoalId = goals.reduce((max, goal) => {
+        const match = /^plan-(\d+)$/u.exec(goal.id);
+        return Math.max(max, match ? Number(match[1]) || 0 : 0);
+      }, 0);
+      state.queueGoals = goals.map((goal) => ({ id: goal.id, itemId: goal.itemId, qty: goal.qty }));
+      state.nextPlanId = Math.max(Number(parsed.nextPlanId) || 0, maxGoalId + 1);
+      rebuildQueue();
+      state.executorStatus.message = `Restored ${goals.length} queued plan(s).`;
+      return true;
+    } catch { return false; }
+  };
+
+  const compactPhase = shell.compactStrip?.querySelector?.('#fr-compact-phase');
+  const compactMessage = shell.compactStrip?.querySelector?.('#fr-compact-message');
+  const compactProgress = shell.compactStrip?.querySelector?.('#fr-compact-progress');
+  const compactStop = shell.compactStrip?.querySelector?.('#fr-compact-stop');
+
   shell.loading.hidden = true;
   shell.launcher.dataset.state = 'ready';
   const executor = createDirectExecutor(api, {
     onUpdate(status) {
       state.executorStatus = status;
+      if (status.phase === 'complete') {
+        try { storage?.setItem(QUEUE_STORAGE_KEY, JSON.stringify({ goals: [], nextPlanId: state.nextPlanId })); } catch { /* persistence is optional */ }
+      } else if (status.phase === 'error' || status.phase === 'idle') {
+        persistQueue();
+      }
       renderPlan();
     },
   });
@@ -1308,6 +1389,7 @@ function createApplication(shell, datasets, api) {
       }
     }
     state.planNotice = null;
+    persistQueue();
     renderPlan();
     return true;
   }
@@ -1340,30 +1422,34 @@ function createApplication(shell, datasets, api) {
     const currentIndex = Number.isInteger(status.currentStep) ? Number(status.currentStep) : null;
     const current = currentIndex == null ? null : state.executionSteps[currentIndex];
     const currentPlan = current ? state.planQueue[current.queuePlanIndex] : null;
+    const locked = isExecutionLocked(status.phase);
     const phaseLabel = state.planNotice?.plan && !state.planNotice.plan.ok ? 'Plan blocked' : phaseLabels[status.phase] || status.phase;
-    executorPhase.textContent = currentPlan && isExecutionLocked(status.phase)
+    const phaseText = currentPlan && locked
       ? `${phaseLabel} · plan ${current.queuePlanIndex + 1} of ${state.planQueue.length}`
       : phaseLabel;
+    executorPhase.textContent = phaseText;
 
+    let messageText;
     if (current) {
       const quantity = current.rare
         ? ` · ${Number(status.stepProduced) || 0} of ${Number(status.stepTarget) || 0} rare drops`
         : (Number(status.stepTarget) > 0 ? ` · ${Number(status.stepProduced) || 0} of ${Number(status.stepTarget)}` : '');
       const remaining = Number(status.remainingMs) > 0 ? ` · about ${formatDuration(status.remainingMs)} left` : '';
-      executorMessage.textContent = `${current.actionName || humanizeId(current.actionId)} · action ${currentIndex + 1} of ${total}${quantity}${remaining}`;
+      messageText = `${current.actionName || humanizeId(current.actionId)} · action ${currentIndex + 1} of ${total}${quantity}${remaining}`;
     } else if (state.planQueue.length) {
       const estimate = queueEstimate();
-      executorMessage.textContent = `${state.planQueue.length} ${state.planQueue.length === 1 ? 'plan' : 'plans'} · ${total} ${total === 1 ? 'action' : 'actions'}${estimate ? ` · about ${formatDuration(estimate)}` : ''}`;
+      messageText = `${state.planQueue.length} ${state.planQueue.length === 1 ? 'plan' : 'plans'} · ${total} ${total === 1 ? 'action' : 'actions'}${estimate ? ` · about ${formatDuration(estimate)}` : ''}`;
     } else {
-      executorMessage.textContent = status.message || 'Add one or more plans to the queue.';
+      messageText = status.message || 'Add one or more plans to the queue.';
     }
+    if (locked && Number(status.remainingMs) > 0) messageText += ` · done ~${formatFinishTime(status.remainingMs)}`;
+    executorMessage.textContent = messageText;
 
     const stepFraction = Number(status.stepTarget) > 0
       ? Math.min(1, Math.max(0, Number(status.stepProduced) / Number(status.stepTarget)))
       : 0;
     executorProgress.max = Math.max(1, total);
     executorProgress.value = status.phase === 'complete' ? total : Math.max(0, (currentIndex || 0) + stepFraction);
-    const locked = isExecutionLocked(status.phase);
     for (const control of skillTable.querySelectorAll?.('[data-start-action]') || []) control.disabled = locked;
     if (locked) closePlanTargets();
     runButton.disabled = locked || status.phase === 'complete' || !queueIsRunnable();
@@ -1377,6 +1463,21 @@ function createApplication(shell, datasets, api) {
     executorNote.textContent = locked
       ? 'Stop ends the current game action and keeps this queue available to restart.'
       : 'Starting the queue stops active combat. The companion runs one direct action at a time.';
+
+    const label = shell.launcher.querySelector?.('#fr-launcher-label') ?? shell.shadow.querySelector?.('#fr-launcher-label');
+    if (label) {
+      label.textContent = locked
+        ? `Companion · ${Math.min(Number(status.totalSteps) || total, (currentIndex ?? 0) + 1)}/${Number(status.totalSteps) || total}${Number(status.remainingMs) > 0 ? ` · ${formatDuration(status.remainingMs)}` : ''}`
+        : status.phase === 'complete' ? 'Companion · queue done'
+          : status.phase === 'error' ? 'Companion · queue stopped' : 'Companion';
+    }
+    if (compactPhase) compactPhase.textContent = phaseText;
+    if (compactMessage) compactMessage.textContent = messageText;
+    if (compactProgress) {
+      compactProgress.max = executorProgress.max;
+      compactProgress.value = executorProgress.value;
+    }
+    if (compactStop) compactStop.disabled = !locked;
   }
 
   function renderPlanNotice(notice) {
@@ -1435,7 +1536,9 @@ function createApplication(shell, datasets, api) {
       return `<li class="queue-plan" data-state="${planState}" data-plan-id="${escapeHtml(entry.id)}"><div class="queue-plan-top"><span class="queue-plan-index data">${planIndex + 1}</span><span class="queue-plan-title">${escapeHtml(label)} <span class="data">×${escapeHtml(entry.qty)}</span></span><span class="queue-plan-meta">${steps.length} ${steps.length === 1 ? 'action' : 'actions'}${prerequisites.length ? ` · ${prerequisites.length} ready` : ''} · about ${escapeHtml(formatDuration(entry.estimateMs))}</span><span class="queue-plan-actions"><button class="icon-button" type="button" data-queue-action="up" data-plan-id="${escapeHtml(entry.id)}" aria-label="Move ${escapeHtml(label)} up" title="Move up"${upDisabled ? ' disabled' : ''}>${ICONS.up}</button><button class="icon-button" type="button" data-queue-action="down" data-plan-id="${escapeHtml(entry.id)}" aria-label="Move ${escapeHtml(label)} down" title="Move down"${downDisabled ? ' disabled' : ''}>${ICONS.down}</button><button class="icon-button" type="button" data-queue-action="remove" data-plan-id="${escapeHtml(entry.id)}" aria-label="Remove ${escapeHtml(label)}" title="Remove"${editDisabled ? ' disabled' : ''}>${ICONS.remove}</button><button class="icon-button" type="button" data-queue-action="edit" data-plan-id="${escapeHtml(entry.id)}" aria-label="Edit ${escapeHtml(label)}" title="Edit"${editDisabled ? ' disabled' : ''}>${ICONS.edit}</button></span></div><ol class="queue-steps">${prerequisiteRows}${stepRows || (!prerequisiteRows ? '<li class="queue-step" data-state="complete"><span class="queue-step-marker">✓</span><span>Already satisfied by current inventory</span><span></span></li>' : '')}</ol></li>`;
     }).join('');
     const notice = renderPlanNotice(state.planNotice);
-    planResult.innerHTML = `${notice}${state.planQueue.length ? `<div class="queue-header"><h3>Plan queue</h3><span class="queue-total data">${state.planQueue.length} ${state.planQueue.length === 1 ? 'plan' : 'plans'} · about ${escapeHtml(formatDuration(queueEstimate()))}</span></div><ol class="queue-list">${queueRows}</ol>` : '<div class="empty">Add an item to begin a queue. Each plan is resolved against the output of plans before it.</div>'}`;
+    const queueFinish = isExecutionLocked(status.phase) && Number(status.remainingMs) > 0
+      ? ` · done ~${formatFinishTime(status.remainingMs)}` : '';
+    planResult.innerHTML = `${notice}${state.planQueue.length ? `<div class="queue-header"><h3>Plan queue</h3><span class="queue-total data">${state.planQueue.length} ${state.planQueue.length === 1 ? 'plan' : 'plans'} · about ${escapeHtml(formatDuration(queueEstimate()))}${queueFinish}</span></div><ol class="queue-list">${queueRows}</ol>` : '<div class="empty">Add an item to begin a queue. Each plan is resolved against the output of plans before it.</div>'}`;
     renderExecutor();
   }
 
@@ -1468,11 +1571,16 @@ function createApplication(shell, datasets, api) {
       state.recentPlanItemIds = [state.planItemId, ...state.recentPlanItemIds.filter((id) => id !== state.planItemId)].slice(0, 5);
       if (plan.ok && plan.steps?.length) {
         state.queueGoals.push({ id: `plan-${state.nextPlanId++}`, itemId: state.planItemId, qty });
+        persistQueue();
         state.planNotice = null;
         if (locked) {
-          if (!rebuildPending()) state.queueGoals.pop();
+          if (!rebuildPending()) {
+            state.queueGoals.pop();
+            persistQueue();
+          }
         } else {
           rebuildQueue();
+          persistQueue();
           state.executorStatus = { phase: 'idle', currentStep: null, message: 'Plan added to the queue.' };
         }
       } else if (plan.ok) {
@@ -1503,6 +1611,7 @@ function createApplication(shell, datasets, api) {
       selectPlanTarget(goal.itemId);
       planQty.value = String(goal.qty);
       state.queueGoals.splice(index, 1);
+      persistQueue();
       state.planNotice = null;
       if (locked) rebuildPending();
       else {
@@ -1519,6 +1628,7 @@ function createApplication(shell, datasets, api) {
       if (target < 0 || target >= state.queueGoals.length) return;
       [state.queueGoals[index], state.queueGoals[target]] = [state.queueGoals[target], state.queueGoals[index]];
     }
+    persistQueue();
     state.planNotice = null;
     if (locked) rebuildPending();
     else {
@@ -1543,6 +1653,7 @@ function createApplication(shell, datasets, api) {
   });
   resumeButton.addEventListener('click', () => executor.resume());
   stopButton.addEventListener('click', () => executor.stop());
+  compactStop?.addEventListener('click', () => executor.stop());
   clearButton.addEventListener('click', () => {
     const locked = isExecutionLocked(state.executorStatus?.phase);
     if (locked) {
@@ -1551,10 +1662,12 @@ function createApplication(shell, datasets, api) {
       const currentPlanIndex = state.executionSteps[currentIndex]?.queuePlanIndex ?? -1;
       const frozenIds = new Set(state.planQueue.slice(0, currentPlanIndex + 1).map((entry) => entry.id));
       state.queueGoals = state.queueGoals.filter((goal) => frozenIds.has(goal.id));
+      persistQueue();
       rebuildPending();
       return;
     }
     state.queueGoals = [];
+    persistQueue();
     state.planQueue = [];
     state.executionSteps = [];
     state.currentPlan = null;
@@ -1569,10 +1682,11 @@ function createApplication(shell, datasets, api) {
     shell.selectTab(2, true);
   });
 
+  restoreQueue();
   renderItemList();
   renderItemDetail();
   renderSkillTable();
-  renderExecutor();
+  renderPlan();
   return { datasets, indexes, state, executor, renderItemList, renderItemDetail, renderSkillTable, renderPlan };
 }
 
