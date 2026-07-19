@@ -62,6 +62,17 @@ test('plans a partial-stock dependency chain post-order', () => {
   assert.equal(plan.ok, true);
   assert.deepEqual(plan.steps.map((step) => step.actionId), ['ore', 'bar', 'tool']);
   assert.deepEqual(plan.steps.map((step) => step.count), [1, 1, 1]);
+  assert.deepEqual(plan.satisfied, [{ itemId: 'ore', requiredQty: 2, satisfiedQty: 1 }]);
+});
+
+test('keeps fully satisfied dependencies visible without executable steps', () => {
+  const actions = {
+    smithing: [action('smithing', 'bar', 'Smelt Bar', 'bar', { ore: 2 })],
+  };
+  const plan = createPlan(data(actions), snapshot({ ore: 2 }), { itemId: 'bar', qty: 1 });
+  assert.equal(plan.ok, true);
+  assert.deepEqual(plan.steps.map((step) => step.actionId), ['bar']);
+  assert.deepEqual(plan.satisfied, [{ itemId: 'ore', requiredQty: 2, satisfiedQty: 2 }]);
 });
 
 test('merges shared dependencies without overproduction', () => {

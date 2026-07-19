@@ -260,6 +260,8 @@ test('queued planner appends multiple goals against prior output', async () => {
   assert.equal(result.app.state.planQueue.length, 2);
   assert.deepEqual(result.app.state.planQueue.map((entry) => entry.itemId), ['log', 'plank']);
   assert.deepEqual(result.app.state.executionSteps.map((step) => step.actionId), ['chop_log', 'make_plank']);
+  assert.match(panel.querySelector('#fr-plan-result').innerHTML, /Prerequisite satisfied/);
+  assert.match(panel.querySelector('#fr-plan-result').innerHTML, /Harbor Log/);
   assert.match(panel.querySelector('#fr-run').innerHTML, /Start 2-plan queue/);
 
   const planResult = panel.querySelector('#fr-plan-result');

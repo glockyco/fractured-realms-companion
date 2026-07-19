@@ -180,6 +180,7 @@ svg {
   background: var(--fr-danger-950);
   color: var(--fr-danger-400);
 }
+.banner.success { border-color: var(--fr-success-400); background: var(--fr-success-950); color: var(--fr-success-400); }
 .banner svg { margin-top: 0.1rem; }
 .banner strong { display: block; color: var(--fr-neutral-100); }
 .banner p { max-width: 68ch; margin: var(--fr-s1) 0 0; }
@@ -373,6 +374,9 @@ tbody tr:last-child td { border-bottom: 0; }
 .queue-step { display: grid; grid-template-columns: 1.25rem minmax(0, 1fr) auto; align-items: center; gap: var(--fr-s2); min-height: 2rem; color: var(--fr-neutral-300); font-size: 0.75rem; }
 .queue-step[data-state="active"] { color: var(--fr-neutral-100); }
 .queue-step[data-state="complete"] { color: var(--fr-success-400); }
+.queue-step[data-kind="prerequisite"] { color: var(--fr-success-400); }
+.queue-step[data-kind="prerequisite"] .queue-step-marker { border-color: var(--fr-success-400); background: var(--fr-success-950); }
+.queue-step-detail { display: block; color: var(--fr-neutral-300); font-size: 0.6875rem; }
 .queue-step-marker { width: 1.125rem; height: 1.125rem; display: inline-grid; place-items: center; border: 1px solid var(--fr-neutral-700); border-radius: 999px; font-size: 0.625rem; }
 .queue-step[data-state="active"] .queue-step-marker { border-color: var(--fr-harbor-400); background: var(--fr-harbor-800); }
 .queue-step[data-state="complete"] .queue-step-marker { border-color: var(--fr-success-400); background: var(--fr-success-950); }
@@ -1213,6 +1217,17 @@ function createApplication(shell, datasets, api) {
       && state.executionSteps.length > 0;
   }
 
+  function satisfiedPrerequisites(plan) {
+    const byItem = new Map();
+    for (const entry of plan?.satisfied || []) {
+      const current = byItem.get(entry.itemId) || { itemId: entry.itemId, requiredQty: 0, satisfiedQty: 0 };
+      current.requiredQty += Math.max(0, Number(entry.requiredQty) || 0);
+      current.satisfiedQty += Math.max(0, Number(entry.satisfiedQty) || 0);
+      byItem.set(entry.itemId, current);
+    }
+    return [...byItem.values()];
+  }
+
   function renderExecutor() {
     const status = state.executorStatus || { phase: 'idle', message: '' };
     const phaseLabels = { idle: 'Queue ready', starting: 'Starting queue', running: 'Queue running', paused: 'Queue paused', complete: 'Queue complete', error: 'Queue stopped' };
@@ -1259,11 +1274,16 @@ function createApplication(shell, datasets, api) {
       : 'Starting the queue stops active combat. The companion runs one direct action at a time.';
   }
 
-  function renderBlockedPlan(notice) {
+  function renderPlanNotice(notice) {
     const plan = notice?.plan;
-    if (!plan || plan.ok) return '';
+    if (!plan) return '';
+    const prerequisites = satisfiedPrerequisites(plan);
+    const prerequisiteRows = prerequisites.map((entry) => `<li class="queue-step" data-kind="prerequisite"><span class="queue-step-marker">${ICONS.check}</span><span>${escapeHtml(labelFor(items, entry.itemId))}<span class="queue-step-detail">Prerequisite satisfied</span></span><span class="queue-step-time data">${escapeHtml(entry.satisfiedQty)} of ${escapeHtml(entry.requiredQty)} ready</span></li>`).join('');
+    if (plan.ok) {
+      return `<div class="banner success" role="status">${ICONS.check}<div><strong>${escapeHtml(labelFor(items, notice.itemId))} is already satisfied</strong><p>The requested quantity is available without another action.</p></div></div>${prerequisiteRows ? `<ol class="queue-steps">${prerequisiteRows}</ol>` : ''}`;
+    }
     const block = blockedText(plan.blocked || plan.reason);
-    return `<div class="banner plan-blocked" role="alert">${ICONS.error}<div><strong>${escapeHtml(labelFor(items, notice.itemId))} could not be queued</strong><p>${escapeHtml(block || plan.message || 'Resolve the blockers and try again.')}</p></div></div>`;
+    return `<div class="banner plan-blocked" role="alert">${ICONS.error}<div><strong>${escapeHtml(labelFor(items, notice.itemId))} could not be queued</strong><p>${escapeHtml(block || plan.message || 'Resolve the blockers and try again.')}</p></div></div>${prerequisiteRows ? `<ol class="queue-steps">${prerequisiteRows}</ol>` : ''}`;
   }
 
   function renderPlan() {
@@ -1279,6 +1299,8 @@ function createApplication(shell, datasets, api) {
         || (currentIndex != null && currentIndex >= endIndex && status.phase !== 'idle');
       const planActive = currentIndex != null && currentIndex >= startIndex && currentIndex < endIndex && status.phase !== 'idle';
       const planState = planComplete ? 'complete' : planActive ? 'active' : 'pending';
+      const prerequisites = satisfiedPrerequisites(entry.plan);
+      const prerequisiteRows = prerequisites.map((requirement) => `<li class="queue-step" data-state="complete" data-kind="prerequisite"><span class="queue-step-marker">${ICONS.check}</span><span>${escapeHtml(labelFor(items, requirement.itemId))}<span class="queue-step-detail">Prerequisite satisfied</span></span><span class="queue-step-time data">${escapeHtml(requirement.satisfiedQty)} of ${escapeHtml(requirement.requiredQty)} ready</span></li>`).join('');
       const stepRows = steps.map((step, planStepIndex) => {
         const stepIndex = startIndex + planStepIndex;
         const complete = status.phase === 'complete' || (currentIndex != null && stepIndex < currentIndex && status.phase !== 'idle');
@@ -1295,9 +1317,9 @@ function createApplication(shell, datasets, api) {
         return `<li class="queue-step" data-state="${stepState}"><span class="queue-step-marker">${marker}</span><span>${escapeHtml(step.actionName || humanizeId(step.actionId))} <span class="data">×${escapeHtml(step.count)}</span></span><span class="queue-step-time data">${escapeHtml(time)}</span>${activeProgress}</li>`;
       }).join('');
       const locked = isExecutionLocked(status.phase);
-      return `<li class="queue-plan" data-state="${planState}" data-plan-id="${escapeHtml(entry.id)}"><div class="queue-plan-top"><span class="queue-plan-index data">${planIndex + 1}</span><span class="queue-plan-title">${escapeHtml(labelFor(items, entry.itemId))} <span class="data">×${escapeHtml(entry.qty)}</span></span><span class="queue-plan-meta">${steps.length} ${steps.length === 1 ? 'action' : 'actions'} · about ${escapeHtml(formatDuration(entry.estimateMs))}</span><span class="queue-plan-actions"><button class="icon-button" type="button" data-queue-action="up" data-plan-id="${escapeHtml(entry.id)}" aria-label="Move ${escapeHtml(labelFor(items, entry.itemId))} up" title="Move up"${locked || planIndex === 0 ? ' disabled' : ''}>${ICONS.up}</button><button class="icon-button" type="button" data-queue-action="down" data-plan-id="${escapeHtml(entry.id)}" aria-label="Move ${escapeHtml(labelFor(items, entry.itemId))} down" title="Move down"${locked || planIndex === state.planQueue.length - 1 ? ' disabled' : ''}>${ICONS.down}</button><button class="icon-button" type="button" data-queue-action="remove" data-plan-id="${escapeHtml(entry.id)}" aria-label="Remove ${escapeHtml(labelFor(items, entry.itemId))}" title="Remove"${locked ? ' disabled' : ''}>${ICONS.remove}</button></span></div><ol class="queue-steps">${stepRows || '<li class="queue-step" data-state="complete"><span class="queue-step-marker">✓</span><span>Already satisfied by current inventory</span><span></span></li>'}</ol></li>`;
+      return `<li class="queue-plan" data-state="${planState}" data-plan-id="${escapeHtml(entry.id)}"><div class="queue-plan-top"><span class="queue-plan-index data">${planIndex + 1}</span><span class="queue-plan-title">${escapeHtml(labelFor(items, entry.itemId))} <span class="data">×${escapeHtml(entry.qty)}</span></span><span class="queue-plan-meta">${steps.length} ${steps.length === 1 ? 'action' : 'actions'}${prerequisites.length ? ` · ${prerequisites.length} ready` : ''} · about ${escapeHtml(formatDuration(entry.estimateMs))}</span><span class="queue-plan-actions"><button class="icon-button" type="button" data-queue-action="up" data-plan-id="${escapeHtml(entry.id)}" aria-label="Move ${escapeHtml(labelFor(items, entry.itemId))} up" title="Move up"${locked || planIndex === 0 ? ' disabled' : ''}>${ICONS.up}</button><button class="icon-button" type="button" data-queue-action="down" data-plan-id="${escapeHtml(entry.id)}" aria-label="Move ${escapeHtml(labelFor(items, entry.itemId))} down" title="Move down"${locked || planIndex === state.planQueue.length - 1 ? ' disabled' : ''}>${ICONS.down}</button><button class="icon-button" type="button" data-queue-action="remove" data-plan-id="${escapeHtml(entry.id)}" aria-label="Remove ${escapeHtml(labelFor(items, entry.itemId))}" title="Remove"${locked ? ' disabled' : ''}>${ICONS.remove}</button></span></div><ol class="queue-steps">${prerequisiteRows}${stepRows || (!prerequisiteRows ? '<li class="queue-step" data-state="complete"><span class="queue-step-marker">✓</span><span>Already satisfied by current inventory</span><span></span></li>' : '')}</ol></li>`;
     }).join('');
-    const notice = renderBlockedPlan(state.planNotice);
+    const notice = renderPlanNotice(state.planNotice);
     planResult.innerHTML = `${notice}${state.planQueue.length ? `<div class="queue-header"><h3>Plan queue</h3><span class="queue-total data">${state.planQueue.length} ${state.planQueue.length === 1 ? 'plan' : 'plans'} · about ${escapeHtml(formatDuration(queueEstimate()))}</span></div><ol class="queue-list">${queueRows}</ol>` : '<div class="empty">Add an item to begin a queue. Each plan is resolved against the output of plans before it.</div>'}`;
     renderExecutor();
   }
@@ -1324,7 +1346,7 @@ function createApplication(shell, datasets, api) {
         rebuildQueue();
         state.executorStatus = { phase: 'idle', currentStep: null, message: 'Plan added to the queue.' };
       } else if (plan.ok) {
-        state.planNotice = null;
+        state.planNotice = { itemId: state.planItemId, qty, plan };
         state.executorStatus = { phase: 'idle', currentStep: null, message: `${labelFor(items, state.planItemId)} is already available in the requested quantity.` };
       } else {
         state.planNotice = { itemId: state.planItemId, qty, plan };

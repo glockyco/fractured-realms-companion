@@ -170,6 +170,7 @@ export function createPlan(datasets = {}, snapshot = {}, request = {}) {
   for (const list of rare.values()) list.sort(sourceCompare);
 
   const steps = [];
+  const satisfied = [];
   const indexes = new Map();
   const stack = [];
   let failure;
@@ -216,11 +217,19 @@ export function createPlan(datasets = {}, snapshot = {}, request = {}) {
     return { ok: false };
   };
 
+  const recordSatisfied = (itemId, requiredQty, satisfiedQty) => {
+    const covered = Math.min(Math.max(0, number(requiredQty, 0)), Math.max(0, number(satisfiedQty, 0)));
+    if (!covered) return;
+    satisfied.push({ itemId, requiredQty: Math.max(0, number(requiredQty, 0)), satisfiedQty: covered });
+  };
+
   const ensure = (itemId, requested) => {
     const needRequested = Math.max(0, number(requested, 0));
     if (needRequested <= 0) return { ok: true };
     if (stack.includes(itemId)) return fail(itemId, 'cycle', { path: [...stack, itemId] });
-    const need = Math.max(0, needRequested - quantity(projected, itemId));
+    const available = quantity(projected, itemId);
+    recordSatisfied(itemId, needRequested, available);
+    const need = Math.max(0, needRequested - available);
     if (need <= 0) return { ok: true };
 
     const sources = deterministic.get(itemId) ?? [];
@@ -314,10 +323,10 @@ export function createPlan(datasets = {}, snapshot = {}, request = {}) {
 
   const itemId = request?.itemId;
   const requested = number(request?.qty, 0);
-  if (!itemId || requested <= 0) return { ok: true, steps: [] };
+  if (!itemId || requested <= 0) return { ok: true, steps: [], satisfied };
   if (quantity(inventory, itemId) < requested && isBagFull(snapshot)) {
     fail(itemId, 'bag-full', { bagSize: Math.max(0, number(snapshot?.bagSize, 48)) });
-  } else if (ensure(itemId, requested).ok) return { ok: true, steps };
+  } else if (ensure(itemId, requested).ok) return { ok: true, steps, satisfied };
   const message = failure?.reason === 'level'
     ? `Requires level ${failure.minLevel} (${failure.actionName})`
     : failure?.reason === 'tool' ? `Requires unlocked tool ${failure.toolName}`
@@ -329,5 +338,5 @@ export function createPlan(datasets = {}, snapshot = {}, request = {}) {
                 : failure?.reason === 'rare-only' ? 'Only available as a rare drop'
                   : failure?.reason === 'cycle' ? 'Dependency cycle detected'
                     : `No deterministic source for ${itemName(datasets.items, itemId)}`;
-  return { ok: false, steps, blocked: failure, reason: failure?.reason, message };
+  return { ok: false, steps, satisfied, blocked: failure, reason: failure?.reason, message };
 }
