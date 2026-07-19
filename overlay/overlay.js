@@ -1064,6 +1064,28 @@ function blockedText(blocked) {
   return blocked.message || String(reason || 'This step is blocked.');
 }
 
+function blockedShort(blocked) {
+  if (!blocked) return 'blocked';
+  const reason = typeof blocked === 'string' ? blocked : blocked.reason || blocked.type;
+  const details = typeof blocked === 'string' ? {} : blocked;
+  if (typeof blocked === 'string' && ![
+    'level', 'tool', 'pattern', 'prayer', 'map', 'recipe', 'input', 'bag-full', 'rare-only', 'no-source', 'no-xp', 'cycle',
+  ].includes(reason)) return blocked;
+  if (reason === 'level') return `needs ${humanizeId(details.skillId) || 'level'}${details.minLevel == null ? '' : ` ${details.minLevel}`}`;
+  if (reason === 'tool') return `needs ${details.toolName || humanizeId(details.toolId) || 'tool'}`;
+  if (reason === 'pattern') return `needs ${humanizeId(details.patternId) || 'pattern'} pattern`;
+  if (reason === 'prayer') return `needs Prayer${details.minPrayerLevel == null ? '' : ` ${details.minPrayerLevel}`}`;
+  if (reason === 'map') return `needs ${humanizeId(details.mapId) || 'map'}`;
+  if (reason === 'recipe') return 'needs recipe';
+  if (reason === 'input') return `needs ${details.required == null ? '' : `${details.required} `}${humanizeId(details.itemId) || 'input'}`.trim();
+  if (reason === 'bag-full') return 'bag full';
+  if (reason === 'rare-only') return 'rare drop only';
+  if (reason === 'no-source') return 'no source';
+  if (reason === 'no-xp') return 'no XP';
+  if (reason === 'cycle') return 'dependency cycle';
+  return 'blocked';
+}
+
 function createApplication(shell, datasets, api) {
   const documentRef = shell.panel.ownerDocument;
   const indexes = buildIndexes(datasets);
@@ -1595,7 +1617,12 @@ function createApplication(shell, datasets, api) {
     let actionText;
     let metaText = '';
     if (current) {
-      const produced = `${Number(status.stepProduced) || 0} of ${Number(status.stepTarget) || 0}${current.rare ? ' rare drops' : ''}`;
+      const stop = current.stopWhen;
+      const produced = stop?.type === 'time'
+        ? `${formatDuration(Number(status.stepProduced) || 0)} of ${formatDuration(Number(status.stepTarget) || 0)}`
+        : stop?.type === 'xp'
+          ? `${(Number(status.stepProduced) || 0).toLocaleString()} of ${(Number(status.stepTarget) || 0).toLocaleString()} XP`
+          : `${Number(status.stepProduced) || 0} of ${Number(status.stepTarget) || 0}${current.rare ? ' rare drops' : ''}`;
       const planPos = `plan ${current.queuePlanIndex + 1}/${state.planQueue.length}`;
       const remaining = Number(status.remainingMs) > 0 ? ` · ~${formatDuration(status.remainingMs)}` : '';
       actionText = current.actionName || humanizeId(current.actionId);
@@ -1744,12 +1771,14 @@ function createApplication(shell, datasets, api) {
       const label = labelFor(items, entry.itemId);
       const blockedBadge = !entry.plan?.ok ? '<span class="badge danger">blocked</span>' : '';
       const blockedTitle = !entry.plan?.ok ? ` title="${escapeHtml(blockedText(entry.plan?.blocked || entry.plan?.reason) || 'Blocked until its requirement is met.')}"` : '';
+      const goalSkillId = entry.plan?.goalSkillId || entry.plan?.blocked?.skillId;
       const targetLabel = entry.target?.type === 'gain'
-        ? `+${escapeHtml(entry.target.gain)}`
+        ? `<span class="data">+${escapeHtml(entry.target.gain)}</span>`
         : entry.target?.type === 'level'
-          ? `→ ${escapeHtml(skillNames[entry.plan?.goalSkillId] || 'Lv')} ${escapeHtml(entry.target.level)}`
-          : entry.target?.type === 'time' ? `for ${escapeHtml(entry.target.minutes)}m`
-            : `×${escapeHtml(entry.qty)}`;
+          ? `→ ${escapeHtml(skillNames[goalSkillId] || 'level')} <span class="data">${escapeHtml(entry.target.level)}</span>`
+          : entry.target?.type === 'time'
+            ? `for <span class="data">${escapeHtml(entry.target.minutes)}m</span>`
+            : `<span class="data">×${escapeHtml(entry.qty)}</span>`;
       const upIsPromote = locked && planIndex - 1 === currentPlanIndex;
       const upDisabled = !mutable || planIndex === 0;
       const upLabel = upIsPromote ? 'Run now — interrupts the current plan' : `Move ${label} up`;
@@ -1758,11 +1787,11 @@ function createApplication(shell, datasets, api) {
       const editDisabled = !mutable;
       const actionLabel = `${steps.length} ${steps.length === 1 ? 'action' : 'actions'}`;
       const planMeta = planState === 'blocked'
-        ? 'blocked'
+        ? blockedShort(entry.plan?.blocked || entry.plan?.reason)
         : planState === 'complete'
           ? `${actionLabel} · done`
           : `${actionLabel}${prerequisites.length ? ` · ${prerequisites.length} ready` : ''} · about ${escapeHtml(formatDuration(entry.estimateMs))}`;
-      return `<li class="queue-plan" data-state="${planState}" data-plan-id="${escapeHtml(entry.id)}"${blockedTitle}><div class="queue-plan-top"><span class="queue-plan-index data">${planIndex + 1}</span><span class="queue-plan-title">${escapeHtml(label)} <span class="data">${targetLabel}</span></span>${blockedBadge}<span class="queue-plan-meta">${planMeta}</span><span class="queue-plan-actions"><button class="icon-button" type="button" data-queue-action="up" data-plan-id="${escapeHtml(entry.id)}" aria-label="${escapeHtml(upLabel)}" title="${escapeHtml(upTitle)}"${upDisabled ? ' disabled' : ''}>${ICONS.up}</button><button class="icon-button" type="button" data-queue-action="down" data-plan-id="${escapeHtml(entry.id)}" aria-label="Move ${escapeHtml(label)} down" title="Move down"${downDisabled ? ' disabled' : ''}>${ICONS.down}</button><button class="icon-button" type="button" data-queue-action="remove" data-plan-id="${escapeHtml(entry.id)}" aria-label="Remove ${escapeHtml(label)}" title="Remove"${editDisabled ? ' disabled' : ''}>${ICONS.remove}</button><button class="icon-button" type="button" data-queue-action="edit" data-plan-id="${escapeHtml(entry.id)}" aria-label="Edit ${escapeHtml(label)}" title="Edit"${editDisabled ? ' disabled' : ''}>${ICONS.edit}</button></span></div><ol class="queue-steps">${prerequisiteRows}${stepRows || (!prerequisiteRows ? '<li class="queue-step" data-state="complete"><span class="queue-step-marker">✓</span><span>Already satisfied by current inventory</span><span></span></li>' : '')}</ol></li>`;
+      return `<li class="queue-plan" data-state="${planState}" data-plan-id="${escapeHtml(entry.id)}"${blockedTitle}><div class="queue-plan-top"><span class="queue-plan-index data">${planIndex + 1}</span><span class="queue-plan-title">${escapeHtml(label)} ${targetLabel}</span>${blockedBadge}<span class="queue-plan-meta">${planMeta}</span><span class="queue-plan-actions"><button class="icon-button" type="button" data-queue-action="up" data-plan-id="${escapeHtml(entry.id)}" aria-label="${escapeHtml(upLabel)}" title="${escapeHtml(upTitle)}"${upDisabled ? ' disabled' : ''}>${ICONS.up}</button><button class="icon-button" type="button" data-queue-action="down" data-plan-id="${escapeHtml(entry.id)}" aria-label="Move ${escapeHtml(label)} down" title="Move down"${downDisabled ? ' disabled' : ''}>${ICONS.down}</button><button class="icon-button" type="button" data-queue-action="remove" data-plan-id="${escapeHtml(entry.id)}" aria-label="Remove ${escapeHtml(label)}" title="Remove"${editDisabled ? ' disabled' : ''}>${ICONS.remove}</button><button class="icon-button" type="button" data-queue-action="edit" data-plan-id="${escapeHtml(entry.id)}" aria-label="Edit ${escapeHtml(label)}" title="Edit"${editDisabled ? ' disabled' : ''}>${ICONS.edit}</button></span></div><ol class="queue-steps">${prerequisiteRows}${stepRows || (!prerequisiteRows ? '<li class="queue-step" data-state="complete"><span class="queue-step-marker">✓</span><span>Already satisfied by current inventory</span><span></span></li>' : '')}</ol></li>`;
     }).join('');
     const notice = renderPlanNotice(state.planNotice);
     const queueFinish = isExecutionLocked(status.phase) && Number(status.remainingMs) > 0

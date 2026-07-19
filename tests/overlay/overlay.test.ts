@@ -333,7 +333,7 @@ test('plan form submits a skill level target and labels the queue row', async ()
   panel.querySelector('#fr-plan-qty').value = '12';
   panel.querySelector('#fr-plan-form').dispatch('submit');
   assert.deepEqual(result.app.state.queueGoals[0].target, { type: 'level', level: 12 });
-  assert.match(panel.querySelector('#fr-plan-result').innerHTML, /\u2192 Woodcutting 12/u);
+  assert.match(panel.querySelector('#fr-plan-result').innerHTML, /\u2192 Woodcutting <span class="data">12<\/span>/u);
 });
 
 test('plan form submits a new-items target and produces the requested delta', async () => {
@@ -365,8 +365,33 @@ test('enqueues a blocked plan as queued but blocked with the run control disable
   assert.equal(app.state.planQueue[0].plan.ok, false);
   const html = panel.querySelector('#fr-plan-result').innerHTML;
   assert.match(html, /data-state="blocked"/u);
+  assert.match(html, /needs Crafting 20/u);
+  assert.doesNotMatch(html, /<span class="queue-plan-meta">blocked<\/span>/u);
   assert.match(html, /queued but blocked/u);
   assert.equal(shell.queueControls.querySelector('#fr-run').disabled, true);
+});
+
+test('queue row target labels preserve normal word spacing', async () => {
+  const document = new FakeDocument();
+  const result = await bootOverlay({ document, window: { __frCompanion: api() }, fetch: fetchFor(datasets()) });
+  const panel = result.shell.panels.plan;
+  const form = panel.querySelector('#fr-plan-form');
+  const target = panel.querySelector('#fr-plan-target');
+  const quantity = panel.querySelector('#fr-plan-qty');
+
+  result.app.state.planItemId = 'log';
+  target.value = 'time';
+  quantity.value = '2';
+  form.dispatch('submit');
+  assert.match(panel.querySelector('#fr-plan-result').innerHTML, /for <span class="data">2m<\/span>/u);
+
+  result.app.state.planItemId = 'totem';
+  target.value = 'level';
+  quantity.value = '80';
+  form.dispatch('submit');
+  const html = panel.querySelector('#fr-plan-result').innerHTML;
+  assert.match(html, /\u2192 Crafting <span class="data">80<\/span>/u);
+  assert.doesNotMatch(html, /\u2192 level <span class="data">80<\/span>/u);
 });
 
 test('runs only the unblocked plans in a mixed queue', async () => {
