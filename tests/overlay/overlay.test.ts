@@ -434,6 +434,27 @@ test('blocked level goals retain the requested item skill', async () => {
   assert.match(panel.querySelector('#fr-plan-result').innerHTML, /Glazed Crab → Cooking <span class="data">68<\/span>/u);
 });
 
+test('highlights the following plan after a blocked plan with partial steps', async () => {
+  const document = new FakeDocument();
+  const result = await bootOverlay({ document, window: { __frCompanion: api() }, fetch: fetchFor(datasets()) });
+  const { app, shell } = result;
+  const partialStep = { actionId: 'partial_action', actionName: 'Blocked partial action', count: 1, interval: 1000, rare: false };
+  const nextStep = { actionId: 'next_action', actionName: 'Following action', count: 1, interval: 1000, rare: false };
+  app.state.planQueue = [
+    { id: 'plan-blocked', itemId: 'log', qty: 1, plan: { ok: false, steps: [partialStep], reason: 'no-source', blocked: { reason: 'no-source' } }, estimateMs: 1000 },
+    { id: 'plan-next', itemId: 'plank', qty: 1, plan: { ok: true, steps: [nextStep] }, estimateMs: 1000 },
+  ];
+  app.state.executionSteps = [{ ...nextStep, queuePlanIndex: 1 }];
+  app.state.executorStatus = { phase: 'running', currentStep: 0, stepTarget: 1, stepProduced: 0 };
+  app.renderPlan();
+
+  const html = shell.panels.plan.querySelector('#fr-plan-result').innerHTML;
+  assert.match(html, /Blocked partial action[^<]*<span class="data">×1<\/span><\/span><span class="queue-step-time data">about 1s<\/span><\/li>/u);
+  assert.match(html, /Following action[^<]*<span class="data">×1<\/span><\/span><span class="queue-step-time data">about 1s<\/span><progress/isu);
+  assert.match(html, /data-state="pending"[^>]*><span class="queue-step-marker">1<\/span><span>Blocked partial action/u);
+  assert.match(html, /data-state="active" data-step-global="0"[^>]*><span class="queue-step-marker">1<\/span><span>Following action/u);
+});
+
 test('runs only the unblocked plans in a mixed queue', async () => {
   const document = new FakeDocument();
   const calls = [];

@@ -1576,7 +1576,8 @@ function createApplication(shell, datasets, api) {
   function pendingPlanSteps(currentPlanIndex) {
     return state.planQueue
       .slice(currentPlanIndex + 1)
-      .flatMap((entry) => entry.plan?.steps || []);
+      .filter((entry) => entry.plan?.ok)
+      .flatMap((entry) => entry.plan.steps || []);
   }
 
   function rebuildPending() {
@@ -1588,7 +1589,7 @@ function createApplication(shell, datasets, api) {
       const pending = resolvePlanQueue(datasets, projected, pendingGoals);
       state.planQueue = [...frozen, ...pending];
       state.executionSteps = flattenQueue();
-      const cutIndex = frozen.reduce((total, entry) => total + (entry.plan?.steps?.length || 0), 0);
+      const cutIndex = frozen.reduce((total, entry) => total + (entry.plan?.ok ? entry.plan.steps?.length || 0 : 0), 0);
       return { ok: true, cutIndex, replacement: state.executionSteps.slice(cutIndex) };
     };
 
@@ -1768,7 +1769,11 @@ function createApplication(shell, datasets, api) {
     const queueRows = state.planQueue.map((entry, planIndex) => {
       const startIndex = globalIndex;
       const steps = entry.plan?.steps || [];
-      const endIndex = startIndex + steps.length;
+      // Blocked plans keep their partial steps for display, but flattenQueue()
+      // excludes them from the execution queue. Only runnable plans may consume
+      // global step indices, or every plan after a skipped one shifts.
+      const runnable = !!entry.plan?.ok;
+      const endIndex = startIndex + (runnable ? steps.length : 0);
       globalIndex = endIndex;
       const planComplete = status.phase === 'complete'
         || (currentIndex != null && currentIndex >= endIndex && status.phase !== 'idle');
@@ -1778,8 +1783,8 @@ function createApplication(shell, datasets, api) {
       const prerequisiteRows = prerequisites.map((requirement) => `<li class="queue-step" data-state="complete" data-kind="prerequisite"><span class="queue-step-marker">${ICONS.check}</span><span>${escapeHtml(labelFor(items, requirement.itemId))}<span class="queue-step-detail">Prerequisite satisfied</span></span><span class="queue-step-time data">${escapeHtml(requirement.satisfiedQty)} of ${escapeHtml(requirement.requiredQty)} ready</span></li>`).join('');
       const stepRows = steps.map((step, planStepIndex) => {
         const stepIndex = startIndex + planStepIndex;
-        const complete = status.phase === 'complete' || (currentIndex != null && stepIndex < currentIndex && status.phase !== 'idle');
-        const active = currentIndex === stepIndex && status.phase !== 'idle';
+        const complete = runnable && (status.phase === 'complete' || (currentIndex != null && stepIndex < currentIndex && status.phase !== 'idle'));
+        const active = runnable && currentIndex === stepIndex && status.phase !== 'idle';
         const stepState = complete ? 'complete' : active ? 'active' : 'pending';
         const marker = complete ? ICONS.check : String(planStepIndex + 1);
         const activeProgress = active && Number(status.stepTarget) > 0
@@ -1789,7 +1794,7 @@ function createApplication(shell, datasets, api) {
         const quantity = step.rare ? `~×${escapeHtml(step.count)}` : `×${escapeHtml(step.count)}`;
         const chanceBadge = step.rare
           ? ` <span class="badge warning">${escapeHtml(formatChance(step.chance))}</span>` : '';
-        return `<li class="queue-step" data-state="${stepState}" data-step-global="${stepIndex}"><span class="queue-step-marker">${marker}</span><span>${escapeHtml(step.actionName || humanizeId(step.actionId))}${chanceBadge} <span class="data">${quantity}</span></span><span class="queue-step-time data">${escapeHtml(time)}</span>${activeProgress}</li>`;
+        return `<li class="queue-step" data-state="${stepState}"${runnable ? ` data-step-global="${stepIndex}"` : ''}><span class="queue-step-marker">${marker}</span><span>${escapeHtml(step.actionName || humanizeId(step.actionId))}${chanceBadge} <span class="data">${quantity}</span></span><span class="queue-step-time data">${escapeHtml(time)}</span>${activeProgress}</li>`;
       }).join('');
       const locked = isExecutionLocked(status.phase);
       const mutable = !locked || planIndex !== currentPlanIndex;
@@ -1933,7 +1938,7 @@ function createApplication(shell, datasets, api) {
     const tail = resolvePlanQueue(datasets, api.getState(), state.queueGoals.filter((goal) => !completedIds.has(goal.id)));
     state.planQueue = [...completed, ...tail];
     state.executionSteps = flattenQueue();
-    const startIndex = completed.reduce((total, entry) => total + (entry.plan?.steps?.length || 0), 0);
+    const startIndex = completed.reduce((total, entry) => total + (entry.plan?.ok ? entry.plan.steps?.length || 0 : 0), 0);
     if (startIndex >= state.executionSteps.length) {
       executor.stop();
       state.planNotice = null;
