@@ -319,15 +319,28 @@ export function createPlan(datasets = {}, snapshot = {}, request = {}) {
         return fail(itemId, reason, details, source);
       }
       const source = rareGates.eligible.map(({ source: candidate }) => candidate).sort(sourceCompare)[0];
-      if (Object.keys(source.action.inputs ?? {}).length > 0) {
-        return fail(itemId, 'rare-only', { chances: rareChances(rareSources) }, source);
-      }
       const rareOutput = source.rareOutput;
       const chance = number(rareOutput?.chance, 0);
       const normalized = chance > 1 ? chance / 100 : chance;
       const perHit = Math.max(1, number(rareOutput?.qty, 0));
       if (normalized <= 0) return fail(itemId, 'rare-only', { chances: rareChances(rareSources) }, source);
       const expectedRuns = Math.ceil(need / (normalized * perHit));
+      stack.push(itemId);
+      for (const [inputId, inputPerRun] of Object.entries(source.action.inputs ?? {})) {
+        const required = number(inputPerRun, 0) * expectedRuns;
+        if (required <= 0) continue;
+        const result = ensure(inputId, required);
+        if (!result.ok) {
+          stack.pop();
+          return result;
+        }
+        projected[inputId] = quantity(projected, inputId) - required;
+      }
+      stack.pop();
+      for (const [outId, outVal] of Object.entries(source.action.outputs ?? {})) {
+        const q = number(outVal, 0);
+        if (q > 0) projected[outId] = quantity(projected, outId) + q * expectedRuns;
+      }
       steps.push({
         skillId: source.skillId,
         actionId: String(source.action.id ?? ''),

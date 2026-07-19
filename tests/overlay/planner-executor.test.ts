@@ -139,9 +139,29 @@ test('reports level and no-source blockers while planning rare drops', () => {
     { rare: rare.steps[0].rare, count: rare.steps[0].count, produceQty: rare.steps[0].produceQty, progressItemId: rare.steps[0].progressItemId },
     { rare: true, count: 20, produceQty: 1, progressItemId: 'fish' },
   );
-  const inputRare = createPlan(data({ fish: [action('fish', 'fish', 'Fish', 'fish', { bait: 1 }, { rareOutputs: [{ item: 'pearl', qty: 1, chance: 0.05 }] })] }), snapshot(), { itemId: 'pearl', qty: 1 });
-  assert.equal(inputRare.ok, false); assert.equal(inputRare.steps.at(-1).blocked.reason, 'rare-only');
-  assert.equal(inputRare.steps.at(-1).blocked.chances[0].chance, 0.05);
+  const trapActions = {
+    gathering: [action('gathering', 'gather_seed', 'Gather Seed', 'seed')],
+    trapping: [action('trapping', 'trap_talon', 'Trap Talon', 'feathers', { seed: 1 }, { rareOutputs: [{ item: 'talon', qty: 1, chance: 0.2 }] })],
+  };
+  const inputRare = createPlan(data(trapActions), snapshot(), { itemId: 'talon', qty: 2 });
+  assert.equal(inputRare.ok, true);
+  assert.deepEqual(
+    inputRare.steps.map((step) => ({ actionId: step.actionId, count: step.count, rare: step.rare, progressItemId: step.progressItemId })),
+    [
+      { actionId: 'gather_seed', count: 10, rare: undefined, progressItemId: undefined },
+      { actionId: 'trap_talon', count: 10, rare: true, progressItemId: 'feathers' },
+    ],
+  );
+  const zeroChance = createPlan(data({
+    trapping: [action('trapping', 'trap_talon', 'Trap Talon', 'feathers', {}, { rareOutputs: [{ item: 'talon', qty: 1, chance: 0 }] })],
+  }), snapshot(), { itemId: 'talon', qty: 1 });
+  assert.equal(zeroChance.ok, false);
+  assert.equal(zeroChance.reason, 'rare-only');
+  const unavailableInput = createPlan(data({
+    trapping: [action('trapping', 'trap_talon', 'Trap Talon', 'feathers', { seed: 1 }, { rareOutputs: [{ item: 'talon', qty: 1, chance: 0.2 }] })],
+  }), snapshot(), { itemId: 'talon', qty: 1 });
+  assert.equal(unavailableInput.ok, false);
+  assert.equal(unavailableInput.reason, 'no-source');
   const none = createPlan(data({}), snapshot(), { itemId: 'unknown', qty: 1 });
   assert.equal(none.ok, false); assert.equal(none.steps.at(-1).blocked.reason, 'no-source');
 });
