@@ -12,6 +12,7 @@ import {
   estimatePlanDuration,
   fitWithinViewport,
   formatDuration,
+  formatCompactNumber,
   formatFinishTime,
   isExecutionLocked,
   projectPlanState,
@@ -267,6 +268,12 @@ test('planner target combobox supports keyboard selection and submission', async
   assert.deepEqual(result.app.state.currentPlan.steps.map((step) => step.actionId), ['chop_log', 'make_plank']);
   assert.deepEqual(result.app.state.recentPlanItemIds, ['plank']);
 });
+test('formats XP progress with compact significant figures', () => {
+  assert.equal(formatCompactNumber(6_495.72), '6.5K');
+  assert.equal(formatCompactNumber(1_168_363.12), '1.17M');
+  assert.equal(formatCompactNumber(999), '999');
+});
+
 test('restores and persists queued goals and formats finish times', async () => {
   const document = new FakeDocument();
   document.defaultView.localStorage.setItem('fractured-realms-companion.queue.v1', JSON.stringify({

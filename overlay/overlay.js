@@ -485,6 +485,17 @@ function labelFor(items, id) {
   return items[id]?.label || humanizeId(id);
 }
 
+const compactNumberFormatter = new Intl.NumberFormat(undefined, {
+  notation: 'compact',
+  compactDisplay: 'short',
+  maximumSignificantDigits: 3,
+});
+
+export function formatCompactNumber(value) {
+  const numeric = Number(value);
+  return compactNumberFormatter.format(Number.isFinite(numeric) ? Math.max(0, numeric) : 0);
+}
+
 export function searchPlanTargets(itemEntries, query = '', priorityIds = [], limit = 10) {
   const normalizedQuery = String(query).trim().toLocaleLowerCase();
   const priorities = new Map(priorityIds.map((id, index) => [id, index]));
@@ -1619,8 +1630,8 @@ function createApplication(shell, datasets, api) {
       const produced = stop?.type === 'time'
         ? `${formatDuration(Number(status.stepProduced) || 0)} of ${formatDuration(Number(status.stepTarget) || 0)}`
         : stop?.type === 'xp'
-          ? `${(Number(status.stepProduced) || 0).toLocaleString()} of ${(Number(status.stepTarget) || 0).toLocaleString()} XP`
-          : `${Number(status.stepProduced) || 0} of ${Number(status.stepTarget) || 0}${current.rare ? ' rare drops' : ''}`;
+          ? `${formatCompactNumber(Number(status.stepProduced) || 0)} of ${formatCompactNumber(Number(status.stepTarget) || 0)} XP`
+          : `${formatCompactNumber(Number(status.stepProduced) || 0)} of ${formatCompactNumber(Number(status.stepTarget) || 0)}${current.rare ? ' rare drops' : ''}`;
       const planPos = `plan ${current.queuePlanIndex + 1}/${state.planQueue.length}`;
       const remaining = Number(status.remainingMs) > 0 ? ` · ~${formatDuration(status.remainingMs)}` : '';
       actionText = current.actionName || humanizeId(current.actionId);
