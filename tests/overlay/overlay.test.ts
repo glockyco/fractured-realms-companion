@@ -482,10 +482,14 @@ test('reports still-blocked plans on completion and keeps them queued', async ()
   game.emit();
 
   await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.match(app.state.executorStatus.message, /1 skipped \u2014 still blocked/u);
-  assert.ok(app.state.queueGoals.some((goal) => goal.itemId === 'totem'));
+  assert.match(app.state.executorStatus.message, /1 skipped — still blocked/u);
+  assert.equal(app.state.planQueue.length, 2);
+  const html = panel.querySelector('#fr-plan-result').innerHTML;
+  assert.match(html, /data-state="complete"/u);
+  assert.match(html, /data-state="blocked"/u);
+  assert.deepEqual(app.state.queueGoals.map((goal) => goal.itemId), ['totem']);
   const stored = JSON.parse(document.defaultView.localStorage.getItem('fractured-realms-companion.queue.v1'));
-  assert.ok(stored.goals.some((goal) => goal.itemId === 'totem'));
+  assert.deepEqual(stored.goals.map((goal) => goal.itemId), ['totem']);
   app.executor.stop();
 });
 

@@ -1191,11 +1191,9 @@ function createApplication(shell, datasets, api) {
               executor.run(state.executionSteps);
             });
           } else {
-            state.queueGoals = remainingGoals;
-            state.planQueue = resolved;
-            state.executionSteps = flattenQueue();
+            state.queueGoals = remainingGoals.filter((goal, i) => !resolved[i]?.plan?.ok);
             persistQueue();
-            state.executorStatus = { ...status, message: `Queue done \u00b7 ${skipped.length} skipped \u2014 still blocked` };
+            state.executorStatus = { ...status, message: `Queue done · ${skipped.length} skipped — still blocked` };
           }
         }
       } else if (status.phase === 'error' || status.phase === 'idle') {
