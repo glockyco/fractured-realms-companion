@@ -1,4 +1,4 @@
-import { actionBlocker, createPlan, xpForLevel } from './planner.js';
+import { actionBlocker, createPlan, sourceSkillForItem, xpForLevel } from './planner.js';
 import { createDirectExecutor } from './executor.js';
 
 export const DATA_FILES = Object.freeze([
@@ -586,7 +586,10 @@ function resolveGoalPlan(datasets, snapshot, goal) {
   }
 
   const probe = createPlan(datasets, snapshot, { itemId: goal.itemId, qty: have + 1 });
-  if (!probe.ok) return probe;
+  if (!probe.ok) {
+    probe.goalSkillId = sourceSkillForItem(datasets, goal.itemId);
+    return probe;
+  }
   if (!probe.steps.length) {
     return {
       ok: false,

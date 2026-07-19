@@ -72,6 +72,21 @@ function sourceCompare(left, right) {
   return skill || String(left.action.id ?? '').localeCompare(String(right.action.id ?? ''));
 }
 
+export function sourceSkillForItem(datasets = {}, itemId) {
+  let deterministic;
+  let rare;
+  for (const source of actionEntries(datasets.actions)) {
+    if (outputOf(source.action, itemId) > 0 && (!deterministic || sourceCompare(source, deterministic) < 0)) {
+      deterministic = source;
+    }
+    if ((source.action.rareOutputs ?? []).some((output) => output?.item === itemId && number(output?.qty, 0) > 0)
+      && (!rare || sourceCompare(source, rare) < 0)) {
+      rare = source;
+    }
+  }
+  return (deterministic || rare)?.skillId;
+}
+
 function requiredTool(action) {
   const required = action?.toolReq;
   if (required == null || required === '') return null;

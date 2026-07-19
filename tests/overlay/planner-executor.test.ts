@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { actionBlocker, createPlan, levelForXp } from '../../overlay/planner.js';
+import { actionBlocker, createPlan, levelForXp, sourceSkillForItem } from '../../overlay/planner.js';
 import { createDirectExecutor } from '../../overlay/executor.js';
 
 const xp = () => {
@@ -50,6 +50,14 @@ test('levelForXp walks level thresholds from 99 down to 1', () => {
   assert.equal(levelForXp(xp(), 0), 1);
   assert.equal(levelForXp(xp(), 850), 8);
   assert.equal(levelForXp(xp(), 9900), 99);
+});
+
+test('uses deterministic item sources before rare fallbacks for target skills', () => {
+  const actions = {
+    fishing: [action('fishing', 'fish_glaze', 'Fish Glaze', 'fish', {}, { rareOutputs: [{ item: 'glazed_crab', qty: 1, chance: 0.1 }] })],
+    cooking: [action('cooking', 'cook_glaze', 'Cook Glaze', 'glazed_crab', { crab: 1 })],
+  };
+  assert.equal(sourceSkillForItem(data(actions), 'glazed_crab'), 'cooking');
 });
 
 test('plans a partial-stock dependency chain post-order', () => {

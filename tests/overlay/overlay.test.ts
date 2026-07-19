@@ -401,6 +401,39 @@ test('queue row target labels preserve normal word spacing', async () => {
   assert.doesNotMatch(html, /\u2192 level <span class="data">80<\/span>/u);
 });
 
+test('blocked level goals retain the requested item skill', async () => {
+  const data = datasets();
+  data.items = {
+    ...data.items,
+    crab: { label: 'Crab', type: 'material' },
+    glazed_crab: { label: 'Glazed Crab', type: 'food' },
+  };
+  data.actions = {
+    fishing: [{
+      id: 'catch_crab', name: 'Catch Crab', levelReq: 80, interval: 1000, xp: 5,
+      outputs: { crab: 1 },
+    }],
+    cooking: [{
+      id: 'glaze_crab', name: 'Glaze Crab', levelReq: 1, interval: 1000, xp: 5,
+      inputs: { crab: 1 }, outputs: { glazed_crab: 1 },
+    }],
+  };
+  data.skills = [{ id: 'fishing', name: 'Fishing' }, { id: 'cooking', name: 'Cooking' }];
+
+  const document = new FakeDocument();
+  const result = await bootOverlay({ document, window: { __frCompanion: api() }, fetch: fetchFor(data) });
+  const panel = result.shell.panels.plan;
+  result.app.state.planItemId = 'glazed_crab';
+  panel.querySelector('#fr-plan-target').value = 'level';
+  panel.querySelector('#fr-plan-qty').value = '68';
+  panel.querySelector('#fr-plan-form').dispatch('submit');
+
+  const entry = result.app.state.planQueue[0];
+  assert.equal(entry.plan.blocked.skillId, 'fishing');
+  assert.equal(entry.plan.goalSkillId, 'cooking');
+  assert.match(panel.querySelector('#fr-plan-result').innerHTML, /Glazed Crab → Cooking <span class="data">68<\/span>/u);
+});
+
 test('runs only the unblocked plans in a mixed queue', async () => {
   const document = new FakeDocument();
   const calls = [];
