@@ -136,6 +136,7 @@ svg {
   max-height: calc(100dvh - 1rem);
   display: grid;
   grid-template-rows: auto auto auto minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   overflow: hidden;
   resize: both;
   border: 1px solid var(--fr-neutral-700);
@@ -162,7 +163,7 @@ svg {
 .panel[data-dragging="true"] { transition: none; }
 .panel[data-dragging="true"] .panel-drag-handle { cursor: grabbing; }
 .identity svg { color: var(--fr-harbor-400); width: var(--fr-icon-lg); height: var(--fr-icon-lg); }
-.identity strong { font-size: 0.9375rem; font-weight: 650; letter-spacing: -0.01em; }
+.identity strong { min-width: 0; overflow: hidden; font-size: 0.9375rem; font-weight: 650; letter-spacing: -0.01em; text-overflow: ellipsis; white-space: nowrap; }
 .icon-button {
   width: var(--fr-control);
   height: var(--fr-control);
@@ -409,7 +410,9 @@ tbody tr:last-child td { border-bottom: 0; }
 }
 .executor-status { min-width: 0; }
 .executor-status strong { display: block; }
-.executor-status p { margin: var(--fr-s1) 0 0; overflow: hidden; color: var(--fr-neutral-300); font-size: 0.75rem; text-overflow: ellipsis; white-space: nowrap; }
+.executor-status p { display: flex; align-items: baseline; min-width: 0; margin: var(--fr-s1) 0 0; color: var(--fr-neutral-300); font-size: 0.75rem; }
+.exec-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.exec-meta { flex: 0 0 auto; white-space: nowrap; }
 .loading-line { height: 0.25rem; overflow: hidden; background: var(--fr-neutral-900); }
 .compact-strip { display: none; }
 .panel[data-compact="true"] {
@@ -430,10 +433,10 @@ tbody tr:last-child td { border-bottom: 0; }
   padding: var(--fr-s3) var(--fr-s4);
 }
 .panel[data-compact="true"] .compact-strip > #fr-compact-phase { grid-column: 1; grid-row: 1; }
-.panel[data-compact="true"] .compact-strip > #fr-compact-message { grid-column: 1; grid-row: 2; }
+.panel[data-compact="true"] .compact-strip > #fr-compact-message { grid-column: 1; grid-row: 2; min-width: 0; }
 .panel[data-compact="true"] .compact-strip > #fr-compact-progress { grid-column: 1 / -1; grid-row: 3; }
 .panel[data-compact="true"] .compact-strip > .compact-actions { grid-column: 2; grid-row: 1 / 3; display: flex; gap: var(--fr-s1); align-items: center; }
-.panel[data-compact="true"] .compact-strip p { margin: 0; overflow: hidden; color: var(--fr-neutral-300); font-size: 0.75rem; text-overflow: ellipsis; white-space: nowrap; }
+.panel[data-compact="true"] .compact-strip p { display: flex; align-items: baseline; min-width: 0; margin: 0; overflow: hidden; color: var(--fr-neutral-300); font-size: 0.75rem; text-overflow: ellipsis; white-space: nowrap; }
 .loading-line::after { content: ""; display: block; width: 35%; height: 100%; background: var(--fr-harbor-400); animation: loading 1.2s linear infinite; }
 @keyframes loading { from { transform: translateX(-100%); } to { transform: translateX(300%); } }
 @media (max-width: 40rem) {
@@ -793,7 +796,7 @@ export function createOverlayShell(documentRef) {
   panel.hidden = true;
   const header = makeElement(documentRef, 'header', { class: 'panel-header' });
   const identity = makeElement(documentRef, 'div', {
-    class: 'identity panel-drag-handle', title: 'Drag companion window',
+    class: 'identity panel-drag-handle',
     html: `${ICONS.helm}<strong>Fractured Realms Companion</strong>`,
   });
   const compactToggle = makeElement(documentRef, 'button', {
@@ -839,7 +842,7 @@ export function createOverlayShell(documentRef) {
   }));
   const compactStrip = makeElement(documentRef, 'div', {
     class: 'compact-strip',
-    html: '<strong id="fr-compact-phase"></strong><p id="fr-compact-message"></p><progress class="executor-progress" id="fr-compact-progress" max="1" value="0"></progress><div class="compact-actions"><button class="icon-button" id="fr-compact-resume" type="button" title="Resume queue" aria-label="Resume queue" hidden>' + ICONS.resume + '</button><button class="icon-button danger" id="fr-compact-stop" type="button" title="Stop queue" aria-label="Stop queue">' + ICONS.stop + '</button></div>',
+    html: '<strong id="fr-compact-phase"></strong><p id="fr-compact-message"></p><progress class="executor-progress" id="fr-compact-progress" max="1" value="0"></progress><div class="compact-actions"><button class="icon-button accent" id="fr-compact-start" type="button" title="Start queue" aria-label="Start queue" hidden>' + ICONS.play + '</button><button class="icon-button" id="fr-compact-resume" type="button" title="Resume queue" aria-label="Resume queue" hidden>' + ICONS.resume + '</button><button class="icon-button danger" id="fr-compact-stop" type="button" title="Stop queue" aria-label="Stop queue">' + ICONS.stop + '</button></div>',
   });
   panel.append(header, loading, error, tabs, tabpanels, compactStrip);
   shadow.append(style, launcher, panel);
@@ -1041,6 +1044,7 @@ function createApplication(shell, datasets, api) {
   const compactPhase = shell.compactStrip?.querySelector?.('#fr-compact-phase');
   const compactMessage = shell.compactStrip?.querySelector?.('#fr-compact-message');
   const compactProgress = shell.compactStrip?.querySelector?.('#fr-compact-progress');
+  const compactStart = shell.compactStrip?.querySelector?.('#fr-compact-start');
   const compactResume = shell.compactStrip?.querySelector?.('#fr-compact-resume');
   const compactStop = shell.compactStrip?.querySelector?.('#fr-compact-stop');
 
@@ -1465,17 +1469,22 @@ function createApplication(shell, datasets, api) {
     const phaseLabels = { idle: 'Ready', starting: 'Starting', running: 'Running', paused: 'Paused', complete: 'Complete', error: 'Stopped' };
     const phaseText = state.planNotice?.plan && !state.planNotice.plan.ok ? 'Plan blocked' : (phaseLabels[status.phase] || status.phase);
     let messageText;
+    let actionText;
+    let metaText = '';
     if (current) {
       const produced = `${Number(status.stepProduced) || 0} of ${Number(status.stepTarget) || 0}${current.rare ? ' rare drops' : ''}`;
       const planPos = `plan ${current.queuePlanIndex + 1}/${state.planQueue.length}`;
       const remaining = Number(status.remainingMs) > 0 ? ` · ~${formatDuration(status.remainingMs)}` : '';
-      const finish = locked && Number(status.remainingMs) > 0 ? ` · done ~${formatFinishTime(status.remainingMs)}` : '';
-      messageText = `${current.actionName || humanizeId(current.actionId)} · ${produced} · ${planPos}${remaining}${finish}`;
+      actionText = current.actionName || humanizeId(current.actionId);
+      metaText = `${produced} · ${planPos}${remaining}`;
+      messageText = `${actionText} · ${metaText}`;
     } else if (state.planQueue.length) {
       const estimate = queueEstimate();
       messageText = `${state.planQueue.length} ${state.planQueue.length === 1 ? 'plan' : 'plans'} · ${total} ${total === 1 ? 'action' : 'actions'}${estimate ? ` · ~${formatDuration(estimate)}` : ''}`;
+      actionText = messageText;
     } else {
       messageText = status.message || 'Add one or more plans to the queue.';
+      actionText = messageText;
     }
     const stepFraction = Number(status.stepTarget) > 0 ? Math.min(1, Math.max(0, Number(status.stepProduced) / Number(status.stepTarget))) : 0;
     const launcherText = locked
@@ -1485,7 +1494,7 @@ function createApplication(shell, datasets, api) {
       : status.phase === 'complete' ? 'Companion · queue done'
         : status.phase === 'error' ? 'Companion · queue stopped' : 'Companion';
     return {
-      phaseText, messageText, launcherText,
+      phaseText, messageText, actionText, metaText, launcherText,
       progressMax: Math.max(1, total),
       progressValue: status.phase === 'complete' ? total : Math.max(0, Math.max(0, currentIndex) + stepFraction),
     };
@@ -1515,6 +1524,12 @@ function createApplication(shell, datasets, api) {
     }
   };
 
+  const setStatusMessage = (el, described) => {
+    if (!el) return;
+    const meta = described.metaText ? `<span class="exec-meta"> · ${escapeHtml(described.metaText)}</span>` : '';
+    el.innerHTML = `<span class="exec-name">${escapeHtml(described.actionText ?? described.messageText)}</span>${meta}`;
+  };
+
   function renderExecutor() {
     const view = queueView();
     const { status, locked } = view;
@@ -1526,11 +1541,10 @@ function createApplication(shell, datasets, api) {
       queueTotal.textContent = `${state.planQueue.length} ${state.planQueue.length === 1 ? 'plan' : 'plans'} · about ${formatDuration(queueEstimate())}${queueFinish}`;
     }
     executorPhase.textContent = described.phaseText;
-    executorMessage.textContent = described.messageText;
+    setStatusMessage(executorMessage, described);
     executorProgress.max = described.progressMax;
     executorProgress.value = described.progressValue;
     for (const control of skillTable.querySelectorAll?.('[data-start-action]') || []) control.disabled = locked;
-    if (locked) closePlanTargets();
     runButton.disabled = locked || status.phase === 'complete' || !queueIsRunnable();
     resumeButton.hidden = status.phase !== 'paused';
     resumeButton.classList?.toggle?.('attention', status.phase === 'paused');
@@ -1542,13 +1556,17 @@ function createApplication(shell, datasets, api) {
     const label = shell.launcher.querySelector?.('#fr-launcher-label') ?? shell.shadow.querySelector?.('#fr-launcher-label');
     if (label) label.textContent = described.launcherText;
     if (compactPhase) compactPhase.textContent = described.phaseText;
-    if (compactMessage) compactMessage.textContent = described.messageText;
+    setStatusMessage(compactMessage, described);
     if (compactProgress) {
       compactProgress.max = executorProgress.max;
       compactProgress.value = executorProgress.value;
     }
     if (compactResume) compactResume.hidden = status.phase !== 'paused';
-    if (compactStop) compactStop.disabled = !locked;
+    if (compactStart) {
+      compactStart.hidden = locked;
+      compactStart.disabled = runButton.disabled;
+    }
+    if (compactStop) compactStop.hidden = !locked;
   }
 
   function renderPlanNotice(notice) {
@@ -1796,7 +1814,7 @@ function createApplication(shell, datasets, api) {
     if (action === 'edit') planItem.focus?.();
   });
 
-  runButton.addEventListener('click', () => {
+  const startQueue = () => {
     if (isExecutionLocked(state.executorStatus?.phase) || !state.planQueue.length) return;
     rebuildQueue();
     const blocked = state.planQueue.find((entry) => !entry.plan?.ok);
@@ -1808,9 +1826,11 @@ function createApplication(shell, datasets, api) {
     }
     state.executionSteps = flattenQueue();
     if (state.executionSteps.length) executor.run(state.executionSteps);
-  });
+  };
+  runButton.addEventListener('click', startQueue);
   resumeButton.addEventListener('click', () => executor.resume());
   stopButton.addEventListener('click', () => executor.stop());
+  compactStart?.addEventListener('click', startQueue);
   compactResume?.addEventListener('click', () => executor.resume());
   compactStop?.addEventListener('click', () => executor.stop());
   clearButton.addEventListener('click', () => {

@@ -305,6 +305,22 @@ test('compact strip exposes a resume control hidden unless paused', async () => 
   assert.equal(resume.hidden, false);
 });
 
+test('compact strip swaps between start and stop by run state', async () => {
+  const document = new FakeDocument();
+  const result = await bootOverlay({ document, window: { __frCompanion: api() }, fetch: fetchFor(datasets()) });
+  const start = result.shell.compactStrip.querySelector('#fr-compact-start');
+  const stop = result.shell.compactStrip.querySelector('#fr-compact-stop');
+  assert.ok(start);
+  result.app.state.executorStatus = { phase: 'idle', currentStep: null };
+  result.app.renderPlan();
+  assert.equal(start.hidden, false);
+  assert.equal(stop.hidden, true);
+  result.app.state.executorStatus = { phase: 'running', currentStep: 0 };
+  result.app.renderPlan();
+  assert.equal(start.hidden, true);
+  assert.equal(stop.hidden, false);
+});
+
 
 test('queued plans project earlier deterministic outputs and estimate duration', () => {
   const goals = [
