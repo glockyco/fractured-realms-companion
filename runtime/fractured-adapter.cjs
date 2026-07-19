@@ -66,7 +66,7 @@ function apiCall(token, pathname, payload) {
 
 function bridgeScript(token) {
   const tokenLiteral = JSON.stringify(String(token));
-  return `<script>\n(() => {\n  const token = ${tokenLiteral};\n  const call = (pathname, payload) => apiCall(pathname, payload);\n  const apiCall = (pathname, payload) => fetch(pathname, {\n    method: 'POST',\n    headers: { 'Content-Type': 'application/json', 'X-Crossover-Token': token },\n    body: JSON.stringify(payload)\n  }).then(async (response) => {\n    try { return await response.json(); }\n    catch { return { ok: false, error: 'Unable to contact the desktop bridge' }; }\n  }).catch(() => ({ ok: false, error: 'Unable to contact the desktop bridge' }));\n  const electronAPI = {\n    saveGame: async function () { return { ok: true }; },\n    submitFeedback: function (payload) { return call('/api/feedback', payload || {}); },\n    openExternal: function (url) { return call('/api/open-external', { url }); },\n    steamUnlock: function (apiName) { return call('/api/steam/unlock', { apiName }); },\n    steamResetAchievements: async function () { return { ok: false, reason: 'disabled-in-build' }; },\n    getFullscreen: async function () { return Boolean(document.fullscreenElement); },\n    setFullscreen: async function (enabled) {\n      try {\n        if (enabled) {\n          if (!document.documentElement || typeof document.documentElement.requestFullscreen !== 'function') {\n            throw new Error('Fullscreen API unavailable');\n          }\n          await document.documentElement.requestFullscreen();\n        } else if (typeof document.exitFullscreen === 'function' && document.fullscreenElement) {\n          await document.exitFullscreen();\n        }\n        return { ok: true };\n      } catch (error) {\n        return { ok: false, error: error && error.message ? error.message : String(error) };\n      }\n    },\n    quitApp: function () { return call('/api/quit', {}); },\n    onFullscreenChanged: function (callback) {\n      const handler = () => callback(Boolean(document.fullscreenElement));\n      document.addEventListener('fullscreenchange', handler);\n      return () => document.removeEventListener('fullscreenchange', handler);\n    }\n  };\n  window.electronAPI = electronAPI;\n})();\n</script>`;
+  return `<script>\n(() => {\n  const token = ${tokenLiteral};\n  const call = (pathname, payload) => apiCall(pathname, payload);\n  const apiCall = (pathname, payload) => fetch(pathname, {\n    method: 'POST',\n    headers: { 'Content-Type': 'application/json', 'X-Crossover-Token': token },\n    body: JSON.stringify(payload)\n  }).then(async (response) => {\n    try { return await response.json(); }\n    catch { return { ok: false, error: 'Unable to contact the desktop bridge' }; }\n  }).catch(() => ({ ok: false, error: 'Unable to contact the desktop bridge' }));\n  const electronAPI = {\n    saveGame: async function () { return { ok: true }; },\n    submitFeedback: function (payload) { return call('/api/feedback', payload || {}); },\n    openExternal: function (url) { return call('/api/open-external', { url }); },\n    steamUnlock: function (apiName) { return call('/api/steam/unlock', { apiName }); },\n    steamResetAchievements: async function () { return { ok: false, reason: 'disabled-in-build' }; },\n    getFullscreen: async function () { return Boolean(document.fullscreenElement); },\n    setFullscreen: async function (enabled) {\n      try {\n        if (enabled) {\n          if (!document.documentElement || typeof document.documentElement.requestFullscreen !== 'function') {\n            throw new Error('Fullscreen API unavailable');\n          }\n          await document.documentElement.requestFullscreen();\n        } else if (typeof document.exitFullscreen === 'function' && document.fullscreenElement) {\n          await document.exitFullscreen();\n        }\n        return { ok: true };\n      } catch (error) {\n        return { ok: false, error: error && error.message ? error.message : String(error) };\n      }\n    },\n    quitApp: function () { return call('/api/quit', { confirm: 'fractured-realms' }); },\n    onFullscreenChanged: function (callback) {\n      const handler = () => callback(Boolean(document.fullscreenElement));\n      document.addEventListener('fullscreenchange', handler);\n      return () => document.removeEventListener('fullscreenchange', handler);\n    }\n  };\n  window.electronAPI = electronAPI;\n})();\n</script>`;
 }
 
 function feedbackPayload(input) {
@@ -158,14 +158,19 @@ async function handleApi({ method, pathname, headers, body, shell, env = process
     }
   }
 
-  setImmediate(() => {
-    try {
-      if (services && typeof services.quitApp === 'function') services.quitApp();
-    } catch {
-      // The response has already been returned; app shutdown errors are contained by the host.
-    }
-  });
-  return response(200, { ok: true });
+  if (pathname === '/api/quit') {
+    if (payload.confirm !== 'fractured-realms') return response(400, { ok: false, error: 'Quit requires confirmation.' });
+    setImmediate(() => {
+      try {
+        if (services && typeof services.quitApp === 'function') services.quitApp(payload);
+      } catch {
+        // The response has already been returned; app shutdown errors are contained by the host.
+      }
+    });
+    return response(200, { ok: true });
+  }
+
+  return response(500, { ok: false, error: 'Unsupported API request.' });
 }
 
 module.exports = { id: SERVICE_ID, bridgeScript, handleApi };

@@ -4,13 +4,13 @@ import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { parseArgs, type ParseArgsConfig } from 'node:util';
 import { formatDoctor, runDoctor, type DoctorOptions } from './doctor.ts';
-import { launchCompanion, type LaunchOptions } from './launch.ts';
+import { launchCompanion, relaunchCompanion, type LaunchOptions } from './launch.ts';
 import { refreshCompanion, type RefreshOptions } from './refresh.ts';
 import { restoreCompanion, type RestoreOptions } from './restore.ts';
 
 export const VERSION = '0.1.0';
 
-const COMMANDS = new Set(['doctor', 'refresh', 'restore', 'launch']);
+const COMMANDS = new Set(['doctor', 'refresh', 'restore', 'launch', 'relaunch']);
 const OPTION_NAMES = new Set(['steam-root', 'bottle', 'json', 'no-open', 'no-patch', 'help', 'version']);
 const COMMAND_ONLY = new Set(['json', 'no-open', 'no-patch']);
 const STRING_OPTIONS = new Set(['steam-root', 'bottle']);
@@ -22,12 +22,13 @@ Commands:
   refresh                Extract game data and update the patch
   restore                Restore the original game archive
   launch                 Launch Fractured Realms with the companion
+  relaunch               Quit a running companion game, refresh, and launch
 
 Options:
   --steam-root PATH      Use an explicit Steam installation root
   --bottle NAME          CrossOver bottle name (macOS)
   --json                 Emit doctor rows as JSON
-  --no-open              Do not open the companion browser (launch)
+  --no-open              Do not open the companion browser (launch, relaunch)
   --no-patch             Extract data without patching (refresh)
   --help                 Show this help
   --version              Print the CLI version
@@ -40,6 +41,7 @@ export interface CliDependencies {
   refreshCompanion?: typeof refreshCompanion;
   restoreCompanion?: typeof restoreCompanion;
   launchCompanion?: typeof launchCompanion;
+  relaunchCompanion?: typeof relaunchCompanion;
   stdout?: Output;
   stderr?: Output;
 }
@@ -110,7 +112,7 @@ function parseCommand(argv: readonly string[], stderr: Output): { command?: stri
   const command = positionals[0];
   if (command !== undefined && !COMMANDS.has(command)) return { code: usageError(stderr, `unknown command '${command}'`) };
   if (values.json && command !== 'doctor') return { code: usageError(stderr, "option '--json' is only valid for doctor") };
-  if (values['no-open'] && command !== 'launch') return { code: usageError(stderr, "option '--no-open' is only valid for launch") };
+  if (values['no-open'] && command !== 'launch' && command !== 'relaunch') return { code: usageError(stderr, "option '--no-open' is only valid for launch or relaunch") };
   if (values['no-patch'] && command !== 'refresh') return { code: usageError(stderr, "option '--no-patch' is only valid for refresh") };
   return { command, values };
 }
@@ -158,7 +160,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2), deps
       write(stdout, `Restored ${result.archivePath} (build ${result.buildId}).\n`);
       return 0;
     }
-    const launch = deps.launchCompanion ?? launchCompanion;
+    const launch = command === 'relaunch' ? (deps.relaunchCompanion ?? relaunchCompanion) : (deps.launchCompanion ?? launchCompanion);
     const result = await launch({ ...common, noOpen: values['no-open'] === true } as LaunchOptions);
     write(stdout, `Companion ready at ${result.url}.\n`);
     return 0;

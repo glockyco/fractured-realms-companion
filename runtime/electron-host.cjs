@@ -177,7 +177,7 @@ function validateStartConfig(config) {
   const { app, shell, path: pathModule, fs: fsModule, profile, adapter } = config;
   if (!app || !shell || !pathModule || !fsModule) throw new TypeError('start requires app, shell, path, and fs');
   if (!profile || typeof profile !== 'object') throw new TypeError('start requires profile');
-  const required = ['schema_version', 'id', 'display_name', 'service', 'assets_relative_to_runtime', 'bind_host', 'browser_host', 'port', 'max_request_bytes', 'companion'];
+  const required = ['schema_version', 'id', 'display_name', 'service', 'revision', 'assets_relative_to_runtime', 'bind_host', 'browser_host', 'port', 'max_request_bytes', 'companion'];
   const unknown = Object.keys(profile).filter((key) => !required.includes(key));
   if (unknown.length) throw new TypeError(`Invalid browser profile: unknown ${unknown.join(', ')}`);
   const missing = required.filter((key) => !(key in profile));
@@ -185,7 +185,7 @@ function validateStartConfig(config) {
   if (profile.schema_version !== 1 || typeof profile.id !== 'string' || !profile.id || typeof profile.display_name !== 'string' || !profile.display_name) {
     throw new TypeError('Invalid browser profile identity');
   }
-  if (typeof profile.service !== 'string' || !profile.service || typeof profile.assets_relative_to_runtime !== 'string' || !profile.assets_relative_to_runtime || pathModule.isAbsolute(profile.assets_relative_to_runtime) || profile.assets_relative_to_runtime.includes('\0')) {
+  if (typeof profile.service !== 'string' || !profile.service || typeof profile.revision !== 'string' || !/^[0-9a-f]{64}$/.test(profile.revision) || typeof profile.assets_relative_to_runtime !== 'string' || !profile.assets_relative_to_runtime || pathModule.isAbsolute(profile.assets_relative_to_runtime) || profile.assets_relative_to_runtime.includes('\0')) {
     throw new TypeError('Invalid browser profile paths or service');
   }
   const loopbackHosts = new Set(['127.0.0.1', 'localhost', '::1']);
@@ -328,7 +328,7 @@ async function start(config) {
           textResponse(res, 405, 'Method Not Allowed', headOnly);
           return;
         }
-        jsonResponse(res, 200, { ok: true, service: profile.service, host: profile.bind_host, port: profile.port }, headOnly);
+        jsonResponse(res, 200, { ok: true, service: profile.service, revision: profile.revision, host: profile.bind_host, port: profile.port }, headOnly);
         return;
       }
 
@@ -339,7 +339,9 @@ async function start(config) {
           jsonResponse(res, 403, { ok: false, error: 'Forbidden' }, headOnly);
           return;
         }
-        if (!tokenMatches(headerValue(req.headers, 'x-crossover-token'), token)) {
+        // Browsers send Origin on cross-origin and same-origin fetch POSTs; an Origin-less quit is a local non-browser client. The host binds loopback only, while Host and the adapter confirmation remain required gates.
+        const cliQuit = pathname === '/api/quit' && originHeader === undefined;
+        if (!cliQuit && !tokenMatches(headerValue(req.headers, 'x-crossover-token'), token)) {
           jsonResponse(res, 401, { ok: false, error: 'Unauthorized' }, headOnly);
           return;
         }

@@ -1,7 +1,12 @@
 import { execFileSync, spawn as nodeSpawn, type SpawnOptions } from 'node:child_process';
+import { mkdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { OperationalError } from './lib/errors.ts';
 import { runDoctor } from './doctor.ts';
+import { refreshCompanion, type RefreshOptions, type RefreshResult } from './refresh.ts';
+import { COMPANION_REVISION } from './patch/revision.ts';
 import { discoverInstall, type DiscoverInstallOptions, type SteamInstall } from './platform/steam.ts';
+import { stateDir } from './platform/state.ts';
 
 const APP_ID = '3789070';
 const PORT = 48766;
@@ -44,6 +49,8 @@ export type CommandExistsFunction = (command: string) => boolean | Promise<boole
 export type NowFunction = () => number;
 export type SetTimerFunction = (callback: () => void, milliseconds: number) => unknown;
 export type ClearTimerFunction = (handle: unknown) => void;
+export type LaunchLock = { acquire(stateDirectory: string): () => void };
+export type RequestQuitFunction = (url: string) => Promise<unknown>;
 
 export interface LaunchDependencies {
   doctor?: DoctorFunction;
@@ -55,10 +62,13 @@ export interface LaunchDependencies {
   now?: NowFunction;
   setTimer?: SetTimerFunction;
   clearTimer?: ClearTimerFunction;
+  lock?: LaunchLock;
+  requestQuit?: RequestQuitFunction;
 }
 
 export interface LaunchOptions extends DiscoverInstallOptions {
   noOpen?: boolean;
+  stateDirectory?: string;
   dependencies?: LaunchDependencies;
 }
 
@@ -139,7 +149,52 @@ async function normaliseHealth(value: HealthResult | Response | unknown): Promis
   return { status: 0, body: undefined };
 }
 
-function healthy(response: HealthResult): boolean {
+function fileLaunchLock(stateDirectory: string): () => void {
+  mkdirSync(stateDirectory, { recursive: true });
+  const lockPath = join(stateDirectory, 'launch.lock');
+  const acquire = (): void => {
+    try {
+      writeFileSync(lockPath, String(process.pid), { flag: 'wx' });
+      return;
+    } catch (error) {
+      if (!(error && typeof error === 'object' && 'code' in error && error.code === 'EEXIST')) throw error;
+      try {
+        const stat = statSync(lockPath);
+        if (Date.now() - stat.mtimeMs > 5 * 60 * 1000) {
+          unlinkSync(lockPath);
+          writeFileSync(lockPath, String(process.pid), { flag: 'wx' });
+          return;
+        }
+      } catch (statError) {
+        if (statError && typeof statError === 'object' && 'code' in statError && statError.code === 'ENOENT') {
+          writeFileSync(lockPath, String(process.pid), { flag: 'wx' });
+          return;
+        }
+      }
+      throw new OperationalError('another fractured-companion launch is already in progress');
+    }
+  };
+  try { acquire(); } catch (error) {
+    if (error instanceof OperationalError) throw error;
+    throw new OperationalError('could not acquire the fractured-companion launch lock', error instanceof Error ? { cause: error } : undefined);
+  }
+  return () => { try { unlinkSync(lockPath); } catch { /* best effort */ } };
+}
+
+function defaultRequestQuit(url: string): Promise<unknown> {
+  return fetch(`${url.replace(/\/$/u, '')}/api/quit`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ confirm: 'fractured-realms' }),
+  });
+}
+
+function healthy(response: HealthResult, expectedRevision = COMPANION_REVISION): boolean {
+  const body = healthBody(response.body);
+  return response.status === 200 && body?.ok === true && body.service === SERVICE && body.host === HOST && body.port === PORT && body.revision === expectedRevision;
+}
+
+function isOwnService(response: HealthResult): boolean {
   const body = healthBody(response.body);
   return response.status === 200 && body?.ok === true && body.service === SERVICE && body.host === HOST && body.port === PORT;
 }
@@ -218,8 +273,28 @@ export async function launchCompanion(options: LaunchOptions = {}): Promise<{ ur
   const setTimer = dependencies.setTimer ?? defaultSetTimer;
   const clearTimer = dependencies.clearTimer ?? defaultClearTimer;
   const platform = options.platform ?? process.platform;
+  const url = `http://${HOST}:${PORT}/`;
 
-  const doctorOptions = { steamRoot: options.steamRoot, bottle: options.bottle, platform, env: options.env, home: options.home } as Parameters<DoctorFunction>[0];
+  let probe: HealthResult | undefined;
+  try { probe = await normaliseHealth(await requestHealth(HEALTH_URL)); } catch { probe = undefined; }
+  if (probe && healthy(probe)) {
+    if (!options.noOpen) {
+      const opener = openerCommand(platform, url);
+      await invokeSpawn(spawn, opener.command, opener.args);
+    }
+    return { url, command: '', args: [] };
+  }
+  if (probe && isOwnService(probe)) {
+    throw new OperationalError("a companion with an outdated revision is running; run 'fractured-companion relaunch' or quit the game first");
+  }
+  if (probe && probe.status !== 0) {
+    throw new OperationalError('port 48766 is already serving an unknown service; free it before launching');
+  }
+
+  const stateDirectory = options.stateDirectory ?? stateDir({ platform, env: options.env, home: options.home });
+  const releaseLock = (dependencies.lock ?? { acquire: fileLaunchLock }).acquire(stateDirectory);
+  try {
+    const doctorOptions = { steamRoot: options.steamRoot, bottle: options.bottle, platform, env: options.env, home: options.home } as Parameters<DoctorFunction>[0];
   const doctorResult = await doctor(doctorOptions);
   const failure = doctorFailure(doctorResult);
   if (failure) throw failure;
@@ -284,12 +359,48 @@ export async function launchCompanion(options: LaunchOptions = {}): Promise<{ ur
       if (waitTimer !== undefined) clearTimer(waitTimer);
     }
   }
-  if (!isHealthy) throw new OperationalError(`companion host did not become healthy; open http://${HOST}:${PORT}/ manually`);
+  if (!isHealthy) throw new OperationalError(`companion host did not become healthy with the expected companion revision; open http://${HOST}:${PORT}/ manually`);
 
-  const url = `http://${HOST}:${PORT}/`;
   if (!options.noOpen) {
     const opener = openerCommand(platform, url);
     await invokeSpawn(spawn, opener.command, opener.args);
   }
   return { url, command: game.command, args: game.args };
+  } finally {
+    releaseLock();
+  }
+}
+
+export async function relaunchCompanion(options: LaunchOptions & { refresh?: (options: RefreshOptions) => RefreshResult | Promise<RefreshResult> } = {}): Promise<{ url: string; command: string; args: string[] }> {
+  const dependencies = options.dependencies ?? {};
+  const requestHealth = dependencies.requestHealth ?? defaultRequestHealth;
+  const requestQuit = dependencies.requestQuit ?? defaultRequestQuit;
+  const sleep = dependencies.sleep ?? defaultSleep;
+  const now = dependencies.now ?? Date.now;
+  const platform = options.platform ?? process.platform;
+  const url = `http://${HOST}:${PORT}/`;
+  let probe: HealthResult | undefined;
+  try { probe = await normaliseHealth(await requestHealth(HEALTH_URL)); } catch { probe = undefined; }
+  if (probe && isOwnService(probe)) {
+    await requestQuit(url);
+    const deadline = now() + 30_000;
+    let stopped = false;
+    while (now() < deadline) {
+      try {
+        const response = await normaliseHealth(await requestHealth(HEALTH_URL));
+        if (response.status === 0) { stopped = true; break; }
+      } catch {
+        stopped = true;
+        break;
+      }
+      const delay = Math.min(500, Math.max(0, deadline - now()));
+      if (delay === 0) break;
+      await sleep(delay);
+    }
+    if (!stopped) throw new OperationalError('the running game did not shut down; close it manually and retry');
+  }
+  const stateDirectory = options.stateDirectory ?? stateDir({ platform, env: options.env, home: options.home });
+  const refresh = options.refresh ?? refreshCompanion;
+  await refresh({ steamRoot: options.steamRoot, bottle: options.bottle, platform, stateDirectory });
+  return launchCompanion(options);
 }

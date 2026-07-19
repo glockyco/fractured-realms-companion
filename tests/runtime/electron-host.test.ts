@@ -58,6 +58,22 @@ function get(url: string): Promise<Response> {
   });
 }
 
+function post(url: string, pathname: string, headers: Record<string, string> = {}, body: unknown = {}): Promise<Response> {
+  return new Promise((resolve, reject) => {
+    const target = new URL(pathname, url);
+    const client = request(target, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers } }, (response) => {
+      let text = '';
+      response.setEncoding('utf8');
+      response.on('data', (chunk: string) => { text += chunk; });
+      response.once('end', () => resolve({ statusCode: response.statusCode ?? 0, body: text }));
+      response.once('error', reject);
+    });
+    client.once('error', reject);
+    client.end(JSON.stringify(body));
+  });
+}
+
+
 const OMIT_COMPANION = Symbol('omit companion');
 const OMIT_OPEN_BROWSER = Symbol('omit openBrowser');
 
@@ -68,6 +84,7 @@ function createConfig(root: string, port: number, companion: unknown = OMIT_COMP
     id: 'fractured-realms',
     display_name: 'Fractured Realms',
     service: FRACTURED_SERVICE,
+    revision: 'f'.repeat(64),
     assets_relative_to_runtime: path.relative(runtimeDirectory, root),
     bind_host: '127.0.0.1',
     browser_host: '127.0.0.1',
@@ -75,6 +92,7 @@ function createConfig(root: string, port: number, companion: unknown = OMIT_COMP
     max_request_bytes: 65536,
   };
   if (companion !== OMIT_COMPANION) profile.companion = companion;
+  const quitCalls: unknown[] = [];
   const config: Record<string, unknown> = {
     app: {
       on() {},
@@ -87,9 +105,11 @@ function createConfig(root: string, port: number, companion: unknown = OMIT_COMP
     adapter: {
       id: FRACTURED_SERVICE,
       bridgeScript: () => '<script data-bridge>window.__bridge = true;</script>',
-      handleApi: async () => null,
+      handleApi,
     },
+    services: { quitApp: (payload: unknown) => { quitCalls.push(payload); } },
     openCalls,
+    quitCalls,
   };
   if (openBrowser !== OMIT_OPEN_BROWSER) config.openBrowser = openBrowser;
   return config;
@@ -123,6 +143,7 @@ test('injects the bridge and companion overlay before the first module script', 
     assert.deepEqual(JSON.parse(health.body), {
       ok: true,
       service: FRACTURED_SERVICE,
+      revision: 'f'.repeat(64),
       host: '127.0.0.1',
       port: Number(new URL(handle.url).port),
     });
@@ -217,6 +238,24 @@ test('returns 502 when achievement activation has no native client', async () =>
   assert.deepEqual(response, { status: 502, body: { ok: false, reason: 'no-client' } });
 });
 
+test('allows confirmed Origin-less CLI quit while keeping other APIs token-protected', async () => {
+  const root = createAssets();
+  const config = createConfig(root, await availablePort(), true, false);
+  const handle = await start(config);
+  try {
+    const quit = await post(handle.url, '/api/quit', {}, { confirm: 'fractured-realms' });
+    assert.equal(quit.statusCode, 200);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(config.quitCalls, [{ confirm: 'fractured-realms' }]);
+    const wrong = await post(handle.url, '/api/quit', {}, { confirm: 'wrong' });
+    assert.equal(wrong.statusCode, 400);
+    const unauthorized = await post(handle.url, '/api/steam/unlock', {}, { apiName: 'x' });
+    assert.equal(unauthorized.statusCode, 401);
+  } finally {
+    await handle.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 test('rejects a profile with a nonboolean companion value', async () => {
   const root = createAssets();
   try {

@@ -4,12 +4,15 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, 
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { runInNewContext } from 'node:vm';
 import { FRACTURED_MARKER, createFracturedApply } from '../../src/patch/fracturedAdapter.ts';
 import { ELECTRON_HOST_SOURCE, EXECUTOR_SOURCE, FRACTURED_ADAPTER_SOURCE, OVERLAY_SOURCE, PLANNER_SOURCE } from '../../src/generated/embedded.ts';
 
 const fixture = join(process.cwd(), 'tests/fixtures/fractured-realms/electron');
+const payloadRevision = 'c'.repeat(64);
 const dataNames = ['items', 'actions', 'skills', 'xp', 'buildings', 'digsites', 'strings-en'];
+const { handleApi } = createRequire(import.meta.url)(join(process.cwd(), 'runtime/fractured-adapter.cjs')) as { handleApi: (request: Record<string, unknown>) => Promise<{ status: number; body: unknown }> };
 
 function snapshot(root: string): Map<string, Buffer> {
   const result = new Map<string, Buffer>();
@@ -47,7 +50,7 @@ function createCase(buildId = '24185239'): { root: string; pack: string } {
 }
 
 function apply(root: string, pack: string): void {
-  createFracturedApply({ buildId: '24185239', packDirectory: pack })(root);
+  createFracturedApply({ buildId: '24185239', packDirectory: pack, payloadRevision })(root);
 }
 
 const harness = String.raw`const fs = require('node:fs');
@@ -102,7 +105,7 @@ test('installs exact runtime profile, pack and companion bundle API', () => {
     .replace('function Ii(a,t){', 'function Ii(a,t){window.fixtureStart(a,t);'));
   apply(root, pack);
   const profile = JSON.parse(readFileSync(join(root, 'electron/companion-profile.json'), 'utf8'));
-  assert.deepEqual(profile, { schema_version: 1, id: 'fractured-realms', display_name: 'Fractured Realms', service: FRACTURED_MARKER, assets_relative_to_runtime: '../dist', bind_host: '127.0.0.1', browser_host: '127.0.0.1', port: 48766, max_request_bytes: 65536, companion: true });
+  assert.deepEqual(profile, { schema_version: 1, id: 'fractured-realms', display_name: 'Fractured Realms', service: FRACTURED_MARKER, assets_relative_to_runtime: '../dist', bind_host: '127.0.0.1', browser_host: '127.0.0.1', port: 48766, max_request_bytes: 65536, companion: true, revision: payloadRevision });
   assert.equal(readFileSync(join(root, 'electron/companion-host.cjs'), 'utf8'), ELECTRON_HOST_SOURCE);
   assert.equal(readFileSync(join(root, 'electron/companion-adapter.cjs'), 'utf8'), FRACTURED_ADAPTER_SOURCE);
   assert.equal(readFileSync(bundlePath, 'utf8').match(/__frCompanion/g)?.length, 1);
@@ -171,6 +174,12 @@ test('installs exact runtime profile, pack and companion bundle API', () => {
   unsubscribe();
   assert.equal(unsubscribed, true);
   assert.equal(delegatedListener, undefined);
+});
+
+
+test('quit requires explicit confirmation', async () => {
+  const response = await handleApi({ method: 'POST', pathname: '/api/quit', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}), services: { quitApp() {} } });
+  assert.deepEqual(response, { status: 400, body: { ok: false, error: 'Quit requires confirmation.' } });
 });
 
 test('transformed main preserves browser and native behavior', () => {

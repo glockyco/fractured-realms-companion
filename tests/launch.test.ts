@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { OperationalError } from '../src/lib/errors.ts';
-import { launchCompanion, type HealthResult, type SpawnFunction } from '../src/launch.ts';
+import { launchCompanion, relaunchCompanion, type HealthResult, type SpawnFunction } from '../src/launch.ts';
+import { COMPANION_REVISION } from '../src/patch/revision.ts';
 import type { SteamInstall } from '../src/platform/steam.ts';
 
 const healthy = (): HealthResult => ({
   status: 200,
-  body: { ok: true, service: 'FRACTURED_REALMS_COMPANION_V1', host: '127.0.0.1', port: 48766 },
+  body: { ok: true, service: 'FRACTURED_REALMS_COMPANION_V1', revision: COMPANION_REVISION, host: '127.0.0.1', port: 48766 },
 });
 
 function install(platform: NodeJS.Platform, root = '/fixtures/Steam'): SteamInstall {
@@ -26,16 +27,22 @@ function harness(platform: NodeJS.Platform, steamInstall = install(platform)) {
     calls.push({ command, args, options });
     return { unref() {} };
   };
+  let firstProbe = true;
   return {
     calls,
     options: {
       platform,
       noOpen: false,
+      stateDirectory: '/tmp/fractured-realms-companion-test-state',
       dependencies: {
         doctor: async () => ({ rows: [{ status: 'PASS' as const, check: 'all', message: 'ok' }], blocking: false }),
         discoverInstall: () => steamInstall,
         spawn,
-        requestHealth: async () => healthy(),
+        lock: { acquire: () => () => {} },
+        requestHealth: async () => {
+          if (firstProbe) { firstProbe = false; throw new Error('not running'); }
+          return healthy();
+        },
         sleep: async () => {},
         commandExists: () => true,
         now: () => Date.now(),
@@ -43,6 +50,40 @@ function harness(platform: NodeJS.Platform, steamInstall = install(platform)) {
     },
   };
 }
+
+test('preflight reuses a healthy current companion without spawning Steam', async () => {
+  const h = harness('linux');
+  h.options.dependencies.requestHealth = async () => healthy();
+  const result = await launchCompanion(h.options);
+  assert.equal(result.command, '');
+  assert.deepEqual(h.calls.map((call) => call.command), ['xdg-open']);
+  const noOpen = harness('linux');
+  noOpen.options.noOpen = true;
+  noOpen.options.dependencies.requestHealth = async () => healthy();
+  await launchCompanion(noOpen.options);
+  assert.equal(noOpen.calls.length, 0);
+});
+
+test('preflight rejects an own service with an outdated revision', async () => {
+  const h = harness('linux');
+  h.options.dependencies.requestHealth = async () => ({ status: 200, body: { ok: true, service: 'FRACTURED_REALMS_COMPANION_V1', revision: '0'.repeat(64), host: '127.0.0.1', port: 48766 } });
+  await assert.rejects(launchCompanion(h.options), /relaunch/);
+  assert.equal(h.calls.length, 0);
+});
+
+test('preflight rejects a foreign service on the companion port', async () => {
+  const h = harness('linux');
+  h.options.dependencies.requestHealth = async () => ({ status: 200, body: { ok: true, service: 'OTHER', host: '127.0.0.1', port: 48766 } });
+  await assert.rejects(launchCompanion(h.options), /unknown service/);
+  assert.equal(h.calls.length, 0);
+});
+
+test('launch lock contention prevents Steam spawn', async () => {
+  const h = harness('linux');
+  h.options.dependencies.lock = { acquire: () => { throw new OperationalError('another fractured-companion launch is already in progress'); } };
+  await assert.rejects(launchCompanion(h.options), /another fractured-companion launch/);
+  assert.equal(h.calls.length, 0);
+});
 
 test('uses exact macOS CrossOver argv and opens once after health', async () => {
   const h = harness('darwin', install('darwin', '/Users/me/Library/Application Support/CrossOver/Bottles/Steam/drive_c/Program Files (x86)/Steam'));
@@ -95,6 +136,7 @@ test('doctor FAIL prevents discovery and spawn', async () => {
     launchCompanion({
       platform: 'linux',
       dependencies: {
+        requestHealth: async () => { throw new Error('not running'); },
         doctor: async () => ({ rows: [{ status: 'FAIL' as const, check: 'archive', message: 'foreign patch' }], blocking: true }),
         discoverInstall: () => { discovered = true; return install('linux'); },
         spawn: (() => { spawned = true; return { unref() {} }; }) as SpawnFunction,
@@ -113,7 +155,11 @@ test('polls until valid health then opens exactly once', async () => {
     healthy(),
   ];
   const delays: number[] = [];
-  h.options.dependencies.requestHealth = async () => responses.shift() ?? healthy();
+  let firstProbe = true;
+  h.options.dependencies.requestHealth = async () => {
+    if (firstProbe) { firstProbe = false; throw new Error('not running'); }
+    return responses.shift() ?? healthy();
+  };
   h.options.dependencies.sleep = async (milliseconds: number) => { delays.push(milliseconds); };
   await launchCompanion(h.options);
   assert.deepEqual(delays, [5000]);
@@ -129,7 +175,11 @@ test('noOpen suppresses the opener', async () => {
 
 test('wrong service times out with a manual URL', async () => {
   const h = harness('linux');
-  h.options.dependencies.requestHealth = async () => ({ status: 200, body: { ok: true, service: 'wrong', host: '127.0.0.1', port: 48766 } });
+  let firstProbe = true;
+  h.options.dependencies.requestHealth = async () => {
+    if (firstProbe) { firstProbe = false; throw new Error('not running'); }
+    return { status: 200, body: { ok: true, service: 'wrong', host: '127.0.0.1', port: 48766 } };
+  };
   let attempts = 0;
   let clock = 0;
   h.options.dependencies.now = () => clock;
@@ -186,11 +236,52 @@ test('async opener EACCES rejects operationally after game spawn', async () => {
   assert.deepEqual(h.calls.map((call) => call.command), ['steam', 'xdg-open']);
 });
 
+
+test('relaunch quits an own service, refreshes, and launches once', async () => {
+  const h = harness('linux');
+  const own = { status: 200, body: { ok: true, service: 'FRACTURED_REALMS_COMPANION_V1', revision: '0'.repeat(64), host: '127.0.0.1', port: 48766 } };
+  const responses: Array<HealthResult | Error> = [own, new Error('stopped'), new Error('not running'), healthy()];
+  const quitCalls: string[] = [];
+  const refreshCalls: unknown[] = [];
+  h.options.dependencies.requestHealth = async () => {
+    const response = responses.shift() ?? healthy();
+    if (response instanceof Error) throw response;
+    return response;
+  };
+  h.options.dependencies.requestQuit = async (url: string) => { quitCalls.push(url); };
+  h.options.refresh = async (options: unknown) => { refreshCalls.push(options); return {} as never; };
+  h.options.noOpen = true;
+  await relaunchCompanion(h.options);
+  assert.deepEqual(quitCalls, ['http://127.0.0.1:48766/']);
+  assert.equal(refreshCalls.length, 1);
+  assert.deepEqual(h.calls.map((call) => call.command), ['steam']);
+});
+
+test('relaunch with nothing running skips quit', async () => {
+  const h = harness('linux');
+  let quit = false;
+  let probes = 0;
+  h.options.dependencies.requestHealth = async () => {
+    probes += 1;
+    if (probes <= 2) throw new Error('not running');
+    return healthy();
+  };
+  h.options.dependencies.requestQuit = async () => { quit = true; };
+  h.options.refresh = async () => ({}) as never;
+  h.options.noOpen = true;
+  await relaunchCompanion(h.options);
+  assert.equal(quit, false);
+  assert.deepEqual(h.calls.map((call) => call.command), ['steam']);
+});
+
 test('hung health probe resolves at the injected deadline', async () => {
   const h = harness('linux');
   let clock = 0;
-  h.options.dependencies.now = () => clock;
-  h.options.dependencies.requestHealth = () => new Promise<HealthResult>(() => {});
+  let firstProbe = true;
+  h.options.dependencies.requestHealth = () => {
+    if (firstProbe) { firstProbe = false; return Promise.reject(new Error('not running')); }
+    return new Promise<HealthResult>(() => {});
+  };
   h.options.dependencies.setTimer = (callback, milliseconds) => {
     clock += milliseconds;
     callback();

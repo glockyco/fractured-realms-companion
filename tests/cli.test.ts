@@ -27,6 +27,7 @@ test('dispatches every command and forwards global/command options', async () =>
     refreshCompanion: async (options: any) => { seen.refresh = options; return { buildId: 'b', changed: true }; },
     restoreCompanion: async (options: any) => { seen.restore = options; return { archivePath: '/a', buildId: 'b', stateDirectory: '/s' }; },
     launchCompanion: async (options: any) => { seen.launch = options; return { url: 'http://127.0.0.1:48766/', command: 'steam', args: [] }; },
+    relaunchCompanion: async (options: any) => { seen.relaunch = options; return { url: 'http://127.0.0.1:48766/', command: 'steam', args: [] }; },
   };
   assert.equal(await main(['doctor', '--steam-root', '/root', '--bottle', 'B', '--json'], deps), 0);
   assert.deepEqual(seen.doctor, { steamRoot: '/root', bottle: 'B' });
@@ -37,6 +38,8 @@ test('dispatches every command and forwards global/command options', async () =>
   assert.deepEqual(seen.restore, { bottle: 'B' });
   assert.equal(await main(['launch', '--steam-root', '/root', '--no-open'], deps), 0);
   assert.deepEqual(seen.launch, { steamRoot: '/root', noOpen: true });
+  assert.equal(await main(['relaunch', '--steam-root', '/root', '--no-open'], deps), 0);
+  assert.deepEqual(seen.relaunch, { steamRoot: '/root', noOpen: true });
 });
 
 test('npm bin symlink is recognized as the CLI entrypoint', () => {

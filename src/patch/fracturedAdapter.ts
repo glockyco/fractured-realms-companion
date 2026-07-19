@@ -73,6 +73,7 @@ const NATIVE_UNLOCK_LINES = [
 export interface FracturedApplyOptions {
   buildId: string;
   packDirectory: string;
+  payloadRevision: string;
 }
 
 interface PackFile {
@@ -340,12 +341,13 @@ function patchedMain(source: string, newline: string): string {
   return source;
 }
 
-function profileText(): string {
+function profileText(payloadRevision: string): string {
   return `${JSON.stringify({
     schema_version: 1,
     id: 'fractured-realms',
     display_name: 'Fractured Realms',
     service: FRACTURED_MARKER,
+    revision: payloadRevision,
     assets_relative_to_runtime: '../dist',
     bind_host: '127.0.0.1',
     browser_host: '127.0.0.1',
@@ -397,8 +399,8 @@ function validateBundle(root: string): { path: string; source: string; patched: 
 }
 
 export function createFracturedApply(options: FracturedApplyOptions): (extractedRoot: string) => void {
-  if (!options || typeof options.buildId !== 'string' || options.buildId.length === 0 || typeof options.packDirectory !== 'string' || options.packDirectory.length === 0) fail('invalid Fractured adapter options');
-  const profile = profileText();
+  if (!options || typeof options.buildId !== 'string' || options.buildId.length === 0 || typeof options.packDirectory !== 'string' || options.packDirectory.length === 0 || !/^[0-9a-f]{64}$/u.test(options.payloadRevision)) fail('invalid Fractured adapter options');
+  const profile = profileText(options.payloadRevision);
   return (extractedRoot: string): void => {
     if (typeof extractedRoot !== 'string' || extractedRoot.length === 0) fail('invalid extracted root');
     directory(extractedRoot, 'extracted root');
