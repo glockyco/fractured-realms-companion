@@ -131,11 +131,11 @@ function datasets() {
     },
     actions: {
       woodcutting: [{
-        id: 'chop_log', name: 'Chop Harbor Tree', levelReq: 1, interval: 1000,
+        id: 'chop_log', name: 'Chop Harbor Tree', levelReq: 1, interval: 1000, xp: 5,
         spot: 'harbor', outputs: { log: 1 }, rareOutputs: [{ item: 'plank', qty: 1, chance: 0.05 }],
       }],
       crafting: [{
-        id: 'make_plank', name: 'Make Harbor Plank', levelReq: 1, interval: 800,
+        id: 'make_plank', name: 'Make Harbor Plank', levelReq: 1, interval: 800, xp: 5,
         inputs: { log: 2 }, outputs: { plank: 1 },
       }],
     },
@@ -274,6 +274,41 @@ test('restores and persists queued goals and formats finish times', async () => 
   assert.match(formatFinishTime(60_000, 0), /\d{1,2}:\d{2}/u);
 });
 
+test('restores target goals and rejects invalid target values', async () => {
+  const document = new FakeDocument();
+  document.defaultView.localStorage.setItem('fractured-realms-companion.queue.v1', JSON.stringify({
+    goals: [
+      { id: 'plan-4', itemId: 'log', qty: 0, target: { type: 'level', level: 12 } },
+      { id: 'plan-5', itemId: 'log', qty: 0, target: { type: 'gain', gain: 5 } },
+    ],
+    nextPlanId: 5,
+  }));
+  const result = await bootOverlay({ document, window: { __frCompanion: api() }, fetch: fetchFor(datasets()) });
+  assert.deepEqual(result.app.state.queueGoals.map((goal) => goal.target), [
+    { type: 'level', level: 12 },
+    { type: 'gain', gain: 5 },
+  ]);
+
+  result.app.state.planItemId = 'log';
+  result.shell.panels.plan.querySelector('#fr-plan-qty').value = '1';
+  result.shell.panels.plan.querySelector('#fr-plan-form').dispatch('submit');
+  const stored = JSON.parse(document.defaultView.localStorage.getItem('fractured-realms-companion.queue.v1'));
+  assert.deepEqual(stored.goals.slice(0, 2).map((goal) => goal.target), [
+    { type: 'level', level: 12 },
+    { type: 'gain', gain: 5 },
+  ]);
+
+  for (const target of [{ type: 'level', level: 150 }, { type: 'gain', gain: 0 }]) {
+    const invalidDocument = new FakeDocument();
+    invalidDocument.defaultView.localStorage.setItem('fractured-realms-companion.queue.v1', JSON.stringify({
+      goals: [{ id: 'plan-1', itemId: 'log', qty: 0, target }],
+      nextPlanId: 1,
+    }));
+    const invalid = await bootOverlay({ document: invalidDocument, window: { __frCompanion: api() }, fetch: fetchFor(datasets()) });
+    assert.deepEqual(invalid.app.state.queueGoals, []);
+  }
+});
+
 test('compact mode toggles and persists its panel preference', () => {
   const document = new FakeDocument();
   const shell = createOverlayShell(document);
@@ -338,6 +373,48 @@ test('queued plans project earlier deterministic outputs and estimate duration',
 
   const projected = projectPlanState(datasets(), api().getState(), queue.map((entry) => entry.plan));
   assert.deepEqual(projected.inventory, { log: 0, plank: 1 });
+});
+
+test('resolves skill level goals with XP stop conditions', () => {
+  const queue = resolvePlanQueue(datasets(), {
+    inventory: {},
+    equipment: {},
+    skillXp: { woodcutting: 100, crafting: 100 },
+  }, [{ id: 'plan-1', itemId: 'log', qty: 0, target: { type: 'level', level: 12 } }]);
+  const plan = queue[0].plan;
+  const final = plan.steps.at(-1);
+
+  assert.equal(plan.ok, true);
+  assert.deepEqual(final.stopWhen, { type: 'xp', skillId: 'woodcutting', xpAtLeast: 120 });
+  assert.equal(final.count, 4);
+});
+
+test('resolves duration goals with time stop conditions', () => {
+  const queue = resolvePlanQueue(datasets(), {
+    inventory: {},
+    equipment: {},
+    skillXp: { woodcutting: 100, crafting: 100 },
+  }, [{ id: 'plan-1', itemId: 'log', qty: 0, target: { type: 'time', minutes: 1 } }]);
+  const final = queue[0].plan.steps.at(-1);
+
+  assert.deepEqual(final.stopWhen, { type: 'time', ms: 60000 });
+  assert.equal(final.count, 60);
+});
+
+test('resolves gain goals from the current bag total without a stop condition', () => {
+  const queue = resolvePlanQueue(datasets(), {
+    inventory: { log: 3 },
+    equipment: {},
+    skillXp: { woodcutting: 100, crafting: 100 },
+  }, [{ id: 'plan-1', itemId: 'log', qty: 0, target: { type: 'gain', gain: 5 } }]);
+  const plan = queue[0].plan;
+  const step = plan.steps[0];
+
+  assert.equal(plan.ok, true);
+  assert.equal(step.actionId, 'chop_log');
+  assert.equal(step.count, 5);
+  assert.equal(step.produceQty, 5);
+  assert.equal('stopWhen' in step, false);
 });
 
 test('projects deterministic and rare raw execution steps', () => {

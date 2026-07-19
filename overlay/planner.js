@@ -31,6 +31,8 @@ export function levelForXp(xpTable, xp) {
   return 1;
 }
 
+export const xpForLevel = (xpTable, level) => threshold(xpTable, level);
+
 function actionEntries(actions) {
   if (!actions || typeof actions !== 'object') return [];
   const result = [];

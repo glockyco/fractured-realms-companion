@@ -1,4 +1,4 @@
-import { actionBlocker, createPlan } from './planner.js';
+import { actionBlocker, createPlan, xpForLevel } from './planner.js';
 import { createDirectExecutor } from './executor.js';
 
 export const DATA_FILES = Object.freeze([
@@ -562,11 +562,68 @@ export function projectPlanState(datasets, snapshot, plans) {
   return projectSteps(datasets, snapshot, (plans || []).filter((plan) => plan?.ok).flatMap((plan) => plan.steps || []));
 }
 
+function resolveGoalPlan(datasets, snapshot, goal) {
+  const target = goal?.target;
+  if (!target || (target.type !== 'gain' && target.type !== 'level' && target.type !== 'time')) {
+    return createPlan(datasets, snapshot, { itemId: goal.itemId, qty: goal.qty });
+  }
+  const have = Math.max(0, Number(snapshot?.inventory?.[goal.itemId]) || 0);
+  if (target.type === 'gain') {
+    return createPlan(datasets, snapshot, { itemId: goal.itemId, qty: have + target.gain });
+  }
+
+  const probe = createPlan(datasets, snapshot, { itemId: goal.itemId, qty: have + 1 });
+  if (!probe.ok) return probe;
+  if (!probe.steps.length) {
+    return {
+      ok: false,
+      steps: [],
+      satisfied: probe.satisfied,
+      reason: 'no-source',
+      message: 'No producing action found.',
+    };
+  }
+  const final = probe.steps.at(-1);
+  const action = datasets.actions?.[final.skillId]?.find((entry) => entry.id === final.actionId);
+  const outPerRun = Math.max(1, Number(action?.outputs?.[goal.itemId]) || 0);
+  let runs;
+  if (target.type === 'level') {
+    const xpGoal = xpForLevel(datasets.xp, target.level);
+    const xpNow = Number(snapshot?.skillXp?.[final.skillId]) || 0;
+    if (xpNow >= xpGoal) return { ok: true, steps: [], satisfied: [], message: 'Level already reached.' };
+    if (Number(action?.xp) <= 0 || !Number.isFinite(Number(action?.xp))) {
+      return {
+        ok: false,
+        steps: [],
+        satisfied: [],
+        reason: 'no-xp',
+        message: `${final.actionName} grants no XP.`,
+      };
+    }
+    runs = Math.ceil((xpGoal - xpNow) / Number(action.xp));
+  } else {
+    runs = Math.ceil((target.minutes * 60000) / Math.max(1, Number(action?.interval) || 0));
+  }
+
+  const plan = createPlan(datasets, snapshot, { itemId: goal.itemId, qty: have + runs * outPerRun });
+  if (!plan.ok) return plan;
+  const last = plan.steps.at(-1);
+  if (last) {
+    if (target.type === 'level') {
+      last.stopWhen = { type: 'xp', skillId: final.skillId, xpAtLeast: xpForLevel(datasets.xp, target.level) };
+    } else {
+      last.stopWhen = { type: 'time', ms: target.minutes * 60000 };
+    }
+  }
+  plan.goalSkillId = final.skillId;
+  return plan;
+}
+
 export function resolvePlanQueue(datasets, snapshot, goals) {
   const queue = [];
   let projected = projectPlanState(datasets, snapshot, []);
   for (const goal of goals || []) {
-    const plan = createPlan(datasets, projected, { itemId: goal.itemId, qty: goal.qty });
+    const plan = resolveGoalPlan(datasets, projected, goal);
     const entry = { ...goal, plan, estimateMs: estimatePlanDuration(plan) };
     queue.push(entry);
     projected = projectPlanState(datasets, projected, [plan]);
@@ -978,8 +1035,12 @@ export function createOverlayShell(documentRef) {
 
 function blockedText(blocked) {
   if (!blocked) return '';
-  if (typeof blocked === 'string') return blocked;
+  if (typeof blocked === 'string') {
+    if (blocked === 'no-xp') return 'This action grants no XP, so the level can never be reached.';
+    return blocked;
+  }
   const reason = blocked.reason || blocked.type;
+  if (reason === 'no-xp') return blocked.message || 'This action grants no XP, so the level can never be reached.';
   if (reason === 'level') return `Requires ${blocked.skillName || blocked.skillId || 'skill'} level ${blocked.minLevel ?? blocked.levelReq ?? blocked.level ?? '—'}${blocked.actionName ? ` for ${blocked.actionName}` : ''}.`;
   if (reason === 'tool') return `Unlock ${blocked.toolName || humanizeId(blocked.toolId)} in the Shop${blocked.actionName ? ` before running ${blocked.actionName}` : ''}.`;
   if (reason === 'pattern') return `Unlock the ${humanizeId(blocked.patternId)} glyph pattern${blocked.actionName ? ` before running ${blocked.actionName}` : ''}.`;
@@ -1028,12 +1089,26 @@ function createApplication(shell, datasets, api) {
       if (!parsed || !Array.isArray(parsed.goals)) return false;
       const goals = parsed.goals;
       if (!goals.every((goal) => goal && typeof goal === 'object' && typeof goal.id === 'string'
-        && Object.prototype.hasOwnProperty.call(items, goal.itemId) && Number.isInteger(goal.qty) && goal.qty >= 1)) return false;
+        && Object.prototype.hasOwnProperty.call(items, goal.itemId)
+        && (!goal.target
+          ? Number.isInteger(goal.qty) && goal.qty >= 1
+          : goal.target.type === 'gain'
+            ? Number.isInteger(goal.target.gain) && goal.target.gain >= 1
+            : goal.target.type === 'level'
+              ? Number.isInteger(goal.target.level) && goal.target.level >= 2 && goal.target.level <= 99
+              : goal.target.type === 'time'
+                ? Number.isInteger(goal.target.minutes) && goal.target.minutes >= 1
+                : false))) return false;
       const maxGoalId = goals.reduce((max, goal) => {
         const match = /^plan-(\d+)$/u.exec(goal.id);
         return Math.max(max, match ? Number(match[1]) || 0 : 0);
       }, 0);
-      state.queueGoals = goals.map((goal) => ({ id: goal.id, itemId: goal.itemId, qty: goal.qty }));
+      state.queueGoals = goals.map((goal) => ({
+        id: goal.id,
+        itemId: goal.itemId,
+        qty: goal.qty,
+        ...(goal.target ? { target: goal.target } : {}),
+      }));
       state.nextPlanId = Math.max(Number(parsed.nextPlanId) || 0, maxGoalId + 1);
       rebuildQueue();
       state.executorStatus.message = `Restored ${goals.length} queued plan(s).`;
