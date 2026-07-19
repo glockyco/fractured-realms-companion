@@ -1,5 +1,5 @@
 node_modules/
-dist/
+/dist/
 src/generated/
 .DS_Store
 *.log

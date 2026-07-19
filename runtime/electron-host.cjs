@@ -177,7 +177,7 @@ function validateStartConfig(config) {
   const { app, shell, path: pathModule, fs: fsModule, profile, adapter } = config;
   if (!app || !shell || !pathModule || !fsModule) throw new TypeError('start requires app, shell, path, and fs');
   if (!profile || typeof profile !== 'object') throw new TypeError('start requires profile');
-  const required = ['schema_version', 'id', 'display_name', 'service', 'assets_relative_to_runtime', 'bind_host', 'browser_host', 'port', 'max_request_bytes'];
+  const required = ['schema_version', 'id', 'display_name', 'service', 'assets_relative_to_runtime', 'bind_host', 'browser_host', 'port', 'max_request_bytes', 'companion'];
   const unknown = Object.keys(profile).filter((key) => !required.includes(key));
   if (unknown.length) throw new TypeError(`Invalid browser profile: unknown ${unknown.join(', ')}`);
   const missing = required.filter((key) => !(key in profile));
@@ -192,6 +192,7 @@ function validateStartConfig(config) {
   if (typeof profile.bind_host !== 'string' || !loopbackHosts.has(profile.bind_host) || typeof profile.browser_host !== 'string' || !loopbackHosts.has(profile.browser_host) || !Number.isInteger(profile.port) || profile.port < 1 || profile.port > 65535 || !Number.isInteger(profile.max_request_bytes) || profile.max_request_bytes < 1) {
     throw new TypeError('Invalid browser profile network settings');
   }
+  if (typeof profile.companion !== 'boolean') throw new TypeError('Invalid browser profile companion');
   if (!adapter || typeof adapter !== 'object' || typeof adapter.id !== 'string' || typeof adapter.bridgeScript !== 'function' || typeof adapter.handleApi !== 'function') {
     throw new TypeError('Invalid browser adapter ABI');
   }
@@ -397,7 +398,11 @@ async function start(config) {
         const extension = pathModule.extname(found.path).toLowerCase();
         let body = fsModule.readFileSync(found.path);
         if (pathModule.basename(found.path).toLowerCase() === 'index.html') {
-          const injected = injectBridge(body.toString('utf8'), adapter.bridgeScript(token));
+          const bridgeSource = adapter.bridgeScript(token);
+          const companionSource = profile.companion
+            ? `${bridgeSource}\n<script type="module" src="/companion/overlay.js"></script>`
+            : bridgeSource;
+          const injected = injectBridge(body.toString('utf8'), companionSource);
           body = Buffer.from(injected);
         }
         const headers = {
