@@ -46,6 +46,7 @@ export function createDirectExecutor(api, options = {}) {
   let stopDeadline = 0;
   let stopRemainingMs = 0;
   let stopXpStart = 0;
+  let pausedReason = null;
   let unsubscribe;
   let runToken = 0;
   let transitionBusy = false;
@@ -60,6 +61,7 @@ export function createDirectExecutor(api, options = {}) {
         completedSteps: status.phase === 'complete' ? steps.length : 0,
         stepProduced: 0,
         stepTarget: 0,
+        stepInventoryTarget: 0,
         stepRemainingMs: 0,
         remainingMs: status.phase === 'complete' ? 0 : steps.reduce((sum, candidate) => sum + stepDuration(candidate), 0),
       };
@@ -72,6 +74,7 @@ export function createDirectExecutor(api, options = {}) {
         completedSteps: Math.max(0, index),
         stepProduced: sp.produced,
         stepTarget: sp.target,
+        stepInventoryTarget: 0,
         stepRemainingMs: sp.remainingMs,
         remainingMs: sp.remainingMs + futureMs,
       };
@@ -85,6 +88,7 @@ export function createDirectExecutor(api, options = {}) {
       completedSteps: Math.max(0, index),
       stepProduced,
       stepTarget,
+      stepInventoryTarget: target,
       stepRemainingMs,
       remainingMs: stepRemainingMs + futureMs,
     };
@@ -96,6 +100,7 @@ export function createDirectExecutor(api, options = {}) {
       currentStep: currentStep == null ? null : currentStep,
       totalSteps: steps.length,
       message: message ?? '',
+      pausedReason,
       ...progress(current),
     };
     try { onUpdate({ ...status }); } catch { /* UI observers must not break execution. */ }
@@ -215,6 +220,10 @@ export function createDirectExecutor(api, options = {}) {
     if (!Number.isFinite(limit) || limit <= 0) return;
     stallTimer = schedule(() => {
       if (token !== runToken || status.phase !== 'running') return;
+      if (!matching(state(), steps[index])) {
+        stallTimer = undefined;
+        return;
+      }
       if (asNumber(now(), 0) - lastProgressAt >= limit) {
         stopGameAction();
         error('stalled — check bag space');
@@ -294,14 +303,20 @@ export function createDirectExecutor(api, options = {}) {
           const stepDone = active.stopWhen ? stopSatisfied(active, latest) : inventoryValue(latest, active.produceItemId) >= target;
           if (stepDone) { finishStep(token); return; }
           if (active.stopWhen?.type === 'time') stopRemainingMs = Math.max(0, stopDeadline - asNumber(now(), 0));
+          const missingInput = active.rare && active.inputs
+            ? Object.entries(active.inputs).find(([id, perRun]) => asNumber(perRun, 0) > 0 && inventoryValue(latest, id) < asNumber(perRun, 0))
+            : undefined;
+          pausedReason = missingInput ? 'inputs' : null;
           clearStepTimers();
-          update('paused', 'action changed in game', index, latest);
+          update('paused', missingInput ? `out of ${missingInput[0]}` : 'action changed in game', index, latest);
         }, MISMATCH_GRACE_MS);
       }
       return;
     }
+    const hadMismatch = mismatchTimer !== undefined;
     clearTimer(mismatchTimer);
     mismatchTimer = undefined;
+    if (hadMismatch) armStallTimer(runToken);
     if (step.stopWhen) update('running', `Running ${step.actionName}`, index, current);
   };
 
@@ -311,6 +326,7 @@ export function createDirectExecutor(api, options = {}) {
       return;
     }
     index = stepIndex;
+    pausedReason = null;
     const step = steps[index];
     const current = state();
     stepStart = inventoryValue(current, step.produceItemId);
@@ -395,12 +411,14 @@ export function createDirectExecutor(api, options = {}) {
     steps = [];
     index = -1;
     transitionBusy = false;
+    pausedReason = null;
     update('idle', 'Stopped', null, {});
     resolveTerminal();
   };
 
   const resume = () => {
     if (status.phase !== 'paused' || index < 0 || index >= steps.length) return;
+    pausedReason = null;
     const token = runToken;
     const current = state();
     const step = steps[index];

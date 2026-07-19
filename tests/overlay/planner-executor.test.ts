@@ -362,6 +362,60 @@ test('executor stalls a rare action with no co-output progress', () => {
   assert.match(executor.getStatus().message, /stalled/);
 });
 
+test('executor pauses rare actions with an input shortage', () => {
+  const game = fakeGame();
+  const executor = createDirectExecutor(game.api, { ...game.timers });
+  executor.run([{
+    skillId: 'trap', actionId: 'trap', actionName: 'Trap', count: 10,
+    produceItemId: 'talon', produceQty: 2, rare: true, chance: 0.2,
+    progressItemId: 'feathers', interval: 10, inputs: { seed: 1 },
+  }]);
+  assert.equal(executor.getStatus().phase, 'running');
+  assert.equal(executor.getStatus().stepInventoryTarget, 2);
+  game.api.state.activeSkill = null;
+  game.api.state.activeAction = null;
+  game.emit();
+  game.timers.tick(1200);
+  assert.equal(executor.getStatus().phase, 'paused');
+  assert.equal(executor.getStatus().pausedReason, 'inputs');
+  assert.match(executor.getStatus().message, /out of seed/u);
+});
+
+test('executor keeps a null pause reason for ordinary mismatches', () => {
+  const game = fakeGame();
+  game.api.state.inventory.seed = 3;
+  const executor = createDirectExecutor(game.api, { ...game.timers });
+  executor.run([{
+    skillId: 'trap', actionId: 'trap', actionName: 'Trap', count: 10,
+    produceItemId: 'talon', produceQty: 2, rare: true, chance: 0.2,
+    progressItemId: 'feathers', interval: 10, inputs: { seed: 1 },
+  }]);
+  game.api.state.activeSkill = null;
+  game.api.state.activeAction = null;
+  game.emit();
+  game.timers.tick(1200);
+  assert.equal(executor.getStatus().phase, 'paused');
+  assert.equal(executor.getStatus().pausedReason, null);
+  assert.equal(executor.getStatus().message, 'action changed in game');
+});
+
+test('executor clears the pause reason when resuming', () => {
+  const game = fakeGame();
+  const executor = createDirectExecutor(game.api, { ...game.timers });
+  executor.run([{
+    skillId: 'trap', actionId: 'trap', actionName: 'Trap', count: 10,
+    produceItemId: 'talon', produceQty: 2, rare: true, chance: 0.2,
+    progressItemId: 'feathers', interval: 10, inputs: { seed: 1 },
+  }]);
+  game.api.state.activeSkill = null;
+  game.api.state.activeAction = null;
+  game.emit();
+  game.timers.tick(1200);
+  assert.equal(executor.getStatus().pausedReason, 'inputs');
+  game.api.state.inventory.seed = 1;
+  executor.resume();
+  assert.notEqual(executor.getStatus().pausedReason, 'inputs');
+});
 test('executor splices appended steps while running and updates totals', () => {
   const game = fakeGame();
   const executor = createDirectExecutor(game.api, { ...game.timers });
