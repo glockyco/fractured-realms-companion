@@ -501,6 +501,46 @@ test('auto-resumes a blocked plan once its level requirement clears', async () =
   app.executor.stop();
 });
 
+test('refills rare inputs and delivers the exact requested count', async () => {
+  const document = new FakeDocument();
+  const game = recordingGame();
+  const result = await bootOverlay({ document, window: { __frCompanion: game.api }, fetch: fetchFor(datasets()) });
+  const { app, shell } = result;
+  const panel = shell.panels.plan;
+  const form = panel.querySelector('#fr-plan-form');
+  const qty = panel.querySelector('#fr-plan-qty');
+  app.state.planItemId = 'talon';
+  qty.value = '2';
+  form.dispatch('submit');
+  shell.queueControls.querySelector('#fr-run').dispatch('click');
+  assert.deepEqual(game.calls[0], ['gathering', 'gather_seed']);
+
+  game.gameState.inventory.seed = 10;
+  game.emit();
+  assert.ok(game.calls.some(([skillId, actionId]) => skillId === 'trapping' && actionId === 'trap_talon'));
+
+  game.gameState.inventory.seed = 0;
+  game.gameState.inventory.talon = 1;
+  game.gameState.activeSkill = null;
+  game.gameState.activeAction = null;
+  game.emit();
+  await new Promise((resolve) => setTimeout(resolve, 1400));
+  assert.deepEqual(
+    app.state.planQueue[0].plan.steps.map((step) => [step.actionId, step.count]),
+    [['gather_seed', 5], ['trap_talon', 5]],
+  );
+  assert.ok(game.calls.filter(([skillId, actionId]) => skillId === 'gathering' && actionId === 'gather_seed').length >= 2);
+
+  game.gameState.inventory.seed = 5;
+  game.emit();
+  game.gameState.inventory.talon = 2;
+  game.emit();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(app.state.executorStatus.phase, 'complete');
+  assert.equal(game.gameState.inventory.talon, 2);
+  app.executor.stop();
+});
+
 test('reports still-blocked plans on completion and keeps them queued', async () => {
   const document = new FakeDocument();
   const game = recordingGame();

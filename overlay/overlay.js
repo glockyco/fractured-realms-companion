@@ -1073,6 +1073,7 @@ function blockedText(blocked) {
   if (reason === 'bag-full') return 'Free at least one bag slot before running an action.';
   if (reason === 'input') return `Requires ${blocked.required} ${humanizeId(blocked.itemId)} in the bag; ${blocked.available} available.`;
   if (reason === 'rare-only') return `Only available as a rare drop${Array.isArray(blocked.chances) && blocked.chances.length ? ` (${blocked.chances.map((chance) => formatChance(chance.chance)).join(', ')})` : ''}.`;
+  if (reason === 'rare-stalled') return blocked.message || 'No rare drops after repeated restocks. Start the queue again to retry.';
   if (reason === 'no-source') return 'No deterministic source exists in this game build.';
   if (reason === 'cycle') return `A dependency cycle prevents a safe plan${blocked.itemId ? ` at ${blocked.itemId}` : ''}.`;
   return blocked.message || String(reason || 'This step is blocked.');
@@ -1083,7 +1084,7 @@ function blockedShort(blocked) {
   const reason = typeof blocked === 'string' ? blocked : blocked.reason || blocked.type;
   const details = typeof blocked === 'string' ? {} : blocked;
   if (typeof blocked === 'string' && ![
-    'level', 'tool', 'pattern', 'prayer', 'map', 'recipe', 'input', 'bag-full', 'rare-only', 'no-source', 'no-xp', 'cycle',
+    'level', 'tool', 'pattern', 'prayer', 'map', 'recipe', 'input', 'bag-full', 'rare-only', 'no-source', 'no-xp', 'cycle', 'rare-stalled',
   ].includes(reason)) return blocked;
   if (reason === 'level') return `needs ${humanizeId(details.skillId) || 'level'}${details.minLevel == null ? '' : ` ${details.minLevel}`}`;
   if (reason === 'tool') return `needs ${details.toolName || humanizeId(details.toolId) || 'tool'}`;
@@ -1096,6 +1097,7 @@ function blockedShort(blocked) {
   if (reason === 'rare-only') return 'rare drop only';
   if (reason === 'no-source') return 'no source';
   if (reason === 'no-xp') return 'no XP';
+  if (reason === 'rare-stalled') return 'rare drops stalled';
   if (reason === 'cycle') return 'dependency cycle';
   return 'blocked';
 }
@@ -1172,6 +1174,8 @@ function createApplication(shell, datasets, api) {
   shell.launcher.dataset.state = 'ready';
   let lastStructuralKey = '';
   let lastBoundaryPlanIndex = -1;
+  let refillGuard = { planId: null, have: -1, stale: 0 };
+  const stalledPlanIds = new Set();
   const executor = createDirectExecutor(api, {
     onUpdate(status) {
       state.executorStatus = status;
@@ -1186,6 +1190,7 @@ function createApplication(shell, datasets, api) {
         }
       } else if (status.phase === 'idle' || status.phase === 'complete' || status.phase === 'error') {
         lastBoundaryPlanIndex = -1;
+        refillGuard = { planId: null, have: -1, stale: 0 };
       }
       if (status.phase === 'complete') {
         const skipped = state.planQueue.filter((entry) => !entry.plan?.ok);
@@ -1194,6 +1199,11 @@ function createApplication(shell, datasets, api) {
         } else {
           const remainingGoals = state.queueGoals.filter((goal) => skipped.some((entry) => entry.id === goal.id));
           const resolved = resolvePlanQueue(datasets, api.getState(), remainingGoals);
+          for (const candidate of resolved) {
+            if (stalledPlanIds.has(candidate.id) && candidate.plan?.ok) {
+              candidate.plan = { ...candidate.plan, ok: false, reason: 'rare-stalled', blocked: { reason: 'rare-stalled', itemId: candidate.itemId }, message: 'No rare drops after 8 restocks.' };
+            }
+          }
           if (resolved.some((entry) => entry.plan?.ok && entry.plan.steps?.length)) {
             // A blocker cleared while the queue ran: resume the newly runnable
             // plans. The microtask avoids re-entering onUpdate synchronously.
@@ -1211,7 +1221,10 @@ function createApplication(shell, datasets, api) {
           }
         }
       } else if (status.phase === 'error' || status.phase === 'idle') {
+        stalledPlanIds.clear();
         persistQueue();
+      } else if (status.phase === 'paused' && status.pausedReason === 'inputs') {
+        queueMicrotask(() => refillRareInputs(status));
       }
       const key = `${status.phase}:${status.currentStep}:${state.planQueue.length}`;
       if (key !== lastStructuralKey) { lastStructuralKey = key; renderPlan(); }
@@ -1941,6 +1954,65 @@ function createApplication(shell, datasets, api) {
     return true;
   };
 
+  const refillRareInputs = (status) => {
+    if (state.executorStatus?.phase !== 'paused') return;
+    const currentIndex = Number(status.currentStep);
+    const step = state.executionSteps[currentIndex];
+    const { currentPlanIndex } = queueView(status);
+    const entry = state.planQueue[currentPlanIndex];
+    if (!entry || !step?.rare) return;
+    const live = api.getState();
+    const have = Math.max(0, Number(live?.inventory?.[step.produceItemId]) || 0);
+    if (refillGuard.planId === entry.id && have <= refillGuard.have) refillGuard.stale += 1;
+    else refillGuard = { planId: entry.id, have, stale: 0 };
+    refillGuard.have = have;
+    if (refillGuard.stale >= 8) {
+      stalledPlanIds.add(entry.id);
+      entry.plan = {
+        ...entry.plan,
+        ok: false,
+        reason: 'rare-stalled',
+        blocked: { reason: 'rare-stalled', itemId: entry.itemId, actionName: step.actionName },
+        message: 'No rare drops after 8 restocks.',
+      };
+      entry.estimateMs = 0;
+      state.executionSteps = flattenQueue();
+      const nextIdx = state.executionSteps.findIndex((candidate) => candidate.queuePlanIndex > currentPlanIndex);
+      if (nextIdx < 0) {
+        executor.stop();
+        state.executorStatus = { phase: 'complete', currentStep: null, totalSteps: 0, message: 'Queue done · 1 skipped — rare drops stalled' };
+      } else {
+        executor.jump(state.executionSteps, nextIdx);
+      }
+      renderPlan();
+      return;
+    }
+    const derivedGoal = step.stopWhen?.type === 'time'
+      ? { ...entry, target: { type: 'time', minutes: Math.max(0.01, (Number(status.stepRemainingMs) || 0) / 60000) } }
+      : step.stopWhen?.type === 'xp' ? entry
+        : step.produceItemId === entry.itemId
+          ? { id: entry.id, itemId: entry.itemId, qty: Math.max(have + 1, Number(status.stepInventoryTarget) || 0), target: null }
+          : entry;
+    const plan = resolveGoalPlan(datasets, live, derivedGoal);
+    if (!plan.ok) {
+      state.executorStatus = { ...status, message: `restock blocked — ${blockedShort(plan.blocked || plan.reason)}` };
+      renderExecutor();
+      return;
+    }
+    entry.plan = plan;
+    entry.estimateMs = estimatePlanDuration(plan);
+    state.executionSteps = flattenQueue();
+    const startIdx = state.executionSteps.findIndex((candidate) => candidate.queuePlanIndex >= currentPlanIndex);
+    if (startIdx < 0) {
+      executor.stop();
+      state.executorStatus = { phase: 'complete', currentStep: null, totalSteps: 0, message: 'Queue complete' };
+      renderPlan();
+      return;
+    }
+    executor.jump(state.executionSteps, startIdx);
+    renderPlan();
+  };
+
   const rebuildFromLive = () => {
     const resolved = resolvePlanQueue(datasets, api.getState(), state.queueGoals);
     state.planQueue = resolved;
@@ -2021,6 +2093,7 @@ function createApplication(shell, datasets, api) {
 
   const startQueue = () => {
     if (isExecutionLocked(state.executorStatus?.phase) || !state.planQueue.length) return;
+    stalledPlanIds.clear();
     rebuildQueue();
     state.executionSteps = flattenQueue();
     if (state.executionSteps.length) executor.run(state.executionSteps);
