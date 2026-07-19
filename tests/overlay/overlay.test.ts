@@ -128,6 +128,7 @@ function datasets() {
     items: {
       log: { label: 'Harbor Log', type: 'material', desc: 'A sturdy log.', value: 2, art: true },
       plank: { label: 'Harbor Plank', type: 'material', healAmount: 1, art: false },
+      totem: { label: 'Harbor Totem', type: 'material' },
     },
     actions: {
       woodcutting: [{
@@ -137,6 +138,9 @@ function datasets() {
       crafting: [{
         id: 'make_plank', name: 'Make Harbor Plank', levelReq: 1, interval: 800, xp: 5,
         inputs: { log: 2 }, outputs: { plank: 1 },
+      }, {
+        id: 'carve_totem', name: 'Carve Totem', levelReq: 20, xp: 5, interval: 500,
+        inputs: {}, outputs: { totem: 1 },
       }],
     },
     skills: [{ id: 'woodcutting', name: 'Woodcutting' }, { id: 'crafting', name: 'Crafting' }],
@@ -336,6 +340,117 @@ test('plan form submits a new-items target and produces the requested delta', as
   assert.deepEqual(result.app.state.queueGoals[0].target, { type: 'gain', gain: 5 });
   assert.match(panel.querySelector('#fr-plan-result').innerHTML, /\+5/u);
   assert.equal(result.app.state.executionSteps[0].produceQty, 5);
+});
+
+test('enqueues a blocked plan as queued but blocked with the run control disabled', async () => {
+  const document = new FakeDocument();
+  const result = await bootOverlay({ document, window: { __frCompanion: api() }, fetch: fetchFor(datasets()) });
+  const { app, shell } = result;
+  const panel = shell.panels.plan;
+  app.state.planItemId = 'totem';
+  panel.querySelector('#fr-plan-qty').value = '1';
+  panel.querySelector('#fr-plan-form').dispatch('submit');
+  assert.equal(app.state.queueGoals.length, 1);
+  assert.equal(app.state.planQueue[0].plan.ok, false);
+  const html = panel.querySelector('#fr-plan-result').innerHTML;
+  assert.match(html, /data-state="blocked"/u);
+  assert.match(html, /queued but blocked/u);
+  assert.equal(shell.queueControls.querySelector('#fr-run').disabled, true);
+});
+
+test('runs only the unblocked plans in a mixed queue', async () => {
+  const document = new FakeDocument();
+  const calls = [];
+  const gameApi = {
+    getState: () => ({ inventory: {}, equipment: {}, skillXp: { woodcutting: 100, crafting: 100 } }),
+    startAction(skillId, actionId) { calls.push([skillId, actionId]); },
+    stopAction() {}, subscribe() { return () => {}; },
+  };
+  const result = await bootOverlay({ document, window: { __frCompanion: gameApi }, fetch: fetchFor(datasets()) });
+  const { app, shell } = result;
+  const panel = shell.panels.plan;
+  const form = panel.querySelector('#fr-plan-form');
+  const qty = panel.querySelector('#fr-plan-qty');
+  app.state.planItemId = 'log';
+  qty.value = '1';
+  form.dispatch('submit');
+  app.state.planItemId = 'totem';
+  qty.value = '1';
+  form.dispatch('submit');
+  assert.deepEqual(app.state.executionSteps.map((step) => step.actionId), ['chop_log']);
+  shell.queueControls.querySelector('#fr-run').dispatch('click');
+  assert.deepEqual(calls, [['woodcutting', 'chop_log']]);
+  app.executor.stop();
+});
+
+function recordingGame() {
+  const gameState = { inventory: {}, equipment: {}, skillXp: { woodcutting: 100, crafting: 100 }, activeSkill: null, activeAction: null };
+  const calls = [];
+  let listener = null;
+  const emit = () => listener?.({ ...gameState, inventory: { ...gameState.inventory } });
+  const api = {
+    getState: () => ({ ...gameState, inventory: { ...gameState.inventory } }),
+    startAction(skillId, actionId) { calls.push([skillId, actionId]); gameState.activeSkill = skillId; gameState.activeAction = actionId; emit(); },
+    stopAction() { gameState.activeSkill = null; gameState.activeAction = null; emit(); },
+    subscribe(l) { listener = l; return () => { listener = null; }; },
+  };
+  return { api, calls, gameState, emit };
+}
+
+test('auto-resumes a blocked plan once its level requirement clears', async () => {
+  const document = new FakeDocument();
+  const game = recordingGame();
+  const result = await bootOverlay({ document, window: { __frCompanion: game.api }, fetch: fetchFor(datasets()) });
+  const { app, shell } = result;
+  const panel = shell.panels.plan;
+  const form = panel.querySelector('#fr-plan-form');
+  const qty = panel.querySelector('#fr-plan-qty');
+  app.state.planItemId = 'log';
+  qty.value = '1';
+  form.dispatch('submit');
+  app.state.planItemId = 'totem';
+  qty.value = '1';
+  form.dispatch('submit');
+  assert.equal(app.state.planQueue[1].plan.ok, false);
+
+  shell.queueControls.querySelector('#fr-run').dispatch('click');
+  // Complete the woodcutting step while the crafting level clears the blocker.
+  game.gameState.inventory.log = 1;
+  game.gameState.skillXp.crafting = 250;
+  game.emit();
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.ok(game.calls.some(([skillId, actionId]) => skillId === 'crafting' && actionId === 'carve_totem'));
+  assert.ok(app.state.planQueue.every((entry) => entry.plan.ok));
+  app.executor.stop();
+});
+
+test('reports still-blocked plans on completion and keeps them queued', async () => {
+  const document = new FakeDocument();
+  const game = recordingGame();
+  const result = await bootOverlay({ document, window: { __frCompanion: game.api }, fetch: fetchFor(datasets()) });
+  const { app, shell } = result;
+  const panel = shell.panels.plan;
+  const form = panel.querySelector('#fr-plan-form');
+  const qty = panel.querySelector('#fr-plan-qty');
+  app.state.planItemId = 'log';
+  qty.value = '1';
+  form.dispatch('submit');
+  app.state.planItemId = 'totem';
+  qty.value = '1';
+  form.dispatch('submit');
+
+  shell.queueControls.querySelector('#fr-run').dispatch('click');
+  // Complete the woodcutting step; crafting never levels, so totem stays blocked.
+  game.gameState.inventory.log = 1;
+  game.emit();
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.match(app.state.executorStatus.message, /1 skipped \u2014 still blocked/u);
+  assert.ok(app.state.queueGoals.some((goal) => goal.itemId === 'totem'));
+  const stored = JSON.parse(document.defaultView.localStorage.getItem('fractured-realms-companion.queue.v1'));
+  assert.ok(stored.goals.some((goal) => goal.itemId === 'totem'));
+  app.executor.stop();
 });
 
 test('compact mode toggles and persists its panel preference', () => {
