@@ -457,7 +457,16 @@ test('executor time stop condition completes on the deadline regardless of produ
     stopWhen: { type: 'time', ms: 50 },
   }]);
   assert.equal(executor.getStatus().phase, 'running');
-  game.timers.tick(50);
+  game.timers.tick(20);
+  assert.deepEqual(
+    {
+      produced: executor.getStatus().stepProduced,
+      target: executor.getStatus().stepTarget,
+      remaining: executor.getStatus().stepRemainingMs,
+    },
+    { produced: 20, target: 50, remaining: 30 },
+  );
+  game.timers.tick(30);
   assert.equal(executor.getStatus().phase, 'complete');
   assert.equal(game.api.state.inventory.ore ?? 0, 0);
 });
@@ -474,6 +483,14 @@ test('executor time stop condition preserves remaining active time across a paus
   game.api.state.activeSkill = 'combat'; game.api.state.activeAction = 'attack'; game.emit();
   game.timers.tick(1300);
   assert.equal(executor.getStatus().phase, 'paused');
+  assert.deepEqual(
+    {
+      produced: executor.getStatus().stepProduced,
+      target: executor.getStatus().stepTarget,
+      remaining: executor.getStatus().stepRemainingMs,
+    },
+    { produced: 1500, target: 2000, remaining: 500 },
+  );
   executor.resume();
   assert.equal(game.api.state.activeAction, 'ore');
   assert.equal(executor.getStatus().phase, 'running');
@@ -483,16 +500,40 @@ test('executor time stop condition preserves remaining active time across a paus
   assert.equal(executor.getStatus().phase, 'complete');
 });
 
-test('executor xp stop condition ignores inventory and completes on the threshold', () => {
+test('executor XP stop progress tracks the XP delta and projected duration', () => {
   const game = fakeGame();
+  game.api.state.skillXp.mine = 100;
   const executor = createDirectExecutor(game.api, { ...game.timers });
   executor.run([{
     skillId: 'mine', actionId: 'ore', actionName: 'Ore', count: 5,
     produceItemId: 'ore', produceQty: 5, interval: 10,
-    stopWhen: { type: 'xp', skillId: 'mine', xpAtLeast: 150 },
+    stopWhen: { type: 'xp', skillId: 'mine', xpAtLeast: 150, xpPerRun: 10 },
   }]);
+  assert.deepEqual(
+    {
+      produced: executor.getStatus().stepProduced,
+      target: executor.getStatus().stepTarget,
+      remaining: executor.getStatus().remainingMs,
+    },
+    { produced: 0, target: 50, remaining: 50 },
+  );
+  game.api.state.skillXp.mine = 120;
+  game.emit();
+  assert.deepEqual(
+    {
+      produced: executor.getStatus().stepProduced,
+      target: executor.getStatus().stepTarget,
+      remaining: executor.getStatus().remainingMs,
+    },
+    { produced: 20, target: 50, remaining: 30 },
+  );
   game.produce('ore', 6);
   assert.equal(executor.getStatus().phase, 'running');
-  game.api.state.skillXp = { mine: 150 }; game.emit();
+  game.api.state.skillXp.mine = 150;
+  game.emit();
   assert.equal(executor.getStatus().phase, 'complete');
+  assert.deepEqual(
+    { produced: executor.getStatus().stepProduced, target: executor.getStatus().stepTarget },
+    { produced: 50, target: 50 },
+  );
 });

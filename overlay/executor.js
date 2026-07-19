@@ -45,6 +45,7 @@ export function createDirectExecutor(api, options = {}) {
   let stopTimer;
   let stopDeadline = 0;
   let stopRemainingMs = 0;
+  let stopXpStart = 0;
   let unsubscribe;
   let runToken = 0;
   let transitionBusy = false;
@@ -64,11 +65,21 @@ export function createDirectExecutor(api, options = {}) {
       };
     }
     const inventory = inventoryValue(current, step.produceItemId);
+    const futureMs = steps.slice(index + 1).reduce((sum, candidate) => sum + stepDuration(candidate), 0);
+    if (step.stopWhen) {
+      const sp = stopProgress(step, current);
+      return {
+        completedSteps: Math.max(0, index),
+        stepProduced: sp.produced,
+        stepTarget: sp.target,
+        stepRemainingMs: sp.remainingMs,
+        remainingMs: sp.remainingMs + futureMs,
+      };
+    }
     const stepTarget = Math.max(0, target - stepStart);
     const stepProduced = Math.min(stepTarget, Math.max(0, inventory - stepStart));
     const outputPerRun = Math.max(1, asNumber(step.produceQty, 0) / Math.max(1, asNumber(step.count, 1)));
     const remainingRuns = Math.ceil(Math.max(0, target - inventory) / outputPerRun);
-    const futureMs = steps.slice(index + 1).reduce((sum, candidate) => sum + stepDuration(candidate), 0);
     const stepRemainingMs = remainingRuns * Math.max(0, asNumber(step.interval, 0));
     return {
       completedSteps: Math.max(0, index),
@@ -136,6 +147,24 @@ export function createDirectExecutor(api, options = {}) {
     return false;
   };
 
+  const stopProgress = (step, current) => {
+    const stop = step.stopWhen;
+    if (stop.type === 'time') {
+      const total = Math.max(0, asNumber(stop.ms, 0));
+      const remaining = stopTimer !== undefined
+        ? Math.max(0, stopDeadline - asNumber(now(), 0))
+        : Math.min(total, Math.max(0, stopRemainingMs));
+      return { produced: Math.max(0, total - remaining), target: total, remainingMs: remaining };
+    }
+    const xpNow = asNumber(current?.skillXp?.[stop.skillId], stopXpStart);
+    const goal = asNumber(stop.xpAtLeast, 0);
+    const target = Math.max(0, goal - stopXpStart);
+    const produced = Math.min(target, Math.max(0, xpNow - stopXpStart));
+    const perRun = asNumber(stop.xpPerRun, 0);
+    const remainingRuns = perRun > 0 ? Math.ceil(Math.max(0, goal - xpNow) / perRun) : 0;
+    return { produced, target, remainingMs: remainingRuns * Math.max(0, asNumber(step.interval, 0)) };
+  };
+
   const error = (message) => {
     const current = state();
     clearStepTimers();
@@ -146,6 +175,13 @@ export function createDirectExecutor(api, options = {}) {
   };
 
   const complete = () => {
+    const final = steps.at(-1);
+    const finalStopTarget = final?.stopWhen?.type === 'time'
+      ? Math.max(0, asNumber(final.stopWhen.ms, 0))
+      : final?.stopWhen?.type === 'xp'
+        ? Math.max(0, asNumber(final.stopWhen.xpAtLeast, 0) - stopXpStart)
+        : 0;
+    const finalTarget = final?.stopWhen ? finalStopTarget : Math.max(0, target - stepStart);
     clearStepTimers();
     detach();
     transitionBusy = false;
@@ -154,8 +190,8 @@ export function createDirectExecutor(api, options = {}) {
       currentStep: steps.length ? steps.length - 1 : null,
       totalSteps: steps.length,
       completedSteps: steps.length,
-      stepProduced: steps.length ? Math.max(0, target - stepStart) : 0,
-      stepTarget: steps.length ? Math.max(0, target - stepStart) : 0,
+      stepProduced: steps.length ? finalTarget : 0,
+      stepTarget: steps.length ? finalTarget : 0,
       stepRemainingMs: 0,
       remainingMs: 0,
       message: 'Queue complete',
@@ -266,6 +302,7 @@ export function createDirectExecutor(api, options = {}) {
     }
     clearTimer(mismatchTimer);
     mismatchTimer = undefined;
+    if (step.stopWhen) update('running', `Running ${step.actionName}`, index, current);
   };
 
   const beginStep = (stepIndex, token) => {
@@ -281,6 +318,9 @@ export function createDirectExecutor(api, options = {}) {
     // A malformed/legacy step can still be executed using count and one output.
     if (target === stepStart && asNumber(step.count, 0) > 0) {
       target += asNumber(step.count, 0);
+    }
+    if (step.stopWhen?.type === 'xp') {
+      stopXpStart = asNumber(current?.skillXp?.[step.stopWhen.skillId], 0);
     }
     if (step.stopWhen?.type === 'time') {
       stopRemainingMs = Math.max(0, asNumber(step.stopWhen.ms, 0));
@@ -427,6 +467,8 @@ export function createDirectExecutor(api, options = {}) {
     resume,
     splice,
     jump,
-    getStatus: () => ({ ...status }),
+    getStatus: () => (status.phase === 'starting' || status.phase === 'running' || status.phase === 'paused'
+      ? { ...status, ...progress() }
+      : { ...status }),
   };
 }
