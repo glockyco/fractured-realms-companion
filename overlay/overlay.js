@@ -276,7 +276,8 @@ svg {
 .item-row code { color: var(--fr-neutral-300); font-size: 0.6875rem; }
 .detail { min-width: 0; overflow: auto; padding: var(--fr-s4); }
 .detail-empty, .empty { max-width: 48ch; margin: var(--fr-s8) auto; color: var(--fr-neutral-300); text-align: center; }
-.item-heading { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--fr-s3); }
+.item-heading { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--fr-s3); }
+.item-heading.has-art { grid-template-columns: auto minmax(0, 1fr) auto; }
 .item-art { width: 3rem; height: 3rem; object-fit: contain; image-rendering: auto; }
 h2, h3, p { text-wrap: pretty; }
 h2 { margin: 0; font-size: 1.125rem; line-height: 1.25; letter-spacing: -0.015em; }
@@ -952,7 +953,7 @@ function createApplication(shell, datasets, api) {
       ? `<li class="record-row"><div class="record-top"><strong>${escapeHtml(use.buildingName)}</strong><span class="badge">Cost ×${escapeHtml(use.qty)}</span></div><p>${escapeHtml(use.upgradeLabel || `Upgrade level ${use.upgradeLevel ?? '—'}`)}</p></li>`
       : `<li class="record-row"><div class="record-top"><strong>${escapeHtml(use.actionName)}</strong><span class="badge">Input ×${escapeHtml(use.qty)}</span></div><p>${escapeHtml(skillNames[use.skillId] || use.skillId)}</p></li>`).join('') || '<li class="record-row"><p>No action or building upgrade consumes this item.</p></li>';
     detail.innerHTML = `
-      <div class="item-heading">
+      <div class="item-heading${item.art ? ' has-art' : ''}">
         ${item.art ? `<img class="item-art" src="/art/icons/items/${encodeURIComponent(id)}.png" alt="">` : ''}
         <div><h2>${escapeHtml(item.label || humanizeId(id))}</h2><p class="meta">${escapeHtml(item.type || 'Unknown type')}${item.subtype ? ` / ${escapeHtml(item.subtype)}` : ''}</p></div>
         <button class="button" id="fr-detail-plan" type="button" data-plan-item="${escapeHtml(id)}"${isExecutionLocked(state.executorStatus?.phase) ? ' disabled' : ''}>Plan this item</button>
