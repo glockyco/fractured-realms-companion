@@ -512,18 +512,26 @@ test('preemption reverts when the executor is no longer running', async () => {
 });
 
 test('floating controls clamp to the viewport and suppress click after dragging', () => {
+  // Partial off-screen is allowed: a negative left is kept (window tucked past the left edge)
+  // while the top edge stays reachable and a minimum sliver remains on screen.
   assert.deepEqual(
     clampFloatingPosition({ left: -20, top: 900 }, { width: 100, height: 80 }, { width: 500, height: 400 }),
-    { left: 8, top: 312 },
+    { left: -20, top: 344 },
+  );
+  // A window cannot be pushed so far it disappears: at least ~56px stays visible on each axis.
+  assert.deepEqual(
+    clampFloatingPosition({ left: -9999, top: 9999 }, { width: 100, height: 80 }, { width: 500, height: 400 }),
+    { left: 56 - 100, top: 400 - 56 },
   );
   const fitted = fitWithinViewport(
     { left: 500, top: 700 },
     { width: 768, height: 672 },
     { width: 900, height: 800 },
   );
-  assert.equal(fitted.left, 124);
-  assert.equal(fitted.top, 120);
-  assert.equal(fitted.maxHeight, 800 - fitted.top - 8);
+  assert.equal(fitted.left, 500);
+  assert.equal(fitted.top, 700);
+  assert.equal(fitted.maxHeight, 800 - 2 * 8);
+  assert.equal(fitted.maxWidth, 900 - 2 * 8);
 
   const document = new FakeDocument();
   const shell = createOverlayShell(document);

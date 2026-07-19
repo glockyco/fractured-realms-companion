@@ -567,27 +567,36 @@ export function resolvePlanQueue(datasets, snapshot, goals) {
   return queue;
 }
 
-export function clampFloatingPosition(position, size, viewport, gutter = 8) {
+export function clampFloatingPosition(position, size, viewport, gutter = 8, minVisible = 56) {
   const width = Math.max(0, Number(size?.width) || 0);
   const height = Math.max(0, Number(size?.height) || 0);
   const viewportWidth = Math.max(0, Number(viewport?.width) || 0);
   const viewportHeight = Math.max(0, Number(viewport?.height) || 0);
+  // Keep at least a grabbable sliver on screen so the window can be tucked aside
+  // without getting lost, and keep the top edge reachable so its drag handle stays usable.
+  const keepX = Math.min(Math.max(0, Number(minVisible) || 0), width || Math.max(0, Number(minVisible) || 0));
+  const keepY = Math.min(Math.max(0, Number(minVisible) || 0), height || Math.max(0, Number(minVisible) || 0));
+  const minLeft = keepX - width;
+  const maxLeft = Math.max(minLeft, viewportWidth - keepX);
+  const minTop = gutter;
+  const maxTop = Math.max(minTop, viewportHeight - keepY);
   return {
-    left: Math.max(gutter, Math.min(Number(position?.left) || 0, Math.max(gutter, viewportWidth - width - gutter))),
-    top: Math.max(gutter, Math.min(Number(position?.top) || 0, Math.max(gutter, viewportHeight - height - gutter))),
+    left: Math.max(minLeft, Math.min(Number(position?.left) || 0, maxLeft)),
+    top: Math.max(minTop, Math.min(Number(position?.top) || 0, maxTop)),
   };
 }
 
 export function fitWithinViewport(position, size, viewport, gutter = 8) {
-  const width = Math.min(Math.max(0, Number(size?.width) || 0), Math.max(0, (Number(viewport?.width) || 0) - 2 * gutter));
-  const height = Math.min(Math.max(0, Number(size?.height) || 0), Math.max(0, (Number(viewport?.height) || 0) - 2 * gutter));
+  const viewportWidth = Math.max(0, Number(viewport?.width) || 0);
+  const viewportHeight = Math.max(0, Number(viewport?.height) || 0);
+  // Cap the window to the viewport size independently of where it sits, so a window
+  // dragged partly off an edge keeps its size instead of collapsing.
+  const maxWidth = Math.max(0, viewportWidth - 2 * gutter);
+  const maxHeight = Math.max(0, viewportHeight - 2 * gutter);
+  const width = Math.min(Math.max(0, Number(size?.width) || 0), maxWidth);
+  const height = Math.min(Math.max(0, Number(size?.height) || 0), maxHeight);
   const { left, top } = clampFloatingPosition(position, { width, height }, viewport, gutter);
-  return {
-    left,
-    top,
-    maxWidth: (Number(viewport?.width) || 0) - left - gutter,
-    maxHeight: (Number(viewport?.height) || 0) - top - gutter,
-  };
+  return { left, top, maxWidth, maxHeight };
 }
 
 function formatInterval(milliseconds) {
