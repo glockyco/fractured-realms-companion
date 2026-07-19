@@ -1,4 +1,4 @@
-import { createPlan } from './planner.js';
+import { actionBlocker, createPlan } from './planner.js';
 import { createDirectExecutor } from './executor.js';
 
 export const DATA_FILES = Object.freeze([
@@ -96,6 +96,7 @@ svg {
   flex: 0 0 auto;
 }
 [hidden] { display: none !important; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .launcher {
   position: fixed;
   z-index: var(--fr-z-overlay);
@@ -325,6 +326,7 @@ h3 { margin: var(--fr-s5) 0 var(--fr-s2); font-size: 0.875rem; }
 }
 .button:hover { border-color: var(--fr-neutral-300); background: var(--fr-neutral-800); }
 .button:active { transform: translateY(1px); }
+.button.compact { min-height: 1.875rem; padding-inline: var(--fr-s2); font-size: 0.75rem; }
 .button.primary { border-color: var(--fr-harbor-600); background: var(--fr-harbor-600); color: var(--fr-neutral-100); }
 .button.primary:hover { border-color: var(--fr-harbor-400); background: var(--fr-harbor-800); }
 .button.danger { border-color: var(--fr-danger-400); background: var(--fr-danger-950); color: var(--fr-danger-400); }
@@ -334,7 +336,9 @@ h3 { margin: var(--fr-s5) 0 var(--fr-s2); font-size: 0.875rem; }
   outline-offset: 2px;
 }
 .skills-view, .plan-view { padding: var(--fr-s4); }
-.skills-toolbar { max-width: 24rem; margin-bottom: var(--fr-s4); }
+.skills-toolbar { max-width: 24rem; margin-bottom: var(--fr-s2); }
+.skill-action-status { min-height: 1.25rem; margin: 0 0 var(--fr-s3); color: var(--fr-neutral-300); font-size: 0.75rem; }
+.skill-action-status[data-state="error"] { color: var(--fr-brass-400); }
 .table-wrap { overflow: auto; border: 1px solid var(--fr-neutral-800); border-radius: var(--fr-radius-sm); }
 table { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
 caption { padding: var(--fr-s3); color: var(--fr-neutral-300); text-align: left; }
@@ -853,7 +857,8 @@ function blockedText(blocked) {
   if (reason === 'prayer') return `Reach Prayer level ${blocked.minPrayerLevel} before running ${blocked.actionName}.`;
   if (reason === 'map') return `Chart ${humanizeId(blocked.mapId)} before running ${blocked.actionName}.`;
   if (reason === 'recipe') return `Learn the ${blocked.actionName} recipe before running this step.`;
-  if (reason === 'bag-full') return 'Free at least one bag slot before running a plan.';
+  if (reason === 'bag-full') return 'Free at least one bag slot before running an action.';
+  if (reason === 'input') return `Requires ${blocked.required} ${humanizeId(blocked.itemId)} in the bag; ${blocked.available} available.`;
   if (reason === 'rare-only') return `Only available as a rare output${blocked.chances ? ` (${blocked.chances})` : ''}; rare drops are not automated.`;
   if (reason === 'no-source') return 'No deterministic source exists in this game build.';
   if (reason === 'cycle') return `A dependency cycle prevents a safe plan${blocked.itemId ? ` at ${blocked.itemId}` : ''}.`;
@@ -981,8 +986,9 @@ function createApplication(shell, datasets, api) {
   }, true);
 
   const skillsPanel = shell.panels.skills;
-  skillsPanel.innerHTML = `<div class="skills-view"><div class="skills-toolbar field"><label for="fr-skill-select">Skill</label><select class="control" id="fr-skill-select"></select></div><div id="fr-skill-table"></div></div>`;
+  skillsPanel.innerHTML = `<div class="skills-view"><div class="skills-toolbar field"><label for="fr-skill-select">Skill</label><select class="control" id="fr-skill-select"></select></div><p class="skill-action-status" id="fr-skill-action-status" role="status" aria-live="polite">Start an action directly from the table. This stops the current game action.</p><div id="fr-skill-table"></div></div>`;
   const skillSelect = skillsPanel.querySelector('#fr-skill-select');
+  const skillActionStatus = skillsPanel.querySelector('#fr-skill-action-status');
   const skillTable = skillsPanel.querySelector('#fr-skill-table');
   const actionSkillIds = Object.keys(datasets.actions || {});
   skillSelect.innerHTML = actionSkillIds.map((id) => `<option value="${escapeHtml(id)}">${escapeHtml(skillNames[id] || id)}</option>`).join('');
@@ -994,12 +1000,43 @@ function createApplication(shell, datasets, api) {
       skillTable.innerHTML = '<div class="empty">This build has no recorded actions for the selected skill.</div>';
       return;
     }
-    skillTable.innerHTML = `<div class="table-wrap"><table><caption>${escapeHtml(skillNames[skillId] || skillId)} actions · ${actions.length.toLocaleString()} total</caption><thead><tr><th scope="col">Action</th><th scope="col">Level</th><th scope="col">Interval</th><th scope="col">Inputs</th><th scope="col">Outputs</th><th scope="col">Tool</th></tr></thead><tbody>${actions.map((action) => {
+    let snapshot = {};
+    try { snapshot = api.getState() || {}; } catch { /* action buttons remain available for runtime validation */ }
+    const locked = isExecutionLocked(state.executorStatus?.phase);
+    skillTable.innerHTML = `<div class="table-wrap"><table><caption>${escapeHtml(skillNames[skillId] || skillId)} actions · ${actions.length.toLocaleString()} total</caption><thead><tr><th scope="col">Action</th><th scope="col">Level</th><th scope="col">Interval</th><th scope="col">Inputs</th><th scope="col">Outputs</th><th scope="col">Tool</th><th scope="col"><span class="visually-hidden">Start action</span></th></tr></thead><tbody>${actions.map((action) => {
       const rare = (action.rareOutputs || []).map((entry) => `${escapeHtml(labelFor(items, entry.item))} <span class="data">×${escapeHtml(entry.qty ?? 1)}</span> <span class="badge warning">${escapeHtml(formatChance(entry.chance))}</span>`).join('<br>');
-      return `<tr><td><span class="cell-title">${escapeHtml(action.name || humanizeId(action.id))}</span>${action.spot ? `<span class="cell-id">${escapeHtml(datasets.strings?.[`name.${action.spot}`] || humanizeId(action.spot))}</span>` : ''}</td><td class="data">${escapeHtml(action.levelReq)}</td><td class="data">${escapeHtml(formatInterval(action.interval))}</td><td>${quantityEntries(action.inputs, items)}</td><td>${quantityEntries(action.outputs, items)}${rare ? `<br>${rare}` : ''}</td><td>${action.toolReq ? escapeHtml(datasets.strings?.[`name.${action.toolReq}`] || labelFor(items, action.toolReq)) : '—'}</td></tr>`;
+      const blocker = actionBlocker(datasets, snapshot, skillId, action);
+      const blockerMessage = blockedText(blocker);
+      return `<tr><td><span class="cell-title">${escapeHtml(action.name || humanizeId(action.id))}</span>${action.spot ? `<span class="cell-id">${escapeHtml(datasets.strings?.[`name.${action.spot}`] || humanizeId(action.spot))}</span>` : ''}</td><td class="data">${escapeHtml(action.levelReq)}</td><td class="data">${escapeHtml(formatInterval(action.interval))}</td><td>${quantityEntries(action.inputs, items)}</td><td>${quantityEntries(action.outputs, items)}${rare ? `<br>${rare}` : ''}</td><td>${action.toolReq ? escapeHtml(datasets.strings?.[`name.${action.toolReq}`] || labelFor(items, action.toolReq)) : '—'}</td><td><button class="button compact" type="button" data-start-action data-skill-id="${escapeHtml(skillId)}" data-action-id="${escapeHtml(action.id)}" aria-label="Start ${escapeHtml(action.name || humanizeId(action.id))}"${blockerMessage ? ` title="${escapeHtml(blockerMessage)}"` : ''}${locked ? ' disabled' : ''}>${ICONS.play}Start</button></td></tr>`;
     }).join('')}</tbody></table></div>`;
   }
   skillSelect.addEventListener('change', renderSkillTable);
+  skillTable.addEventListener('click', async (event) => {
+    const control = event.target.closest?.('[data-start-action]');
+    if (!control || control.disabled || isExecutionLocked(state.executorStatus?.phase)) return;
+    const skillId = control.dataset.skillId;
+    const action = (datasets.actions?.[skillId] || []).find((candidate) => String(candidate.id) === control.dataset.actionId);
+    if (!action) return;
+    const blocker = actionBlocker(datasets, api.getState(), skillId, action);
+    if (blocker) {
+      skillActionStatus.dataset.state = 'error';
+      skillActionStatus.textContent = blockedText(blocker);
+      return;
+    }
+    control.disabled = true;
+    skillActionStatus.dataset.state = 'idle';
+    skillActionStatus.textContent = `Starting ${action.name || humanizeId(action.id)}…`;
+    try {
+      await api.stopAction();
+      await api.startAction(skillId, action.id);
+      skillActionStatus.textContent = `${action.name || humanizeId(action.id)} started. Starting another action will replace it.`;
+    } catch (error) {
+      skillActionStatus.dataset.state = 'error';
+      skillActionStatus.textContent = error instanceof Error ? error.message : `Unable to start ${action.name || humanizeId(action.id)}.`;
+    } finally {
+      control.disabled = false;
+    }
+  });
 
   const planPanel = shell.panels.plan;
   planPanel.innerHTML = `
@@ -1204,6 +1241,7 @@ function createApplication(shell, datasets, api) {
     executorProgress.max = Math.max(1, total);
     executorProgress.value = status.phase === 'complete' ? total : Math.max(0, (currentIndex || 0) + stepFraction);
     const locked = isExecutionLocked(status.phase);
+    for (const control of skillTable.querySelectorAll?.('[data-start-action]') || []) control.disabled = locked;
     if (locked) closePlanTargets();
     planItem.disabled = locked;
     planQty.disabled = locked;

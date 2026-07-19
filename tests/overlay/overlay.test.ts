@@ -305,6 +305,25 @@ test('tab keyboard navigation updates selection and focus', () => {
   assert.equal(shell.tabButtons[2].getAttribute('aria-selected'), 'true');
 });
 
+test('skills table starts an available action through game controls', async () => {
+  const document = new FakeDocument();
+  const calls = [];
+  const gameApi = {
+    ...api(),
+    stopAction() { calls.push(['stop']); },
+    startAction(skillId, actionId) { calls.push(['start', skillId, actionId]); },
+  };
+  const result = await bootOverlay({ document, window: { __frCompanion: gameApi }, fetch: fetchFor(datasets()) });
+  const skills = result.shell.panels.skills;
+  const table = skills.querySelector('#fr-skill-table');
+  const control = { disabled: false, dataset: { skillId: 'woodcutting', actionId: 'chop_log' } };
+  table.dispatch('click', { target: { closest: () => control } });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.deepEqual(calls, [['stop'], ['start', 'woodcutting', 'chop_log']]);
+  assert.match(skills.querySelector('#fr-skill-action-status').textContent, /started/i);
+});
+
 test('API timeout is visible in the launcher and nonmodal panel', async () => {
   const document = new FakeDocument();
   const result = await bootOverlay({

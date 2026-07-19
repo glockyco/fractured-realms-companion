@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createPlan, levelForXp } from '../../overlay/planner.js';
+import { actionBlocker, createPlan, levelForXp } from '../../overlay/planner.js';
 import { createDirectExecutor } from '../../overlay/executor.js';
 
 const xp = () => {
@@ -231,6 +231,22 @@ test('blocks a new plan when the game bag has no free slot', () => {
   }, { itemId: 'herb', qty: 1 });
   assert.equal(equippedCopyDoesNotOccupySlot.ok, true);
 });
+test('preflights exact actions for direct skill starts', () => {
+  const exact = action('crafting', 'plank', 'Make Plank', 'plank', { log: 2 }, { toolReq: 'saw' });
+  const datasets = { ...data({ crafting: [exact] }), strings: { 'name.saw': 'Workshop Saw' } };
+  const levelBlocked = actionBlocker(datasets, snapshot({}, { crafting: 0 }), 'crafting', exact);
+  assert.equal(levelBlocked.reason, 'tool');
+
+  const inputBlocked = actionBlocker(datasets, { inventory: { log: 1 }, equipment: { saw: 1 }, skillXp: { crafting: 100 } }, 'crafting', exact);
+  assert.deepEqual(
+    { reason: inputBlocked.reason, itemId: inputBlocked.itemId, required: inputBlocked.required, available: inputBlocked.available },
+    { reason: 'input', itemId: 'log', required: 2, available: 1 },
+  );
+
+  const ready = actionBlocker(datasets, { inventory: { log: 2 }, equipment: { saw: 1 }, skillXp: { crafting: 100 } }, 'crafting', exact);
+  assert.equal(ready, null);
+});
+
 test('executor reports a start refusal after the verification window', () => {
   const game = fakeGame();
   game.api.startAction = () => {}; // game refuses without changing active state

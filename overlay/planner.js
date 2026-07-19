@@ -108,6 +108,36 @@ function blockedStep(itemId, items, reason, details = {}) {
   };
 }
 
+export function actionBlocker(datasets = {}, snapshot = {}, skillId, action = {}) {
+  const skillXp = snapshot?.skillXp && typeof snapshot.skillXp === 'object' ? snapshot.skillXp : {};
+  const level = levelForXp(datasets.xp, skillXp[skillId]);
+  const minLevel = requiredLevel(action);
+  if (level < minLevel) return { reason: 'level', skillId, minLevel, currentLevel: level, actionName: action.name ?? action.id };
+  const toolId = requiredTool(action);
+  if (toolId && !hasToolUnlock(action, snapshot?.equipment)) {
+    return { reason: 'tool', toolId, toolName: datasets.strings?.[`name.${toolId}`] ?? itemName(datasets.items, toolId), actionName: action.name ?? action.id };
+  }
+  if (action.patternReq && !(snapshot?.unlockedGlyphPatterns || []).includes(action.patternReq)) {
+    return { reason: 'pattern', patternId: action.patternReq, actionName: action.name ?? action.id };
+  }
+  const minPrayerLevel = number(action.prayerReq, 0);
+  if (minPrayerLevel && levelForXp(datasets.xp, skillXp.prayer) < minPrayerLevel) {
+    return { reason: 'prayer', minPrayerLevel, actionName: action.name ?? action.id };
+  }
+  if (action.mapReq && !(snapshot?.chartedMaps || []).includes(action.mapReq)) {
+    return { reason: 'map', mapId: action.mapReq, actionName: action.name ?? action.id };
+  }
+  if (action.recipeScroll && !(snapshot?.unlockedRecipes || []).includes(action.id)) {
+    return { reason: 'recipe', recipeScrollId: action.recipeScroll, actionName: action.name ?? action.id };
+  }
+  for (const [itemId, required] of Object.entries(action.inputs || {})) {
+    const available = quantity(snapshot?.inventory, itemId);
+    if (available < number(required, 0)) return { reason: 'input', itemId, required: number(required, 0), available, actionName: action.name ?? action.id };
+  }
+  if (isBagFull(snapshot)) return { reason: 'bag-full', bagSize: Math.max(0, number(snapshot?.bagSize, 48)), actionName: action.name ?? action.id };
+  return null;
+}
+
 /**
  * Resolve a requested item into post-order direct actions. produceQty is total
  * deterministic output for the step, not output per invocation.
