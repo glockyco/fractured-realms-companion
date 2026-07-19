@@ -213,7 +213,9 @@ svg {
 .tab[aria-selected="true"] { border-color: var(--fr-harbor-400); color: var(--fr-neutral-100); }
 .tabpanels, .tabpanel { min-height: 0; height: 100%; }
 .tabpanel { overflow: auto; }
-.items-layout { min-height: 100%; display: grid; grid-template-columns: minmax(13rem, 0.8fr) minmax(0, 1.35fr); }
+#fr-panel-items { overflow: hidden; }
+.items-layout { height: 100%; min-height: 0; display: grid; grid-template-columns: minmax(13rem, 0.8fr) minmax(0, 1.35fr); }
+.items-layout > * { min-height: 0; }
 .item-browser { min-width: 0; display: grid; grid-template-rows: auto auto minmax(0, 1fr); border-right: 1px solid var(--fr-neutral-800); }
 .toolbar { display: flex; align-items: end; gap: var(--fr-s2); padding: var(--fr-s3); }
 .field { min-width: 0; display: grid; gap: var(--fr-s1); }
