@@ -279,12 +279,19 @@ test('compact mode toggles and persists its panel preference', () => {
   const shell = createOverlayShell(document);
   const toggle = shell.compactToggle || shell.panel.querySelector('#fr-compact-toggle');
   assert.equal(shell.panel.dataset.compact, 'false');
+  // Simulate a manual resize: inline width/height would otherwise override the compact rule.
+  shell.panel.style.width = '900px';
+  shell.panel.style.height = '600px';
   toggle.dispatch('click');
   assert.equal(shell.panel.dataset.compact, 'true');
   assert.equal(toggle.getAttribute('aria-pressed'), 'true');
+  assert.equal(shell.panel.style.width, '');
+  assert.equal(shell.panel.style.height, '');
   assert.equal(JSON.parse(document.defaultView.localStorage.getItem('fractured-realms-companion.positions.v1')).compactMode, true);
   toggle.dispatch('click');
   assert.equal(shell.panel.dataset.compact, 'false');
+  assert.equal(shell.panel.style.width, '900px');
+  assert.equal(shell.panel.style.height, '600px');
 });
 
 

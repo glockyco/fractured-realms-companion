@@ -871,8 +871,22 @@ export function createOverlayShell(documentRef) {
   const launcherDrag = enableFloatingDrag(documentRef, launcher, launcher, (position) => savePosition('launcher', position));
   enableFloatingDrag(documentRef, panel, identity, (position) => savePosition('panel', position), fitPanel);
 
+  let expandedSize = null;
   const setCompact = (compact) => {
     const enabled = Boolean(compact);
+    if (enabled) {
+      // A manual resize leaves inline width/height on the panel, and inline styles
+      // outrank the .panel[data-compact] stylesheet rule, so clear them (remembering
+      // the expanded size) to let compact mode shrink the box.
+      if (panel.dataset.compact !== 'true') {
+        expandedSize = { width: panel.style.width, height: panel.style.height };
+      }
+      panel.style.width = '';
+      panel.style.height = '';
+    } else if (expandedSize) {
+      panel.style.width = expandedSize.width;
+      panel.style.height = expandedSize.height;
+    }
     panel.dataset.compact = String(enabled);
     compactToggle.setAttribute('aria-pressed', String(enabled));
     savePosition('compactMode', enabled);
