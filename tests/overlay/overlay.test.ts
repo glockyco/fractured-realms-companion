@@ -129,8 +129,19 @@ function datasets() {
       log: { label: 'Harbor Log', type: 'material', desc: 'A sturdy log.', value: 2, art: true },
       plank: { label: 'Harbor Plank', type: 'material', healAmount: 1, art: false },
       totem: { label: 'Harbor Totem', type: 'material' },
+      seed: { label: 'Harbor Seed', type: 'material' },
+      talon: { label: 'Harbor Talon', type: 'material' },
+      feathers: { label: 'Harbor Feathers', type: 'material' },
     },
     actions: {
+      gathering: [{
+        id: 'gather_seed', name: 'Gather Harbor Seed', levelReq: 1, interval: 1000, xp: 5,
+        outputs: { seed: 1 },
+      }],
+      trapping: [{
+        id: 'trap_talon', name: 'Trap Harbor Talon', levelReq: 1, interval: 1000, xp: 5,
+        inputs: { seed: 1 }, outputs: { feathers: 2 }, rareOutputs: [{ item: 'talon', qty: 1, chance: 0.2 }],
+      }],
       woodcutting: [{
         id: 'chop_log', name: 'Chop Harbor Tree', levelReq: 1, interval: 1000, xp: 5,
         spot: 'harbor', outputs: { log: 1 }, rareOutputs: [{ item: 'plank', qty: 1, chance: 0.05 }],
@@ -529,8 +540,22 @@ test('resolves skill level goals with XP stop conditions', () => {
   const final = plan.steps.at(-1);
 
   assert.equal(plan.ok, true);
-  assert.deepEqual(final.stopWhen, { type: 'xp', skillId: 'woodcutting', xpAtLeast: 120 });
+  assert.deepEqual(final.stopWhen, { type: 'xp', skillId: 'woodcutting', xpAtLeast: 120, xpPerRun: 5 });
   assert.equal(final.count, 4);
+});
+
+test('resolves rare level goals without chance-inflated runs', () => {
+  const queue = resolvePlanQueue(datasets(), {
+    inventory: {},
+    equipment: {},
+    skillXp: { woodcutting: 100, crafting: 100, trapping: 100, gathering: 100 },
+  }, [{ id: 'plan-1', itemId: 'talon', qty: 0, target: { type: 'level', level: 12 } }]);
+  const final = queue[0].plan.steps.at(-1);
+
+  assert.equal(queue[0].plan.ok, true);
+  assert.equal(final.rare, true);
+  assert.ok(Math.abs(final.count - 4) <= 1);
+  assert.equal(final.stopWhen.xpPerRun, 5);
 });
 
 test('resolves duration goals with time stop conditions', () => {

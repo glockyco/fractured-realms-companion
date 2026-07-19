@@ -607,12 +607,19 @@ function resolveGoalPlan(datasets, snapshot, goal) {
     runs = Math.ceil((target.minutes * 60000) / Math.max(1, Number(action?.interval) || 0));
   }
 
-  const plan = createPlan(datasets, snapshot, { itemId: goal.itemId, qty: have + runs * outPerRun });
+  const perRunYield = final.rare ? Math.max(1e-9, final.produceQty / Math.max(1, final.count)) : outPerRun;
+  const requestQty = have + (final.rare ? Math.max(1, Math.ceil(runs * perRunYield)) : runs * outPerRun);
+  const plan = createPlan(datasets, snapshot, { itemId: goal.itemId, qty: requestQty });
   if (!plan.ok) return plan;
   const last = plan.steps.at(-1);
   if (last) {
     if (target.type === 'level') {
-      last.stopWhen = { type: 'xp', skillId: final.skillId, xpAtLeast: xpForLevel(datasets.xp, target.level) };
+      last.stopWhen = {
+        type: 'xp',
+        skillId: final.skillId,
+        xpAtLeast: xpForLevel(datasets.xp, target.level),
+        xpPerRun: Number(action.xp) || 0,
+      };
     } else {
       last.stopWhen = { type: 'time', ms: target.minutes * 60000 };
     }
