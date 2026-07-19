@@ -95,7 +95,7 @@ fractured-companion --help
 
 - **Items:** search by item name, then view descriptions, values, healing data, icons, deterministic and rare sources, and uses.
 - **Skills:** browse extracted skill actions and their requirements, intervals, inputs, outputs, and locations.
-- **Planner:** request an item quantity from the current inventory and unlock state. The planner resolves deterministic input dependencies in order, checks skill levels, permanent Shop tool unlocks, learned recipes, glyph patterns, Prayer requirements, charted maps, and bag capacity, then explains anything that blocks the plan.
+- **Planner:** find a target with the searchable item picker, then request a quantity from the current inventory and unlock state. The planner resolves deterministic input dependencies in order, checks skill levels, permanent Shop tool unlocks, learned recipes, glyph patterns, Prayer requirements, charted maps, and bag capacity, then explains anything that blocks the plan.
 - **Executor:** runs each planned step directly through the game's own start/stop action controls, verifies that the requested action started, detects outside action changes, supports resume, and stops on a stalled action or completion. Rare outputs are never treated as guaranteed production, and tools are not auto-crafted.
 - **Game data:** `refresh` re-extracts the current build's item, action, skill, XP, building, dig-site, string, and item-art data before patching.
 

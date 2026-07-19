@@ -70,6 +70,7 @@ const CSS = `
   --fr-icon: 1rem;
   --fr-icon-lg: 1.25rem;
   --fr-z-overlay: 2147483000;
+  --fr-z-dropdown: 2147483001;
   --fr-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   color: var(--fr-neutral-100);
   font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -212,6 +213,36 @@ svg {
 .search-control { position: relative; display: flex; align-items: center; }
 .search-control svg { position: absolute; left: var(--fr-s2); color: var(--fr-neutral-300); pointer-events: none; }
 .search-control input { width: 100%; min-height: calc(var(--fr-control) - 2px); padding: 0 var(--fr-s2) 0 var(--fr-s8); border: 0; outline: 0; background: transparent; }
+.plan-combobox { min-width: 0; }
+.combobox-popover {
+  position: fixed;
+  z-index: var(--fr-z-dropdown);
+  margin: 0;
+  padding: var(--fr-s1);
+  overflow: auto;
+  border: 1px solid var(--fr-neutral-700);
+  border-radius: var(--fr-radius-md);
+  background: var(--fr-neutral-950);
+  box-shadow: 0 var(--fr-s3) var(--fr-s8) oklch(0 0 0 / 0.5);
+}
+.combobox-option {
+  width: 100%;
+  min-height: var(--fr-row-min);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--fr-s3);
+  padding: var(--fr-s2);
+  border-radius: var(--fr-radius-sm);
+  background: transparent;
+  color: var(--fr-neutral-100);
+  text-align: left;
+  cursor: pointer;
+}
+.combobox-option:hover, .combobox-option[aria-selected="true"] { background: var(--fr-harbor-950); }
+.combobox-option strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.combobox-option small { flex: 0 0 auto; color: var(--fr-neutral-300); font-size: 0.6875rem; }
+.combobox-empty { padding: var(--fr-s3); color: var(--fr-neutral-300); text-align: center; }
 ::placeholder { color: var(--fr-neutral-300); opacity: 1; }
 .result-count { margin: 0; padding: 0 var(--fr-s3) var(--fr-s2); color: var(--fr-neutral-300); font-size: 0.75rem; }
 .item-list { margin: 0; padding: 0; overflow: auto; list-style: none; }
@@ -372,6 +403,29 @@ function humanizeId(id) {
 
 function labelFor(items, id) {
   return items[id]?.label || humanizeId(id);
+}
+
+export function searchPlanTargets(itemEntries, query = '', priorityIds = [], limit = 10) {
+  const normalizedQuery = String(query).trim().toLocaleLowerCase();
+  const priorities = new Map(priorityIds.map((id, index) => [id, index]));
+  const matchRank = (label) => {
+    const normalized = String(label).toLocaleLowerCase();
+    if (!normalizedQuery) return 0;
+    if (normalized.startsWith(normalizedQuery)) return 0;
+    if (normalized.split(/\s+/u).some((word) => word.startsWith(normalizedQuery))) return 1;
+    return normalized.includes(normalizedQuery) ? 2 : Number.POSITIVE_INFINITY;
+  };
+  return itemEntries
+    .map(([id, item]) => ({ id, item, label: item?.label || humanizeId(id), match: matchRank(item?.label || humanizeId(id)) }))
+    .filter((entry) => Number.isFinite(entry.match))
+    .sort((left, right) => {
+      if (left.match !== right.match) return left.match - right.match;
+      const leftPriority = priorities.get(left.id) ?? Number.POSITIVE_INFINITY;
+      const rightPriority = priorities.get(right.id) ?? Number.POSITIVE_INFINITY;
+      if (leftPriority !== rightPriority) return leftPriority - rightPriority;
+      return left.label.localeCompare(right.label) || left.id.localeCompare(right.id);
+    })
+    .slice(0, Math.max(0, Number(limit) || 0));
 }
 
 function formatInterval(milliseconds) {
@@ -584,7 +638,7 @@ export function createOverlayShell(documentRef) {
     }
   });
 
-  return { host, shadow, launcher, panel, loading, error, tabs, tabButtons, panels, setOpen, selectTab, showError };
+  return { host, shadow, launcher, panel, close, loading, error, tabs, tabButtons, panels, setOpen, selectTab, showError };
 }
 
 function blockedText(blocked) {
@@ -605,6 +659,7 @@ function blockedText(blocked) {
 }
 
 function createApplication(shell, datasets, api) {
+  const documentRef = shell.panel.ownerDocument;
   const indexes = buildIndexes(datasets);
   const items = datasets.items || {};
   const sortedItems = Object.entries(items).sort(([, left], [, right]) =>
@@ -613,6 +668,8 @@ function createApplication(shell, datasets, api) {
   const skillNames = Object.fromEntries((datasets.skills || []).map((skill) => [skill.id, skill.name || skill.label || skill.id]));
   const state = {
     selectedItemId: null,
+    planItemId: '',
+    recentPlanItemIds: [],
     query: '',
     currentPlan: null,
     executorStatus: { phase: 'idle', currentStep: null, message: 'Choose an item and build a plan.' },
@@ -741,10 +798,11 @@ function createApplication(shell, datasets, api) {
   planPanel.innerHTML = `
     <div class="plan-view">
       <form class="plan-form" id="fr-plan-form">
-        <div class="field"><label for="fr-plan-item">Desired item</label><select class="control" id="fr-plan-item" required></select></div>
+        <div class="field"><label for="fr-plan-item">Desired item</label><div class="plan-combobox"><input class="control" id="fr-plan-item" type="search" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded="false" aria-controls="fr-plan-options" autocomplete="off" placeholder="Search item names" required></div></div>
         <div class="field"><label for="fr-plan-qty">Quantity</label><input class="control data" id="fr-plan-qty" type="number" min="1" step="1" value="1" inputmode="numeric"></div>
         <button class="button" id="fr-resolve-plan" type="submit">Build plan</button>
       </form>
+      <div class="combobox-popover" id="fr-plan-options" role="listbox" aria-label="Matching items" hidden></div>
       <div id="fr-plan-result"><div class="empty">Choose an item and quantity. The planner checks your inventory and skill levels, then lists each required action.</div></div>
       <div class="executor" aria-label="Direct action controls">
         <div class="executor-status" role="status" aria-live="polite" aria-atomic="true"><strong id="fr-executor-phase">Ready</strong><p id="fr-executor-message">Choose an item and build a plan.</p></div>
@@ -761,7 +819,119 @@ function createApplication(shell, datasets, api) {
   const runButton = planPanel.querySelector('#fr-run');
   const resumeButton = planPanel.querySelector('#fr-resume');
   const stopButton = planPanel.querySelector('#fr-stop');
-  planItem.innerHTML = `<option value="">Choose an item</option>${sortedItems.map(([id, item]) => `<option value="${escapeHtml(id)}">${escapeHtml(item.label || humanizeId(id))}</option>`).join('')}`;
+  const planOptions = planPanel.querySelector('#fr-plan-options');
+  shell.shadow.append(planOptions);
+  let planTargetResults = [];
+  let activePlanTarget = -1;
+
+  function planTargetPriorities() {
+    const ids = [];
+    const context = new Map();
+    const add = (id, label) => {
+      if (!id || !items[id] || context.has(id)) return;
+      ids.push(id);
+      context.set(id, label);
+    };
+    add(state.selectedItemId, 'Current item');
+    for (const id of state.recentPlanItemIds) add(id, 'Recent');
+    let snapshot = {};
+    try { snapshot = api.getState() || {}; } catch { /* ranking remains available without live inventory */ }
+    for (const [id, amount] of Object.entries(snapshot.inventory || {})) if (Number(amount) > 0) add(id, 'In bag');
+    const skillId = skillSelect.value || actionSkillIds[0];
+    for (const action of datasets.actions?.[skillId] || []) {
+      for (const id of Object.keys(action.outputs || {})) add(id, `${skillNames[skillId] || humanizeId(skillId)} output`);
+    }
+    return { ids, context };
+  }
+
+  function positionPlanOptions() {
+    const rect = planItem.getBoundingClientRect();
+    const view = documentRef.defaultView || globalThis;
+    const viewportWidth = Number(view.innerWidth) || 1024;
+    const viewportHeight = Number(view.innerHeight) || 768;
+    const gutter = 8;
+    const width = Math.min(rect.width, viewportWidth - (2 * gutter));
+    const left = Math.max(gutter, Math.min(rect.left, viewportWidth - width - gutter));
+    const top = Math.min(rect.bottom + 4, viewportHeight - gutter);
+    planOptions.style.left = `${left}px`;
+    planOptions.style.top = `${top}px`;
+    planOptions.style.width = `${width}px`;
+    planOptions.style.maxHeight = `${Math.max(96, Math.min(280, viewportHeight - top - gutter))}px`;
+  }
+
+  function renderPlanTargetOptions(query = '') {
+    const { ids, context } = planTargetPriorities();
+    planTargetResults = searchPlanTargets(sortedItems, query, ids, 10);
+    if (activePlanTarget >= planTargetResults.length) activePlanTarget = planTargetResults.length - 1;
+    planOptions.innerHTML = planTargetResults.length
+      ? planTargetResults.map((entry, index) => `<button class="combobox-option" id="fr-plan-option-${index}" type="button" role="option" data-plan-item-id="${escapeHtml(entry.id)}" aria-selected="${index === activePlanTarget}"><strong>${escapeHtml(entry.label)}</strong><small>${escapeHtml(context.get(entry.id) || entry.item?.type || 'Item')}</small></button>`).join('')
+      : '<div class="combobox-empty" role="status">No matching items</div>';
+    planItem.setAttribute('aria-activedescendant', activePlanTarget >= 0 ? `fr-plan-option-${activePlanTarget}` : '');
+  }
+
+  function openPlanTargets(query = '') {
+    if (planItem.disabled) return;
+    activePlanTarget = -1;
+    renderPlanTargetOptions(query);
+    positionPlanOptions();
+    planOptions.hidden = false;
+    planItem.setAttribute('aria-expanded', 'true');
+  }
+
+  function closePlanTargets() {
+    planOptions.hidden = true;
+    planItem.setAttribute('aria-expanded', 'false');
+    planItem.setAttribute('aria-activedescendant', '');
+    activePlanTarget = -1;
+  }
+
+  function selectPlanTarget(itemId) {
+    if (!items[itemId]) return false;
+    state.planItemId = itemId;
+    planItem.value = labelFor(items, itemId);
+    planItem.setCustomValidity?.('');
+    closePlanTargets();
+    return true;
+  }
+
+  function movePlanTarget(delta) {
+    if (planOptions.hidden) openPlanTargets(state.planItemId ? '' : planItem.value);
+    if (!planTargetResults.length) return;
+    activePlanTarget = activePlanTarget < 0
+      ? (delta > 0 ? 0 : planTargetResults.length - 1)
+      : (activePlanTarget + delta + planTargetResults.length) % planTargetResults.length;
+    renderPlanTargetOptions(state.planItemId ? '' : planItem.value);
+    planOptions.querySelector?.(`#fr-plan-option-${activePlanTarget}`)?.scrollIntoView?.({ block: 'nearest' });
+  }
+
+  planItem.addEventListener('focus', () => openPlanTargets(state.planItemId ? '' : planItem.value));
+  planItem.addEventListener('input', () => {
+    state.planItemId = '';
+    planItem.setCustomValidity?.('');
+    openPlanTargets(planItem.value);
+  });
+  planItem.addEventListener('keydown', (event) => {
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      movePlanTarget(event.key === 'ArrowDown' ? 1 : -1);
+    } else if (event.key === 'Enter' && !planOptions.hidden && activePlanTarget >= 0) {
+      event.preventDefault();
+      selectPlanTarget(planTargetResults[activePlanTarget]?.id);
+    } else if (event.key === 'Escape' && !planOptions.hidden) {
+      event.preventDefault();
+      closePlanTargets();
+    } else if (event.key === 'Tab') closePlanTargets();
+  });
+  planOptions.addEventListener('click', (event) => {
+    const option = event.target.closest?.('[data-plan-item-id]');
+    if (option) selectPlanTarget(option.dataset.planItemId);
+  });
+  shell.shadow.addEventListener('pointerdown', (event) => {
+    if (event.target !== planItem && !planOptions.contains?.(event.target)) closePlanTargets();
+  });
+  shell.panel.addEventListener('scroll', closePlanTargets, true);
+  shell.close.addEventListener('click', closePlanTargets);
+  documentRef.defaultView?.addEventListener?.('resize', closePlanTargets);
 
   function renderExecutor() {
     const status = state.executorStatus || { phase: 'idle', message: '' };
@@ -774,6 +944,7 @@ function createApplication(shell, datasets, api) {
     executorPhase.textContent = `${phaseLabel}${step && total ? ` · step ${step} of ${total}` : ''}`;
     executorMessage.textContent = status.message || 'Direct actions are idle.';
     const locked = isExecutionLocked(status.phase);
+    if (locked) closePlanTargets();
     planItem.disabled = locked;
     planQty.disabled = locked;
     resolveButton.disabled = locked;
@@ -812,8 +983,15 @@ function createApplication(shell, datasets, api) {
     if (isExecutionLocked(state.executorStatus?.phase)) return;
     const qty = Math.max(1, Math.trunc(Number(planQty.value) || 1));
     planQty.value = String(qty);
+    if (!state.planItemId) {
+      planItem.setCustomValidity?.('Choose an item from the suggestions.');
+      planItem.reportValidity?.();
+      openPlanTargets(planItem.value);
+      return;
+    }
     try {
-      state.currentPlan = createPlan(datasets, api.getState(), { itemId: planItem.value, qty });
+      state.currentPlan = createPlan(datasets, api.getState(), { itemId: state.planItemId, qty });
+      state.recentPlanItemIds = [state.planItemId, ...state.recentPlanItemIds.filter((id) => id !== state.planItemId)].slice(0, 5);
       state.executorStatus = { phase: 'idle', currentStep: null, message: state.currentPlan.ok ? 'Plan ready. Review the dependency order, then run.' : 'Resolve the blockers before running.' };
     } catch (error) {
       state.currentPlan = { ok: false, steps: [], reason: error instanceof Error ? error.message : String(error) };
@@ -834,7 +1012,7 @@ function createApplication(shell, datasets, api) {
   detail.addEventListener('click', (event) => {
     const target = event.target.closest?.('[data-plan-item]');
     if (!target || isExecutionLocked(state.executorStatus?.phase)) return;
-    planItem.value = target.dataset.planItem;
+    selectPlanTarget(target.dataset.planItem);
     shell.selectTab(2, true);
   });
 

@@ -9,6 +9,7 @@ import {
   buildIndexes,
   createOverlayShell,
   isExecutionLocked,
+  searchPlanTargets,
 } from '../../overlay/overlay.js';
 
 class FakeElement {
@@ -19,6 +20,7 @@ class FakeElement {
     this.children = [];
     this.listeners = new Map();
     this.dataset = {};
+    this.style = {};
     this.hidden = false;
     this.disabled = false;
     this.value = '';
@@ -62,6 +64,9 @@ class FakeElement {
   addEventListener(type, listener) { (this.listeners.get(type) || this.listeners.set(type, []).get(type)).push(listener); }
   querySelector(selector) { return this.synthetic?.get(selector) || null; }
   matches() { return false; }
+  contains(element) { return element === this || this.children.includes(element) || [...(this.synthetic?.values() || [])].includes(element); }
+  getBoundingClientRect() { return { left: 10, right: 310, top: 10, bottom: 46, width: 300, height: 36 }; }
+  scrollIntoView() {}
   focus() { this.ownerDocument.activeElement = this; }
 
   dispatch(type, init = {}) {
@@ -177,6 +182,44 @@ test('data indexes include deterministic and rare sources plus action and buildi
   ]);
 });
 
+test('planner target search ranks relevant and contextual items', () => {
+  const entries = [
+    ['log', { label: 'Harbor Log' }],
+    ['plank', { label: 'Harbor Plank' }],
+    ['ancient_spore', { label: 'Ancient Spore' }],
+  ];
+  assert.deepEqual(searchPlanTargets(entries, 'har', ['plank']).map((entry) => entry.id), ['plank', 'log']);
+  assert.deepEqual(searchPlanTargets(entries, 'spore').map((entry) => entry.id), ['ancient_spore']);
+  assert.deepEqual(searchPlanTargets(entries, '', ['ancient_spore'], 2).map((entry) => entry.id), ['ancient_spore', 'log']);
+  assert.deepEqual(searchPlanTargets(entries, 'missing'), []);
+});
+
+test('planner target combobox supports keyboard selection and submission', async () => {
+  const document = new FakeDocument();
+  const result = await bootOverlay({ document, window: { __frCompanion: api() }, fetch: fetchFor(datasets()) });
+  const panel = result.shell.panels.plan;
+  const input = panel.querySelector('#fr-plan-item');
+  const form = panel.querySelector('#fr-plan-form');
+
+  input.dispatch('focus');
+  assert.equal(input.getAttribute('aria-expanded'), 'true');
+  input.value = 'plank';
+  input.dispatch('input');
+  assert.equal(result.app.state.planItemId, '');
+
+  const down = input.dispatch('keydown', { key: 'ArrowDown' });
+  assert.equal(down.defaultPrevented, true);
+  assert.equal(input.getAttribute('aria-activedescendant'), 'fr-plan-option-0');
+  input.dispatch('keydown', { key: 'Enter' });
+  assert.equal(result.app.state.planItemId, 'plank');
+  assert.equal(input.value, 'Harbor Plank');
+  assert.equal(input.getAttribute('aria-expanded'), 'false');
+
+  form.dispatch('submit');
+  assert.equal(result.app.state.currentPlan.ok, true);
+  assert.deepEqual(result.app.state.currentPlan.steps.map((step) => step.actionId), ['chop_log', 'make_plank']);
+  assert.deepEqual(result.app.state.recentPlanItemIds, ['plank']);
+});
 test('tab keyboard navigation updates selection and focus', () => {
   const document = new FakeDocument();
   const shell = createOverlayShell(document);
