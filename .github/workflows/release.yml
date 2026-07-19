@@ -1,0 +1,105 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            target: windows-x64
+            bun_target: bun-windows-x64
+            extension: .exe
+          - runner: ubuntu-latest
+            target: linux-x64
+            bun_target: bun-linux-x64
+            extension: ''
+          - runner: macos-14
+            target: darwin-arm64
+            bun_target: bun-darwin-arm64
+            extension: ''
+          - runner: macos-15-intel
+            target: darwin-x64
+            bun_target: bun-darwin-x64
+            extension: ''
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Embed runtime assets
+        run: node scripts/embed-runtime.mjs
+      - name: Compile standalone binary
+        run: bun build --compile --target=${{ matrix.bun_target }} src/cli.ts --outfile fractured-companion-${{ matrix.target }}${{ matrix.extension }}
+      - name: Smoke standalone binary
+        run: node scripts/smoke-binary.mjs fractured-companion-${{ matrix.target }}${{ matrix.extension }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fractured-companion-${{ matrix.target }}
+          path: fractured-companion-${{ matrix.target }}${{ matrix.extension }}
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: fractured-companion-*
+          path: release-assets
+          merge-multiple: true
+      - name: Create SHA256SUMS
+        working-directory: release-assets
+        run: sha256sum fractured-companion-* > SHA256SUMS
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: release-assets/*
+
+  npm:
+    name: Publish npm package
+    runs-on: ubuntu-latest
+    needs: build
+    env:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+      - name: Publish package when NPM_TOKEN is configured
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "${NPM_TOKEN:-}" ]; then
+            echo "::notice::NPM_TOKEN is not configured; skipping npm publish."
+            exit 0
+          fi
+          npm publish --provenance --access public

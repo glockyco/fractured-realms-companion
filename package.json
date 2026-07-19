@@ -16,13 +16,18 @@
   ],
   "scripts": {
     "build": "node scripts/embed-runtime.mjs && tsc",
-    "test": "node scripts/embed-runtime.mjs && node --test \"tests/**/*.test.ts\""
+    "test": "node scripts/embed-runtime.mjs && node --test \"tests/**/*.test.ts\"",
+    "prepack": "npm run build"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
     "typescript": "^5.8.3"
   },
   "license": "MIT",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/glockyco/fractured-realms-companion.git"
