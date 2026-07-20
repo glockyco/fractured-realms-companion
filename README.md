@@ -1,26 +1,31 @@
 <p align="center">
-  <img src="overlay/logo.webp" width="144" alt="Fractured Realms Companion shard sigil">
+  <img src="overlay/logo.webp" width="112" alt="Fractured Realms Companion shard sigil">
 </p>
 
-# Fractured Realms Companion
+<h1 align="center">Fractured Realms Companion</h1>
 
-Fractured Realms Companion adds a build-matched item wiki and direct-action planner to **Fractured Realms**. It reads live inventory and skill state, explains dependencies, and runs one game action at a time from a local companion window.
+<p align="center">
+  A local item wiki and action planner for <strong><a href="https://store.steampowered.com/app/3789070/Fractured_Realms/">Fractured Realms</a></strong>.
+  Find what you need, understand the dependencies, and start the next valid action without leaving the game.
+</p>
 
-Everything stays on the same machine and is matched to the installed game build. The companion never reads, writes, or depends on the game's native `actionQueue`.
+<p align="center">
+  <a href="#installation">Install</a> ·
+  <a href="#quickstart">Try it</a> ·
+  <a href="docs/screenshots/action-planner.webp">See the planner</a>
+</p>
 
-## What it does
-
-- **Items:** Search the current build by item name, then inspect descriptions, values, healing data, artwork, deterministic and rare sources, requirements, and downstream uses.
-- **Skills:** Browse extracted skill actions with levels, intervals, tools, inputs, outputs, rare outputs, and locations. Available actions can be started directly from their table row.
-- **Planner:** Choose an item with the searchable combobox, then set `Until` to `In bag`, `New items`, `Skill level`, or `Minutes`. Goals resolve against live inventory and deterministic projected outputs from earlier runnable plans. Already-held prerequisite quantities remain visible. Blocked goals stay queued and are retried at plan boundaries.
-- **Live queue:** The running plan is immutable. Pending goals can still be added, edited, reordered, removed, or promoted. Choosing `Run now` for the first pending goal stops the current action and starts the promoted goal immediately.
-- **Rare targets:** The planner estimates attempts from drop chance and provisions inputs for each run. If those inputs run out, the executor replans the live remainder until the inventory target is reached. Estimates are probabilistic, and multi-quantity drops may overshoot by one drop batch. Eight consecutive restocks with no target gain mark the goal `rare drops stalled` and skip it so later queued goals can continue.
-- **Executor:** Run, resume, or stop queued steps through the game's direct start and stop controls. The executor verifies starts, reports progress and remaining time, detects game-side action changes, and surfaces refusals and stalls. Required Shop tools are permanent prerequisites and are never auto-crafted.
-- **Local data:** `refresh` extracts the installed build's item, action, skill, XP, building, dig-site, string, and item-art data before applying the companion patch.
+<table>
+  <tr>
+    <td><strong>Item wiki</strong><br>Search for sources, uses, stats, requirements, and artwork.</td>
+    <td><strong>Dependency planner</strong><br>Turn a target item into a visible, editable plan from live inventory.</td>
+    <td><strong>Direct actions</strong><br>Run one game action at a time with progress, blockers, and stop controls.</td>
+  </tr>
+</table>
 
 ### Companion preview
 
-| Build-matched item wiki | Extracted skill actions |
+| Item wiki | Extracted skill actions |
 | --- | --- |
 | Search an item, then inspect its sources, uses, stats, and artwork. | Compare action levels, timings, tools, outputs, and drop rates. |
 | ![Ancient Spore item details with sources and uses](docs/screenshots/item-wiki.webp) | ![Archaeology actions with levels, intervals, outputs, and tools](docs/screenshots/skill-actions.webp) |
@@ -28,6 +33,26 @@ Everything stays on the same machine and is matched to the installed game build.
 ### Planner preview
 
 ![Minor Fire Rune plan with active Earthwort gathering and queued Copper Vein, Practice Inscription, and rune crafting steps](docs/screenshots/action-planner.webp)
+
+## What it does
+
+- **Items:** Search by item name for sources, uses, stats, requirements, and artwork.
+- **Skills:** Compare action levels, timings, tools, inputs, outputs, rare outputs, and locations.
+- **Planner:** Set an item target by inventory, new items, skill level, or time, then see the dependency plan against live state.
+- **Queue:** Edit, reorder, promote, or remove pending goals while the current action stays immutable.
+- **Executor:** Start, resume, or stop one game action at a time, with progress, blockers, refusals, and stalls surfaced.
+- **Local data:** `refresh` extracts the installed game's data before applying the companion patch.
+
+<details>
+<summary>Feature details</summary>
+
+- **Planner resolution:** Goals use live inventory and deterministic projected outputs from earlier runnable plans. Already-held prerequisites remain visible. Blocked goals stay queued and are retried at plan boundaries.
+- **Rare targets:** The planner estimates attempts from drop chance and provisions inputs for each run. If inputs run out, it replans the live remainder. Estimates are probabilistic, and multi-quantity drops may overshoot by one drop batch. Eight consecutive restocks with no target gain mark a goal `rare drops stalled` so later queued goals can continue.
+- **Direct execution:** The executor verifies starts, reports progress and remaining time, detects game-side action changes, and surfaces refusals and stalls. Required Shop tools are permanent prerequisites and are never auto-crafted.
+- **Live queue:** Choosing `Run now` for the first pending goal stops the current action and starts the promoted goal immediately.
+- **Extracted data:** `refresh` extracts item, action, skill, XP, building, dig-site, string, and item-art data from the installed game.
+
+</details>
 
 ## Requirements
 
@@ -167,13 +192,13 @@ Then return to this package and run `fractured-companion refresh`. This package 
 - The original archive backup is immutable and hash-named. `restore` revalidates metadata, fingerprints, marker ownership, Steam build identity, and backup bytes before writing.
 - State is separate from the game install. Windows uses `%LOCALAPPDATA%\fractured-realms-companion`. Other platforms use `$XDG_STATE_HOME/fractured-realms-companion` or `~/.local/state/fractured-realms-companion`.
 - The local achievement route delegates to the native Steamworks client. It validates achievement names and reports missing-client or native failures instead of fabricating achievement state.
-- Direct execution uses only the game's current action controls. It never reads, writes, displays, or depends on the native `actionQueue`.
+- Direct execution uses only the game's current action controls and surfaces refusals and stalls instead of bypassing game checks.
 
 ## Limitations
 
 - Extraction and patching are build-sensitive. A changed game bundle or entrypoint anchor requires a compatibility update before that build can be patched.
 - Rare-attempt counts and completion times are estimates, not guarantees. A multi-quantity rare drop may exceed the requested inventory target by one drop batch.
-- Required Shop tools are permanent unlocks and must already be purchased. The planner does not auto-craft them.
+- Required Shop tools are permanent unlocks and must already be purchased. The planner does not auto-purchase them.
 - A new item plan may be blocked when the bag has no free slot. A direct action may also be refused by the game. A persistent outside action pauses execution, and an ordinary action with no progress reports a stall. The companion surfaces these states rather than bypassing game checks.
 - Starting a planned action stops active combat.
 - macOS support targets Steam in CrossOver. The standalone macOS binaries are unsigned.
@@ -192,6 +217,10 @@ npx tsc --noEmit
 `npm test` and `npm run build` run `scripts/embed-runtime.mjs` first, which embeds the runtime and overlay sources. Runtime npm dependencies are intentionally absent. See [AGENTS.md](AGENTS.md) for the scoped coding-agent workflow and repository safety boundaries.
 
 The source of truth for releases is [`.github/workflows/release.yml`](.github/workflows/release.yml). `v*` tags build four standalone targets and `SHA256SUMS`. npm publishing is conditional on `NPM_TOKEN` and uses provenance.
+
+## Support
+
+If the companion is useful to you, you can [support its development on Ko-fi](https://ko-fi.com/wowmuch).
 
 ## License
 
