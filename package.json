@@ -17,10 +17,14 @@
   "scripts": {
     "build": "node scripts/embed-runtime.mjs && tsc",
     "test": "node scripts/embed-runtime.mjs && node --test \"tests/**/*.test.ts\"",
+    "backup-saves": "node scripts/backup-saves.mjs",
+    "validate:live": "node scripts/live-validate.mjs",
+    "screenshots": "node scripts/capture-screenshots.mjs",
     "prepack": "npm run build"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
+    "playwright": "^1.61.1",
     "typescript": "^5.8.3"
   },
   "license": "MIT",

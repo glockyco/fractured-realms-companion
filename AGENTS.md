@@ -40,7 +40,7 @@ State whether evidence came directly from the compiled model or was recovered fr
 
 ## Safety boundaries
 
-Do not run `refresh`, `restore`, `launch`, or `relaunch` as routine validation. They inspect or mutate an installed game and are appropriate only for explicitly required live integration.
+Do not run `refresh`, `restore`, `launch`, or `relaunch` as routine validation. They inspect or mutate an installed game and are appropriate only for explicitly required live integration. Live validation happens only through `scripts/live-validate.mjs` after `scripts/backup-saves.mjs`, which are the sanctioned wrappers for the otherwise-prohibited refresh and launch.
 
 Preserve fail-closed fingerprint, metadata, backup, foreign-marker, and source-anchor checks. Never hand-edit a game archive or bypass native-game refusal checks. Never read, write, or depend on the game's native `actionQueue`.
 
