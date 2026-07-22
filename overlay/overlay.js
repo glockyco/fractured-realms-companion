@@ -380,6 +380,24 @@ tbody tr:last-child td { border-bottom: 0; }
 .plan-overview p { margin: var(--fr-s1) 0 0; font-size: 0.75rem; }
 .plan-overview-cost { color: var(--fr-neutral-100); }
 .plan-overview-presence { color: var(--fr-neutral-300); }
+.your-part { margin: var(--fr-s4) 0 var(--fr-s2); }
+.your-part h3 { margin: 0 0 var(--fr-s2); }
+.your-part-list { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--fr-neutral-800); }
+.your-part-item { display: flex; align-items: baseline; justify-content: space-between; gap: var(--fr-s3); padding: var(--fr-s2) 0; border-bottom: 1px solid var(--fr-neutral-800); }
+.your-part-item .yp-name { min-width: 0; overflow: hidden; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+.your-part-item .yp-meta { flex: 0 0 auto; color: var(--fr-neutral-300); font-size: 0.75rem; white-space: nowrap; }
+.your-part-item[data-state="now"] .yp-name, .your-part-item[data-state="now"] .yp-meta { color: var(--fr-harbor-400); }
+.your-part-item[data-state="done"] .yp-name { color: var(--fr-success-400); }
+.plan-group { padding: 0; border-bottom: 1px solid var(--fr-neutral-800); }
+.plan-group-toggle { width: 100%; display: flex; align-items: baseline; gap: var(--fr-s2); padding: var(--fr-s3) 0; border: 0; background: transparent; color: var(--fr-neutral-300); font: inherit; text-align: left; cursor: pointer; }
+.plan-group-toggle:hover .plan-group-title { color: var(--fr-neutral-100); }
+.plan-group-title { flex: 0 0 auto; font-weight: 650; color: var(--fr-neutral-100); }
+.plan-group-meta { min-width: 0; overflow: hidden; color: var(--fr-neutral-300); font-size: 0.75rem; text-overflow: ellipsis; white-space: nowrap; }
+.plan-group-caret { display: inline-flex; flex: 0 0 auto; color: var(--fr-neutral-300); transition: transform 180ms cubic-bezier(0.16, 1, 0.3, 1); }
+.plan-group-caret svg { width: var(--fr-icon); height: var(--fr-icon); }
+.plan-group-toggle[aria-expanded="true"] .plan-group-caret { transform: rotate(90deg); }
+.plan-group-steps { margin: 0 0 var(--fr-s2) var(--fr-s5); padding: 0; list-style: none; }
+.plan-group-steps .plan-step:last-child { border-bottom: 0; }
 .queue-list { margin: var(--fr-s2) 0 0; padding: 0; list-style: none; border-top: 1px solid var(--fr-neutral-700); }
 .queue-plan { padding: var(--fr-s3) 0; border-bottom: 1px solid var(--fr-neutral-700); }
 .queue-plan[data-state="active"] { background: var(--fr-harbor-950); margin-inline: calc(-1 * var(--fr-s2)); padding-inline: var(--fr-s2); }
@@ -998,6 +1016,7 @@ function createApplication(shell, modelJson, api) {
     selectedPlanItemId: null,
     queueGoals: [],
     resolvedQueue: { steps: [], targets: [] },
+    expandedGroups: new Set(),
     executorStatus: { phase: 'idle', message: 'Add a target to begin.', stepStatuses: {}, runningStepId: null },
     queueStartedAt: null,
     nextPlanId: 1,
@@ -1242,15 +1261,34 @@ function createApplication(shell, modelJson, api) {
       const proximityRow = proximity ? `<p class="queue-plan-meta">${proximity}</p>` : '';
       return `<section class="queue-plan" data-target-index="${index}" data-queued-behind-blocked="${queuedBehind}"><div class="queue-plan-top"><h3>${escapeHtml(label)} ${statusBadge}</h3>${remove}</div>${proximityRow}${blocker}</section>`;
     }).join('');
-    const rows = (result.steps || []).map((step) => {
+    const anchor = locked && Number.isFinite(Number(state.queueStartedAt)) ? Number(state.queueStartedAt) : Date.now();
+    const renderStepRow = (step) => {
       const current = stepStatus(step, live, status); const per = result.perStep?.find((entry) => entry.id === step.id); const depManual = current !== 'done' && step.kind !== 'manual' ? dependencyManual(step, result.steps, status) : null;
       const eta = depManual ? `after ${depManual.label || depManual.id}` : current === 'running' && Number(status.stepRemainingMs ?? step.expected?.ms) > 0 ? `about ${formatDuration(status.stepRemainingMs ?? step.expected?.ms)} left` : per ? `~${formatDuration(Math.max(0, Number(per.endMs) - Number(per.startMs)))}` : '';
-      const anchor = locked && Number.isFinite(Number(state.queueStartedAt)) ? Number(state.queueStartedAt) : Date.now(); const readyAt = step.kind === 'manual' ? formatFinishTime(result.readyAt?.[step.id] || 0, anchor) : null; const progressState = stepProgress(step, status); const progressMarkup = progressState ? `<progress class="step-progress" max="${escapeHtml(progressState.max)}" value="${escapeHtml(progressState.value)}" aria-label="${escapeHtml(step.label || step.id)} progress"></progress>` : '';
+      const readyAt = step.kind === 'manual' ? formatFinishTime(result.readyAt?.[step.id] || 0, anchor) : null; const progressState = stepProgress(step, status); const progressMarkup = progressState ? `<progress class="step-progress" max="${escapeHtml(progressState.max)}" value="${escapeHtml(progressState.value)}" aria-label="${escapeHtml(step.label || step.id)} progress"></progress>` : '';
       const detailBits = [stepYieldHtml(step), `${escapeHtml(eta)}${step.kind === 'manual' ? ` \u00b7 ready for you at ~${escapeHtml(readyAt)}` : ''}`].filter(Boolean).join(' \u00b7 ');
       const inputsHtml = current.startsWith('blocked') ? stepInputsHtml(step) : '';
       return `<li class="record-row plan-step" data-step-id="${escapeHtml(step.id)}"><div class="record-top"><strong>${escapeHtml(step.label || actionName(actionFor(step.skillId, step.actionId)) || step.id)}</strong><div class="badges"><span class="badge">${escapeHtml(step.purpose || 'goal')}</span><span class="badge" data-status="${escapeHtml(current)}">${escapeHtml(current)}</span></div></div>${detailBits ? `<p class="step-detail">${detailBits}</p>` : ''}${inputsHtml ? `<p class="step-inputs">${inputsHtml}</p>` : ''}${progressMarkup}${step.kind === 'manual' ? `<div class="instruction-card"><strong>Waiting for you</strong><p>${escapeHtml(step.instruction || step.label || 'Complete this step in the game.')}</p></div>` : ''}</li>`;
+    };
+    // Collapse consecutive automated (non-running) steps into one summary row so
+    // manual steps and the active step stay prominent; a group expands on demand.
+    const timelineGroups = []; let autoBuffer = [];
+    const flushAuto = () => { if (autoBuffer.length) { timelineGroups.push({ type: 'group', steps: autoBuffer }); autoBuffer = []; } };
+    for (const step of result.steps || []) {
+      if (step.kind === 'action' && step.id !== status.runningStepId) autoBuffer.push(step);
+      else { flushAuto(); timelineGroups.push({ type: 'step', step }); }
+    }
+    flushAuto();
+    const rows = timelineGroups.map((group) => {
+      if (group.type === 'step') return renderStepRow(group.step);
+      if (group.steps.length === 1) return renderStepRow(group.steps[0]);
+      const groupId = group.steps[0].id; const expanded = state.expandedGroups.has(groupId);
+      const totalMs = group.steps.reduce((sum, step) => sum + planNum(step.expected?.ms), 0);
+      const skillsUsed = [...new Set(group.steps.map((step) => step.skillId).filter(Boolean))].map((id) => skillNames[id] || humanizeId(id));
+      const doneCount = group.steps.filter((step) => status.stepStatuses?.[step.id] === 'done').length;
+      const metaBits = [skillsUsed.join(', '), totalMs > 0 ? `~${formatDuration(totalMs)}` : '', doneCount ? `${doneCount}/${group.steps.length} done` : ''].filter(Boolean).join(' \u00b7 ');
+      return `<li class="record-row plan-group"><button type="button" class="plan-group-toggle" data-plan-group="${escapeHtml(groupId)}" aria-expanded="${expanded}"><span class="plan-group-caret" aria-hidden="true">${ICONS.chevron}</span><span class="plan-group-title">${escapeHtml(String(group.steps.length))} automated steps</span><span class="plan-group-meta">${escapeHtml(metaBits)}</span></button>${expanded ? `<ol class="plan-group-steps">${group.steps.map(renderStepRow).join('')}</ol>` : ''}</li>`;
     }).join('');
-    const anchor = locked && Number.isFinite(Number(state.queueStartedAt)) ? Number(state.queueStartedAt) : Date.now();
     const manualSteps = (result.steps || []).filter((step) => step.kind === 'manual');
     const goldCost = (result.steps || []).reduce((sum, step) => sum + planNum(model._index.providersById?.get(step.providerId)?.consumesGold), 0);
     const summaryBits = [`\u2248${formatDuration(result.optimisticMs || 0)} attended`];
@@ -1263,7 +1301,23 @@ function createApplication(shell, modelJson, api) {
       : 'Runs fully unattended';
     const totals = state.queueGoals.length ? `<div class="plan-overview" id="fr-queue-total"><p class="plan-overview-cost data">${escapeHtml(summaryBits.join(' \u00b7 '))}</p><p class="plan-overview-presence">${presence}</p></div>` : '';
     const infeasibility = result.infeasibility ? `<p class="banner warning" role="status">${ICONS.warning}<span>Simulation warning: ${escapeHtml(result.steps.find((step) => step.id === result.infeasibility.stepId)?.label || result.infeasibility.stepId || 'unknown step')} · ${escapeHtml(result.infeasibility.reason || 'infeasible')}</span></p>` : '';
-    planPanel.querySelector('#fr-plan-result').innerHTML = state.queueGoals.length ? `${targetRows}${totals}${infeasibility}<h3>Timeline</h3><ol class="record-list">${rows || '<li class="empty">No steps required; targets are already satisfied.</li>'}</ol>` : '<div class="empty">Add a target to begin a queue.</div>';
+    const manualStepRow = (step) => {
+      const done = status.stepStatuses?.[step.id] === 'done';
+      const gold = planNum(model._index.providersById?.get(step.providerId)?.consumesGold);
+      const cost = gold > 0 ? `${planQtyText(gold)}g` : '';
+      let stateName; let when;
+      if (done) { stateName = 'done'; when = 'done'; }
+      else {
+        const gate = dependencyManual(step, result.steps, status); const ready = planNum(result.readyAt?.[step.id]);
+        if (gate) { stateName = 'gated'; when = `after ${gate.label || gate.id}`; }
+        else if (ready <= 0) { stateName = 'now'; when = 'do now'; }
+        else { stateName = 'later'; when = `~${formatFinishTime(ready, anchor)}`; }
+      }
+      const meta = [cost, when].filter(Boolean).join(' \u00b7 ');
+      return `<li class="your-part-item" data-state="${stateName}"><span class="yp-name">${escapeHtml(step.label || step.id)}</span><span class="yp-meta">${escapeHtml(meta)}</span></li>`;
+    };
+    const yourPart = manualSteps.length ? `<section class="your-part" aria-label="Steps that need you"><h3>Your part</h3><ul class="your-part-list">${manualSteps.map(manualStepRow).join('')}</ul></section>` : '';
+    planPanel.querySelector('#fr-plan-result').innerHTML = state.queueGoals.length ? `${targetRows}${totals}${yourPart}${infeasibility}<h3>Timeline</h3><ol class="record-list">${rows || '<li class="empty">No steps required; targets are already satisfied.</li>'}</ol>` : '<div class="empty">Add a target to begin a queue.</div>';
     renderExecutor();
   };
   const targetActionLabel = (target) => actionName(actionFor(target.skillId, target.actionId) || (target.skillId === 'agility' ? (model.agilityCourses || []).find((course) => course.id === target.actionId) : target.skillId === 'cartography' ? (model.maps || []).find((map) => map.id === target.actionId) : null));
@@ -1275,7 +1329,7 @@ function createApplication(shell, modelJson, api) {
   const stopQueue = () => { state.queueStartedAt = null; executor.stop(); };
   shell.queueControls.querySelector('#fr-run').addEventListener('click', runQueue); shell.queueControls.querySelector('#fr-resume').addEventListener('click', resumeQueue); shell.queueControls.querySelector('#fr-stop').addEventListener('click', stopQueue); shell.queueControls.querySelector('#fr-clear').addEventListener('click', () => { if (isExecutionLocked(state.executorStatus?.phase)) return; state.queueGoals = []; state.resolvedQueue = { steps: [], targets: [] }; state.queueStartedAt = null; persistQueue(); renderPlan(); });
   shell.compactStrip.querySelector('#fr-compact-start').addEventListener('click', runQueue); shell.compactStrip.querySelector('#fr-compact-resume').addEventListener('click', resumeQueue); shell.compactStrip.querySelector('#fr-compact-stop').addEventListener('click', stopQueue);
-  planPanel.addEventListener('click', (event) => { const remove = event.target.closest?.('[data-queue-remove]'); if (!remove || isExecutionLocked(state.executorStatus?.phase)) return; const index = state.queueGoals.findIndex((goal) => goal.id === remove.dataset.queueRemove); if (index < 0) return; state.queueGoals.splice(index, 1); persistQueue(); refreshQueue(); renderPlan(); });
+  planPanel.addEventListener('click', (event) => { const groupToggle = event.target.closest?.('[data-plan-group]'); if (groupToggle) { const id = groupToggle.dataset.planGroup; if (state.expandedGroups.has(id)) state.expandedGroups.delete(id); else state.expandedGroups.add(id); renderPlan(); return; } const remove = event.target.closest?.('[data-queue-remove]'); if (!remove || isExecutionLocked(state.executorStatus?.phase)) return; const index = state.queueGoals.findIndex((goal) => goal.id === remove.dataset.queueRemove); if (index < 0) return; state.queueGoals.splice(index, 1); persistQueue(); refreshQueue(); renderPlan(); });
 
   const restore = () => {
     try {
