@@ -31,16 +31,25 @@ export function plan(model, snapshot = {}, target = {}) {
   ensureIndexed(model);
   const state = snapshotCopy(snapshot);
   const reach = computeReach(model, snapshot);
-  const steps = []; const notes = []; const plannedFacts = new Set(); const itemStack = new Set();
+  // goldRate and snapshot-relative action intervals are invariant for this plan call
+  // (they read the fixed original snapshot), so compute them once instead of per
+  // estimateProvider invocation, which chooseProvider fans out across many candidates.
+  const snapshotGoldRate = goldRate(model, snapshot);
+  const snapshotIntervalMemo = new Map();
+  const snapshotInterval = (provider) => {
+    if (provider.kind !== 'action') return 0;
+    let value = snapshotIntervalMemo.get(provider);
+    if (value === undefined) { value = effectiveInterval(model, snapshot, provider.skillId, provider.action); snapshotIntervalMemo.set(provider, value); }
+    return value;
+  };
+  const steps = []; const notes = []; const plannedFacts = new Set(); const itemStack = new Set(); const acquiredBy = new Map();
   let serial = 0; let failure = null;
   const stepIds = () => steps.map((step) => step.id);
   const quantity = (id) => Math.max(0, num(state.inventory[id]));
   const factNow = (fact) => factSatisfied(model, state, fact) || plannedFacts.has(fact);
   const markFailure = (reason, fact) => { if (!failure) failure = fact ? { fact, reason } : { reason }; return false; };
 
-  const applyExpected = (step, provider, runs) => {
-    for (const [id, amount] of Object.entries(provider?.consumesItems ?? {})) state.inventory[id] = Math.max(0, quantity(id) - num(amount) * runs);
-    if (provider?.consumesGold) state.gold = Math.max(0, num(state.gold) - num(provider.consumesGold));
+  const applyExpectedProduction = (step, provider, runs) => {
     for (const [id, amount] of Object.entries(step.expected?.produces ?? {})) if (id !== 'gold') state.inventory[id] = quantity(id) + num(amount);
     if (provider?.outputGold) state.gold += num(provider.outputGold) * runs;
     for (const [skillId, amount] of Object.entries(provider?.xpGain ?? {})) {
@@ -55,9 +64,7 @@ export function plan(model, snapshot = {}, target = {}) {
     if (provider?.purchase?.type === 'recipe') state.unlockedRecipes.push(provider.purchase.id);
     for (const fact of provider?.grantsFacts ?? []) plannedFacts.add(fact);
   };
-  const addStep = (provider, runs, purpose, stop, deps, extra = {}) => {
-    const isAction = (provider.kind === 'action' || provider.kind === 'chart') && provider.automation === 'auto';
-    const id = extra.id ?? `${isAction ? (provider.kind === 'chart' ? 'chart' : 'action') : 'manual'}:${provider.skillId ?? provider.id}:${provider.actionId ?? provider.id}:${serial++}`;
+  const expectedProduces = (provider, runs) => {
     const produces = {};
     const outputFactor = (1 + (provider.skillId === 'brewing' ? brewDoubleChance(model, state) : 0)) * (1 + sealDoubleChance(model, state, provider.skillId));
     const cookingBurn = provider.skillId === 'cooking' ? burnChance(levelForXp(model.xpTable, state.skillXp?.cooking), provider.action?.levelReq) : 0;
@@ -69,21 +76,33 @@ export function plan(model, snapshot = {}, target = {}) {
         produces[`burnt_${suffix}`] = (produces[`burnt_${suffix}`] ?? 0) + amount * cookingBurn;
       } else produces[itemId] = (produces[itemId] ?? 0) + amount;
     }
-    if (provider.outputGold) produces.gold = num(provider.outputGold) * runs;
+    if (provider.outputGold) produces.gold = (produces.gold ?? 0) + num(provider.outputGold) * runs;
+    return produces;
+  };
+  const expectedDuration = (provider, runs) => {
+    if (provider.automation !== 'auto' || (provider.kind !== 'action' && provider.kind !== 'chart')) return null;
+    if (provider.kind === 'chart') return cartographyInterval(model, state, provider.map) * Math.max(0, runs);
+    const local = { ...state, skillXp: { ...state.skillXp } };
+    let total = 0;
+    for (let run = 0; run < Math.max(0, runs); run += 1) {
+      total += effectiveInterval(model, local, provider.skillId, provider.action);
+      local.skillXp[provider.skillId] = num(local.skillXp[provider.skillId]) + xpPerRun(model, local, provider.skillId, provider.action);
+    }
+    return total;
+  };
+  const applyExpected = (step, provider, runs) => {
+    // Item consumption is NOT applied here: inputs are reserved out of the pool in
+    // ensureProviderInputs, before sibling sub-chains plan against the same stock.
+    if (provider?.consumesGold) state.gold = Math.max(0, num(state.gold) - num(provider.consumesGold));
+    applyExpectedProduction(step, provider, runs);
+  };
+  const addStep = (provider, runs, purpose, stop, deps, extra = {}) => {
+    const isAction = (provider.kind === 'action' || provider.kind === 'chart') && provider.automation === 'auto';
+    const id = extra.id ?? `${isAction ? (provider.kind === 'chart' ? 'chart' : 'action') : 'manual'}:${provider.skillId ?? provider.id}:${provider.actionId ?? provider.id}:${serial++}`;
+    const produces = expectedProduces(provider, runs);
     const consumes = {};
     for (const [itemId, value] of Object.entries(provider.consumesItems ?? {})) consumes[itemId] = num(value) * runs;
-    const action = provider.action;
-    let expectedMs = null;
-    if (isAction && provider.automation === 'auto') {
-      if (provider.kind === 'chart') expectedMs = cartographyInterval(model, state, provider.map) * Math.max(0, runs);
-      else {
-        const local = { ...state, skillXp: { ...state.skillXp } }; expectedMs = 0;
-        for (let run = 0; run < Math.max(0, runs); run += 1) {
-          expectedMs += effectiveInterval(model, local, provider.skillId, action);
-          local.skillXp[provider.skillId] = num(local.skillXp[provider.skillId]) + xpPerRun(model, local, provider.skillId, action);
-        }
-      }
-    }
+    const expectedMs = expectedDuration(provider, runs);
     const step = {
       id, kind: isAction ? 'action' : 'manual', label: provider.label ?? provider.id,
       ...(provider.skillId ? { skillId: provider.skillId } : {}), ...(provider.actionId != null ? { actionId: provider.actionId } : {}),
@@ -96,7 +115,7 @@ export function plan(model, snapshot = {}, target = {}) {
   };
 
   const estimateProvider = (provider, itemId, needed) => {
-    let cost = provider.automation === 'auto' && provider.kind === 'action' ? effectiveInterval(model, snapshot, provider.skillId, provider.action) : 0;
+    let cost = provider.automation === 'auto' && provider.kind === 'action' ? snapshotInterval(provider) : 0;
     if (provider.kind === 'chart') cost = num(provider.map?.interval) * Math.max(1, num(provider.map?.actionsToChart, 1));
     for (const fact of actionRequirements(provider)) {
       if (factNow(fact)) continue;
@@ -108,7 +127,7 @@ export function plan(model, snapshot = {}, target = {}) {
         if (current < num(level)) return Number.POSITIVE_INFINITY;
       } else return Number.POSITIVE_INFINITY;
     }
-    const rate = goldRate(model, snapshot);
+    const rate = snapshotGoldRate;
     if (provider.consumesGold > 0) {
       const neededGold = Math.max(0, provider.consumesGold - num(state.gold));
       if (neededGold > 0) cost += rate > 0 ? neededGold / rate : Number.POSITIVE_INFINITY;
@@ -122,7 +141,7 @@ export function plan(model, snapshot = {}, target = {}) {
     const output = outputFor(provider, itemId);
     if (itemId && output <= 0) return Number.POSITIVE_INFINITY;
     if (!itemId) return cost;
-    return cost + ceilRuns(Math.max(0, needed), output) * (provider.kind === 'action' ? effectiveInterval(model, snapshot, provider.skillId, provider.action) : 0);
+    return cost + ceilRuns(Math.max(0, needed), output) * (provider.kind === 'action' ? snapshotInterval(provider) : 0);
   };
 
   function ensureLevel(skillId, level) {
@@ -151,7 +170,10 @@ export function plan(model, snapshot = {}, target = {}) {
       const provider = model._index.providersById.get(`action:${skillId}:${selected.id}`);
       if (!provider) return markFailure(`missing provider for ${skillId}:${selected.id}`, `level:${skillId}:${goal}`);
       const deps = ensureProviderRequirements(provider); if (failure) return false;
-      addStep(provider, selectedRuns, 'train', { type: 'xp', skillId, xpAtLeast: selectedStop }, deps, { actionId: selected.id });
+      // A training action that consumes items (e.g. smelting bars to level smithing)
+      // needs those inputs provisioned too, or the emitted step is infeasible.
+      const inputDeps = ensureProviderInputs(provider, selectedRuns, null); if (failure) return false;
+      addStep(provider, selectedRuns, 'train', { type: 'xp', skillId, xpAtLeast: selectedStop }, [...deps, ...inputDeps], { actionId: selected.id });
     }
     return true;
   }
@@ -208,6 +230,9 @@ export function plan(model, snapshot = {}, target = {}) {
       }
       const made = ensureItem(input, need); if (failure) return deps;
       if (made) deps.push(...made);
+      // Reserve this consumer's share immediately so later consumers of the same
+      // base item see only the true surplus and provision the cumulative demand.
+      state.inventory[input] = Math.max(0, quantity(input) - need);
     }
     return [...new Set(deps)];
   }
@@ -229,6 +254,21 @@ export function plan(model, snapshot = {}, target = {}) {
     if (!provider) { itemStack.delete(itemId); markFailure(`no finite source for ${itemId}`, itemId); return null; }
     const output = outputFor(provider, itemId);
     const runs = ceilRuns(deficit, output);
+    const existing = acquiredBy.get(itemId);
+    if (existing && existing.provider.id === provider.id && existing.step.stop?.type === 'itemQty') {
+      const inputDeps = ensureProviderInputs(provider, runs, itemId); if (failure) { itemStack.delete(itemId); return null; }
+      const step = existing.step;
+      const additionalProduces = expectedProduces(provider, runs);
+      for (const [id, amount] of Object.entries(additionalProduces)) step.expected.produces[id] = num(step.expected.produces[id]) + num(amount);
+      for (const [id, amount] of Object.entries(provider.consumesItems ?? {})) step.expected.consumes[id] = num(step.expected.consumes[id]) + num(amount) * runs;
+      step.expected.runs += runs;
+      step.expected.ms = (step.expected.ms ?? 0) + (expectedDuration(provider, runs) ?? 0);
+      step.stop.qty += output * runs;
+      step.deps = [...new Set([...step.deps, ...inputDeps])].sort();
+      applyExpectedProduction({ expected: { produces: additionalProduces } }, provider, runs);
+      itemStack.delete(itemId);
+      return [step.id, ...inputDeps];
+    }
     const deps = ensureProviderRequirements(provider); if (failure) { itemStack.delete(itemId); return null; }
     const inputDeps = ensureProviderInputs(provider, runs, itemId); if (failure) { itemStack.delete(itemId); return null; }
     const allDeps = [...new Set([...deps, ...inputDeps])];
@@ -236,6 +276,7 @@ export function plan(model, snapshot = {}, target = {}) {
     const stop = provider.kind === 'action' || provider.kind === 'chart'
       ? { type: 'itemQty', itemId, qty: threshold } : (provider.grantsFacts?.[0] ? { type: 'fact', fact: provider.grantsFacts[0] } : { type: 'runs', runs: 1 });
     const step = addStep(provider, runs, 'acquire', stop, allDeps, provider.kind === 'chart' ? { mapId: provider.mapId } : {});
+    if (provider.kind === 'action' || provider.kind === 'chart') acquiredBy.set(itemId, { provider, step });
     if (provider.rare?.some((entry) => entry.item === itemId)) notes.push(`Expected-value rare source: ${provider.id}`);
     itemStack.delete(itemId);
     return [step.id, ...allDeps];
