@@ -99,6 +99,68 @@ export function sliceLiteral(source: string, anchorIndex: number): string {
   throw new OperationalError('could not locate literal for anchor');
 }
 
+function regexLiteralStart(source: string, index: number): boolean {
+  let i = index - 1;
+  while (i >= 0 && /\s/.test(source[i])) i--;
+  if (i < 0) return true;
+  if ('=([{,:;!&|?'.includes(source[i])) return true;
+  const end = i + 1;
+  let start = i;
+  while (start >= 0 && /[A-Za-z_$]/.test(source[start])) start--;
+  return /(?:return|throw|case|delete|void|typeof|instanceof)$/.test(source.slice(start + 1, end));
+}
+
+function ignoredPositions(source: string, limit: number): Uint8Array {
+  const ignored = new Uint8Array(limit + 1);
+  let i = 0;
+  const mark = (start: number, end: number) => ignored.fill(1, start, Math.min(end, limit + 1));
+  while (i < limit) {
+    const ch = source[i];
+    if (ch === '/' && source[i + 1] === '/') { const start = i; i += 2; while (i < limit && source[i] !== '\n' && source[i] !== '\r') i++; mark(start, i); continue; }
+    if (ch === '/' && source[i + 1] === '*') { const start = i; const end = source.indexOf('*/', i + 2); i = end < 0 ? limit : Math.min(limit, end + 2); mark(start, i); continue; }
+    if (ch === '/' && regexLiteralStart(source, i)) {
+      const start = i++;
+      let inClass = false;
+      while (i < limit) {
+        if (source[i] === '\\') { i += 2; continue; }
+        if (source[i] === '[') { inClass = true; i++; continue; }
+        if (source[i] === ']' && inClass) { inClass = false; i++; continue; }
+        if (source[i] === '/' && !inClass) { i++; while (i < limit && /[A-Za-z]/.test(source[i])) i++; break; }
+        i++;
+      }
+      mark(start, i);
+      continue;
+    }
+    if (ch === '"' || ch === "'") { const start = i; i = Math.min(limit, skipQuoted(source, i, ch)); mark(start, i); continue; }
+    if (ch === '`') {
+      i++;
+      while (i < limit) {
+        if (source[i] === '\\') { i += 2; continue; }
+        if (source[i] === '`') { i++; break; }
+        if (source[i] === '$' && source[i + 1] === '{') { try { i = skipInterpolation(source, i + 2); } catch { i = limit; } continue; }
+        if (source[i] === '{' || source[i] === '[') ignored[i] = 1;
+        i++;
+      }
+      continue;
+    }
+    i++;
+  }
+  return ignored;
+}
+
+export function sliceEnclosing(source: string, index: number, open: '[' | '{'): string {
+  if (!Number.isInteger(index) || index < 0 || index >= source.length) throw new OperationalError(`literal anchor index is out of range: ${index}`);
+  const ignored = ignoredPositions(source, index);
+  for (let candidate = index; candidate >= 0; candidate--) {
+    if (source[candidate] !== open || ignored[candidate]) continue;
+    try {
+      const close = matchingClose(source, candidate);
+      if (close >= index) return source.slice(candidate, close + 1);
+    } catch { /* candidate may be a bracket in a string, regex, or comment */ }
+  }
+  throw new OperationalError(`could not locate enclosing ${open} literal`);
+}
+
 function normalize(value: unknown, seen: WeakSet<object>): unknown {
   if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value;
   if (typeof value === 'undefined') return null;
@@ -115,7 +177,10 @@ function normalize(value: unknown, seen: WeakSet<object>): unknown {
   } finally { seen.delete(object); }
 }
 
-export function evalLiteral(text: string, datasetName: string): unknown {
-  try { return normalize(vm.runInNewContext(`(${text})`, Object.create(null), { timeout: 5000 }), new WeakSet<object>()); }
+export function evalLiteral(text: string, datasetName: string, bindings: Record<string, unknown> = {}): unknown {
+  try {
+    const sandbox = Object.assign(Object.create(null) as Record<string, unknown>, bindings);
+    return normalize(vm.runInNewContext(`(${text})`, sandbox, { timeout: 5000 }), new WeakSet<object>());
+  }
   catch (error) { const detail = error instanceof Error ? error.message : String(error); throw new OperationalError(`failed to evaluate ${datasetName} dataset: ${detail}`, { cause: error }); }
 }
