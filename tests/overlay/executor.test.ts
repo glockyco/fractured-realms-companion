@@ -148,6 +148,23 @@ test('running status exposes per-step progress and a remaining-time countdown', 
   assert.equal(status.stepRemainingMs, 1000);
 });
 
+test('a waiting manual step completes when the game state changes without a notification', () => {
+  const game = fakeGame();
+  const executor = createDirectExecutor(game.api, options(game));
+  const manual = {
+    id: 'buy', kind: 'manual', label: 'Buy tool', instruction: 'Buy the tool',
+    deps: [], stop: { type: 'fact', fact: 'tool' },
+    expected: { runs: 0, ms: null, produces: {}, consumes: {} }, purpose: 'unlock',
+  };
+  executor.run([manual]);
+  assert.equal(executor.getStatus().phase, 'waiting');
+  // Simulate a purchase the game store did not broadcast: mutate state, no emit.
+  game.api.state.tool = 1;
+  assert.equal(executor.getStatus().phase, 'waiting');
+  game.timers.tick(1000);
+  assert.equal(executor.getStatus().phase, 'complete');
+});
+
 test('preempts a lower-priority running action when a higher-priority step unblocks', () => {
   const game = fakeGame();
   const blocker = (state, step) => step.id === 'priority' && !state.tool ? 'missing tool' : null;

@@ -143,17 +143,19 @@ export function createDirectExecutor(api, options = {}) {
     return expected === null ? total : total + expected;
   }, 0);
 
-  const armProgressTicker = () => {
+  const armHeartbeat = () => {
     clearTimer(progressTicker);
     progressTicker = undefined;
-    if (runningIndex < 0) return;
+    if (status.phase !== 'running' && status.phase !== 'waiting') return;
     const token = runToken;
-    // Re-publish once a second so the running step's remaining-time countdown and
-    // elapsed advance smoothly between the game's state-change callbacks.
+    // Re-poll once a second: advance the running step's countdown, and while waiting
+    // re-check manual/blocked steps in case the game's store did not notify us of a
+    // purchase or equip that unblocks the queue.
     progressTicker = schedule(() => {
       progressTicker = undefined;
-      if (token !== runToken || status.phase !== 'running' || runningIndex < 0) return;
-      publish('running', status.message, currentState());
+      if (token !== runToken || TERMINAL.has(status.phase)) return;
+      if (status.phase === 'running' && runningIndex >= 0) publish('running', status.message, currentState());
+      else observe(currentState());
     }, 1000);
   };
 
@@ -183,7 +185,7 @@ export function createDirectExecutor(api, options = {}) {
       stepProgressMax,
       stepRemainingMs,
     };
-    if (phase === 'running' && runningStep) armProgressTicker();
+    if ((phase === 'running' && runningStep) || phase === 'waiting') armHeartbeat();
     else { clearTimer(progressTicker); progressTicker = undefined; }
     try { onUpdate({ ...status }); } catch { /* UI observers must not break execution. */ }
     return state;
