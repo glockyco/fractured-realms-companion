@@ -250,7 +250,7 @@ function extractShop(source: string): { items: string[]; multiplier: number } {
   // Raw ingredient ids sold in the shop (Nz), spread into the buyable set.
   const raw = array(extract(source, '["wild_berries","venison","woodland_seed"', 'shop'), 'shop').map((entry) => string(entry, 'shop'));
   // Explicit non-ingredient buyables: kU = new Set(["vial","bow_string",...Nz]).
-  const setStart = anchor(source, 'new Set(["vial","bow_string"', 'shop');
+  const setStart = anchor(source, 'new Set(["vial","bow_string",', 'shop');
   const setEnd = source.indexOf(')', setStart);
   if (setEnd < 0) fail('shop', 'buyable set is not terminated');
   const explicit = [...source.slice(setStart, setEnd).matchAll(/"([^"]+)"/g)].map((match) => match[1]);
