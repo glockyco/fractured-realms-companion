@@ -371,6 +371,7 @@ tbody tr:last-child td { border-bottom: 0; }
 .step-qty { color: var(--fr-harbor-400); }
 .step-note { display: flex; align-items: flex-start; gap: var(--fr-s2); color: var(--fr-brass-400) !important; }
 .step-note svg { margin-top: 0.1rem; }
+.plan-step .step-inputs { color: var(--fr-brass-400); }
 .queue-header { display: flex; align-items: center; justify-content: space-between; gap: var(--fr-s3); margin-top: var(--fr-s5); }
 .queue-plan[data-state="blocked"] .queue-plan-title { color: var(--fr-brass-400); }
 .queue-header h3 { margin: 0; }
@@ -1188,6 +1189,31 @@ function createApplication(shell, modelJson, api) {
     if (step.kind === 'manual') return 'waiting on you';
     const blocker = liveBlocker(model, live, step); return blocker ? `blocked: ${factLabel(blocker)}` : 'ready';
   };
+  const planNum = (value) => Number(value) || 0;
+  const planQtyText = (value) => { const n = planNum(value); if (Number.isInteger(n)) return String(n); return n < 1 ? n.toFixed(2) : n.toFixed(1); };
+  // The item a step drives toward: its item-quantity stop, else its largest whole output.
+  const stepPrimaryOutput = (step) => {
+    const produces = step.expected?.produces || {};
+    if (step.stop?.type === 'itemQty' && step.stop.itemId != null && produces[step.stop.itemId] != null) return step.stop.itemId;
+    let best = null; let bestQty = 0;
+    for (const [id, qty] of Object.entries(produces)) { if (id === 'gold') continue; const q = planNum(qty); if (q >= 1 && q > bestQty) { best = id; bestQty = q; } }
+    return best;
+  };
+  const stepYieldHtml = (step) => {
+    if (step.kind === 'manual') return '';
+    const parts = []; const runs = planNum(step.expected?.runs);
+    if (runs > 1) parts.push(`<span class="data">\u00d7${escapeHtml(String(runs))}</span>`);
+    const primary = stepPrimaryOutput(step);
+    if (primary) parts.push(`\u2192 <span class="data">${escapeHtml(planQtyText(step.expected?.produces?.[primary]))}</span> ${escapeHtml(labelFor(items, primary))}`);
+    else if (planNum(step.expected?.produces?.gold)) parts.push(`\u2192 <span class="data">${escapeHtml(planQtyText(step.expected.produces.gold))}</span> gold`);
+    return parts.join(' ');
+  };
+  const stepInputsHtml = (step) => {
+    const consumes = step.expected?.consumes || {};
+    const entries = Object.entries(consumes).filter(([id, qty]) => id !== 'gold' && planNum(qty) > 0);
+    if (!entries.length) return '';
+    return `needs ${entries.map(([id, qty]) => `<span class="data">${escapeHtml(planQtyText(qty))}</span> ${escapeHtml(labelFor(items, id))}`).join(' \u00b7 ')}`;
+  };
   renderPlan = () => {
     const result = state.resolvedQueue; const live = liveState(); const status = state.executorStatus || {}; const locked = isExecutionLocked(status.phase); const labels = Object.fromEntries(state.queueGoals.map((entry) => [entry.id, targetLabel(entry.target)]));
     const firstBlocked = result.targets.findIndex((entry) => !entry.ok);
@@ -1203,7 +1229,9 @@ function createApplication(shell, modelJson, api) {
       const current = stepStatus(step, live, status); const per = result.perStep?.find((entry) => entry.id === step.id); const depManual = current !== 'done' && step.kind !== 'manual' ? dependencyManual(step, result.steps, status) : null;
       const eta = depManual ? `after ${depManual.label || depManual.id}` : current === 'running' && Number(status.stepRemainingMs ?? step.expected?.ms) > 0 ? `about ${formatDuration(status.stepRemainingMs ?? step.expected?.ms)} left` : per ? `~${formatDuration(Math.max(0, Number(per.endMs) - Number(per.startMs)))}` : '';
       const anchor = locked && Number.isFinite(Number(state.queueStartedAt)) ? Number(state.queueStartedAt) : Date.now(); const readyAt = step.kind === 'manual' ? formatFinishTime(result.readyAt?.[step.id] || 0, anchor) : null; const progressState = stepProgress(step, status); const progressMarkup = progressState ? `<progress class="step-progress" max="${escapeHtml(progressState.max)}" value="${escapeHtml(progressState.value)}" aria-label="${escapeHtml(step.label || step.id)} progress"></progress>` : '';
-      return `<li class="record-row plan-step" data-step-id="${escapeHtml(step.id)}"><div class="record-top"><strong>${escapeHtml(step.label || actionName(actionFor(step.skillId, step.actionId)) || step.id)}</strong><div class="badges"><span class="badge">${escapeHtml(step.purpose || 'goal')}</span><span class="badge" data-status="${escapeHtml(current)}">${escapeHtml(current)}</span></div></div><p>${escapeHtml(eta)}${step.kind === 'manual' ? ` · ready for you at ~${escapeHtml(readyAt)}` : ''}</p>${progressMarkup}${step.kind === 'manual' ? `<div class="instruction-card"><strong>Waiting for you</strong><p>${escapeHtml(step.instruction || step.label || 'Complete this step in the game.')}</p></div>` : ''}</li>`;
+      const detailBits = [stepYieldHtml(step), `${escapeHtml(eta)}${step.kind === 'manual' ? ` \u00b7 ready for you at ~${escapeHtml(readyAt)}` : ''}`].filter(Boolean).join(' \u00b7 ');
+      const inputsHtml = current.startsWith('blocked') ? stepInputsHtml(step) : '';
+      return `<li class="record-row plan-step" data-step-id="${escapeHtml(step.id)}"><div class="record-top"><strong>${escapeHtml(step.label || actionName(actionFor(step.skillId, step.actionId)) || step.id)}</strong><div class="badges"><span class="badge">${escapeHtml(step.purpose || 'goal')}</span><span class="badge" data-status="${escapeHtml(current)}">${escapeHtml(current)}</span></div></div>${detailBits ? `<p class="step-detail">${detailBits}</p>` : ''}${inputsHtml ? `<p class="step-inputs">${inputsHtml}</p>` : ''}${progressMarkup}${step.kind === 'manual' ? `<div class="instruction-card"><strong>Waiting for you</strong><p>${escapeHtml(step.instruction || step.label || 'Complete this step in the game.')}</p></div>` : ''}</li>`;
     }).join('');
     const totals = state.queueGoals.length ? `<p class="queue-total data" id="fr-queue-total">Optimistic: ${escapeHtml(formatDuration(result.optimisticMs || 0))} · Scheduler-faithful: ${escapeHtml(formatDuration(result.schedulerMs || 0))}</p>` : '';
     const infeasibility = result.infeasibility ? `<p class="banner warning" role="status">${ICONS.warning}<span>Simulation warning: ${escapeHtml(result.steps.find((step) => step.id === result.infeasibility.stepId)?.label || result.infeasibility.stepId || 'unknown step')} · ${escapeHtml(result.infeasibility.reason || 'infeasible')}</span></p>` : '';
