@@ -163,7 +163,12 @@ export function plan(model, snapshot = {}, target = {}) {
       let selected = null; let selectedRuns = 0; let selectedStop = 0;
       while (levelForXp(model.xpTable, simulatedXp) < goal) {
         const currentLevel = levelForXp(model.xpTable, simulatedXp);
-        const candidates = (model._index.actionsBySkill.get(skillId) ?? []).filter((action) => num(action.levelReq) <= currentLevel);
+        // A training action is only usable once its own-skill requirement is met. Some
+        // actions gate higher than their nominal levelReq (bass unlocks at 15 but its
+        // spot needs 17), so filter on the effective requirement. Ignoring the gate
+        // would pick such an action early and then recurse to level the same skill to
+        // the gate level, which the cycle guard rejects as a false cyclic requirement.
+        const candidates = (model._index.actionsBySkill.get(skillId) ?? []).filter((action) => Math.max(num(action.levelReq), num(action.gate?.skillLevel)) <= currentLevel);
         candidates.sort((a, b) => {
           const ar = xpPerRun(model, { ...state, skillXp: { ...state.skillXp, [skillId]: simulatedXp } }, skillId, a) / Math.max(1, effectiveInterval(model, { ...state, skillXp: { ...state.skillXp, [skillId]: simulatedXp } }, skillId, a));
           const br = xpPerRun(model, { ...state, skillXp: { ...state.skillXp, [skillId]: simulatedXp } }, skillId, b) / Math.max(1, effectiveInterval(model, { ...state, skillXp: { ...state.skillXp, [skillId]: simulatedXp } }, skillId, b));
