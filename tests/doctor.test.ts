@@ -24,10 +24,12 @@ function fixture(bytes = 'pristine archive'): Fixture {
 
 function pack(state: string, buildId = 'build-1'): void {
   const directory = join(state, 'pack');
+  mkdirSync(join(directory, 'engine'), { recursive: true });
   mkdirSync(join(directory, 'data'), { recursive: true });
-  writeFileSync(join(directory, 'pack.json'), JSON.stringify({ schema_version: 1, build_id: buildId, generated_at: '2026-01-01T00:00:00.000Z' }));
-  for (const name of ['overlay.js', 'planner.js', 'executor.js']) writeFileSync(join(directory, name), '');
-  for (const name of ['items.json', 'actions.json', 'skills.json', 'xp.json', 'buildings.json', 'digsites.json', 'strings-en.json']) writeFileSync(join(directory, 'data', name), '{}');
+  writeFileSync(join(directory, 'pack.json'), JSON.stringify({ schema_version: 2, build_id: buildId, generated_at: '2026-01-01T00:00:00.000Z' }));
+  for (const name of ['overlay.js', 'executor.js']) writeFileSync(join(directory, name), '');
+  for (const name of ['model.js', 'formulas.js', 'closure.js', 'expand.js', 'simulate.js', 'queue.js']) writeFileSync(join(directory, 'engine', name), '');
+  writeFileSync(join(directory, 'data', 'model.json'), '{}');
 }
 
 function base(f: Fixture, extra: Partial<DoctorOptions> = {}): DoctorOptions {

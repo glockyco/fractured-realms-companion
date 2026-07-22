@@ -19,16 +19,8 @@ import { OperationalError } from '../lib/errors.ts';
 export const FRACTURED_MARKER = 'FRACTURED_REALMS_COMPANION_V1';
 const FOREIGN_MARKER_PREFIX = 'CROSSOVER_BROWSER_GAMES_FRACTURED_REALMS_';
 const ERROR_PREFIX = 'Unexpected Fractured Realms entry point for build ';
-const REQUIRED_MODULES = ['overlay.js', 'planner.js', 'executor.js'] as const;
-const REQUIRED_DATA = [
-  'items.json',
-  'actions.json',
-  'skills.json',
-  'xp.json',
-  'buildings.json',
-  'digsites.json',
-  'strings-en.json',
-] as const;
+const REQUIRED_MODULES = ['model.js', 'formulas.js', 'closure.js', 'expand.js', 'simulate.js', 'queue.js'] as const;
+const REQUIRED_DATA = ['model.json'] as const;
 const MAIN_ANCHORS = [
   'const STEAM_APP_ID = 3789070;',
   'function initSteam() {',
@@ -178,10 +170,16 @@ function validatePack(options: FracturedApplyOptions): PackFile[] {
   };
   walk(pack);
   const names = readdirSync(pack);
-  const expectedRoot = new Set(['pack.json', 'overlay.js', 'planner.js', 'executor.js', 'data']);
+  const expectedRoot = new Set(['pack.json', 'overlay.js', 'executor.js', 'engine', 'data']);
   if (names.length !== expectedRoot.size || names.some((name) => !expectedRoot.has(name))) fail('pack has unexpected root files');
   regular(join(pack, 'pack.json'), 'pack.json');
-  for (const name of REQUIRED_MODULES) regular(join(pack, name), name);
+  regular(join(pack, 'overlay.js'), 'overlay.js');
+  regular(join(pack, 'executor.js'), 'executor.js');
+  directory(join(pack, 'engine'), 'pack engine directory');
+  const engineNames = readdirSync(join(pack, 'engine'));
+  const expectedEngine = new Set<string>(REQUIRED_MODULES);
+  if (engineNames.length !== REQUIRED_MODULES.length || engineNames.some((name) => !expectedEngine.has(name))) fail('pack engine has missing or unknown files');
+  for (const name of REQUIRED_MODULES) regular(join(pack, 'engine', name), `engine/${name}`);
   directory(join(pack, 'data'), 'pack data directory');
   const dataNames = readdirSync(join(pack, 'data'));
   const expectedData = new Set<string>(REQUIRED_DATA);
@@ -190,13 +188,18 @@ function validatePack(options: FracturedApplyOptions): PackFile[] {
   try { manifest = JSON.parse(readFileSync(join(pack, 'pack.json'), 'utf8')); } catch (error) { fail('pack.json is not valid JSON', error); }
   if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) fail('pack.json has invalid schema');
   const record = manifest as Record<string, unknown>;
-  if (Object.keys(record).length !== 3 || record.schema_version !== 1 || record.build_id !== options.buildId || typeof record.generated_at !== 'string') fail('pack.json has invalid schema or build');
+  if (Object.keys(record).length !== 3 || record.schema_version !== 2 || record.build_id !== options.buildId || typeof record.generated_at !== 'string') fail('pack.json has invalid schema or build');
   const files: PackFile[] = [];
-  for (const name of ['pack.json', ...REQUIRED_MODULES]) {
+  for (const name of ['pack.json', 'overlay.js', 'executor.js']) {
     const path = join(pack, name);
     regular(path, name);
     const bytes = readFileSync(path);
     files.push({ relativePath: name, bytes });
+  }
+  for (const name of REQUIRED_MODULES) {
+    const path = join(pack, 'engine', name);
+    regular(path, `engine/${name}`);
+    files.push({ relativePath: join('engine', name), bytes: readFileSync(path) });
   }
   for (const name of REQUIRED_DATA) {
     const path = join(pack, 'data', name);

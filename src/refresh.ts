@@ -11,8 +11,21 @@ import {
 } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { extractDatasets, type ExtractedDatasets } from './extract/datasets.ts';
-import { ELECTRON_HOST_SOURCE, EXECUTOR_SOURCE, FRACTURED_ADAPTER_SOURCE, OVERLAY_SOURCE, PLANNER_SOURCE } from './generated/embedded.ts';
+import { extractRegistries, type RawGameData } from './extract/registries.ts';
+import { compileModel, serializeModel, type GameModel } from './model/compile.ts';
+import { writeModelDb } from './model/sqlite.ts';
+import {
+  ELECTRON_HOST_SOURCE,
+  ENGINE_CLOSURE_SOURCE,
+  ENGINE_EXPAND_SOURCE,
+  ENGINE_FORMULAS_SOURCE,
+  ENGINE_MODEL_SOURCE,
+  ENGINE_QUEUE_SOURCE,
+  ENGINE_SIMULATE_SOURCE,
+  EXECUTOR_SOURCE,
+  FRACTURED_ADAPTER_SOURCE,
+  OVERLAY_SOURCE,
+} from './generated/embedded.ts';
 import { readSteamManifest, type SteamManifest } from './lib/acf.ts';
 import { extractFile, listFiles } from './lib/asar.ts';
 import { OperationalError } from './lib/errors.ts';
@@ -23,14 +36,14 @@ import { computePayloadRevision } from './patch/revision.ts';
 import { discoverInstall, type DiscoverInstallOptions, type SteamInstall } from './platform/steam.ts';
 import { stateDir } from './platform/state.ts';
 
-const DATA_FILES = [
-  ['items', 'items.json'],
-  ['actions', 'actions.json'],
-  ['skills', 'skills.json'],
-  ['xp', 'xp.json'],
-  ['buildings', 'buildings.json'],
-  ['digsites', 'digsites.json'],
-  ['stringsEn', 'strings-en.json'],
+const DATA_FILES = [['model', 'model.json']] as const;
+const ENGINE_SOURCES = [
+  ['model', ENGINE_MODEL_SOURCE],
+  ['formulas', ENGINE_FORMULAS_SOURCE],
+  ['closure', ENGINE_CLOSURE_SOURCE],
+  ['expand', ENGINE_EXPAND_SOURCE],
+  ['simulate', ENGINE_SIMULATE_SOURCE],
+  ['queue', ENGINE_QUEUE_SOURCE],
 ] as const;
 const METADATA_KEYS_V2 = new Set([
   'metadata_version',
@@ -63,10 +76,10 @@ export interface RefreshDependencies {
   fingerprint?: (path: string, marker?: string | Uint8Array) => Fingerprint;
   listFiles?: (archive: string) => string[];
   extractFile?: (archive: string, innerPath: string) => Buffer;
-  extractDatasets?: (source: string, archiveFiles: readonly string[]) => ExtractedDatasets;
+  extractRegistries?: (source: string, archiveFiles: readonly string[]) => RawGameData;
   overlaySource?: string;
-  plannerSource?: string;
   executorSource?: string;
+  engineSources?: Readonly<Record<string, string>>;
   patchManager?: { patch(request: PatchRequest): PatchResult };
   createApply?: typeof createFracturedApply;
   /** File-system hooks are intentionally narrow so transaction failures can be tested. */
@@ -90,10 +103,10 @@ export interface RefreshOptions extends DiscoverInstallOptions {
   fingerprint?: RefreshDependencies['fingerprint'];
   listFiles?: RefreshDependencies['listFiles'];
   extractFile?: RefreshDependencies['extractFile'];
-  extractDatasets?: RefreshDependencies['extractDatasets'];
+  extractRegistries?: RefreshDependencies['extractRegistries'];
   overlaySource?: string;
-  plannerSource?: string;
   executorSource?: string;
+  engineSources?: Readonly<Record<string, string>>;
   patchManager?: RefreshDependencies['patchManager'];
   createApply?: RefreshDependencies['createApply'];
   fileSystem?: RefreshDependencies['fileSystem'];
@@ -213,8 +226,8 @@ function metadataForBackup(stateDirectory: string, buildId: string, live: Finger
   return backupPath;
 }
 
-function validatePackDirectory(pack: string, buildId: string, datasets: ExtractedDatasets, generatedAt: string, overlay: string, planner: string, executor: string): void {
-  const expectedRoot = new Set(['pack.json', 'overlay.js', 'planner.js', 'executor.js', 'data']);
+function validatePackDirectory(pack: string, buildId: string, model: GameModel, generatedAt: string, overlay: string, executor: string, engines: Readonly<Record<string, string>>): void {
+  const expectedRoot = new Set(['pack.json', 'overlay.js', 'executor.js', 'engine', 'data']);
   let rootStat;
   try { rootStat = lstatSync(pack); } catch (error) { fail(`staged companion pack is missing: ${pack}`, error); }
   if (!rootStat!.isDirectory() || rootStat!.isSymbolicLink()) fail(`staged companion pack is not a regular directory: ${pack}`);
@@ -223,22 +236,27 @@ function validatePackDirectory(pack: string, buildId: string, datasets: Extracte
   const manifestPath = join(pack, 'pack.json');
   let manifest: unknown;
   try { manifest = JSON.parse(readFileSync(manifestPath, 'utf8')); } catch (error) { fail('staged companion pack has invalid pack.json', error); }
-  if (!isRecord(manifest) || Object.keys(manifest).length !== 3 || manifest.schema_version !== 1 || manifest.build_id !== buildId || manifest.generated_at !== generatedAt) fail('staged companion pack has invalid pack.json schema');
+  if (!isRecord(manifest) || Object.keys(manifest).length !== 3 || manifest.schema_version !== 2 || manifest.build_id !== buildId || manifest.generated_at !== generatedAt) fail('staged companion pack has invalid pack.json schema');
   if (readFileSync(join(pack, 'overlay.js'), 'utf8') !== overlay) fail('staged companion pack overlay does not match embedded source');
-  if (readFileSync(join(pack, 'planner.js'), 'utf8') !== planner) fail('staged companion pack planner does not match embedded source');
   if (readFileSync(join(pack, 'executor.js'), 'utf8') !== executor) fail('staged companion pack executor does not match embedded source');
+  const engineDir = join(pack, 'engine');
+  const engineNames = readdirSync(engineDir);
+  const expectedEngine = new Set(Object.keys(engines).map((name) => `${name}.js`));
+  if (engineNames.length !== expectedEngine.size || engineNames.some((name) => !expectedEngine.has(name))) fail('staged companion pack engine files are incomplete');
+  for (const [name, source] of Object.entries(engines)) {
+    if (readFileSync(join(engineDir, `${name}.js`), 'utf8') !== source) fail(`staged companion pack engine/${name}.js does not match embedded source`);
+  }
   const dataDir = join(pack, 'data');
   const dataNames = readdirSync(dataDir);
   const expectedData = new Set<string>(DATA_FILES.map(([, filename]) => filename));
   if (dataNames.length !== expectedData.size || dataNames.some((name) => !expectedData.has(name))) fail('staged companion pack data files are incomplete');
-  for (const [key, filename] of DATA_FILES) {
-    let value: unknown;
-    try { value = JSON.parse(readFileSync(join(dataDir, filename), 'utf8')); } catch (error) { fail(`staged companion pack has invalid ${filename}`, error); }
-    if (value === undefined || datasets[key] === undefined) fail(`staged companion pack is missing dataset ${key}`);
-  }
+  const modelPath = join(dataDir, 'model.json');
+  let value: unknown;
+  try { value = JSON.parse(readFileSync(modelPath, 'utf8')); } catch (error) { fail('staged companion pack has invalid model.json', error); }
+  if (JSON.stringify(value) !== serializeModel(model)) fail('staged companion pack model does not match compiled model');
 }
 
-function publishPack(stateDirectory: string, buildId: string, datasets: ExtractedDatasets, generatedAt: string, overlay: string, planner: string, executor: string, fsOps: NonNullable<RefreshDependencies['fileSystem']>): string {
+function publishPack(stateDirectory: string, model: GameModel, generatedAt: string, overlay: string, executor: string, engines: Readonly<Record<string, string>>, fsOps: NonNullable<RefreshDependencies['fileSystem']>): string {
   const mkdir = fsOps.mkdirSync ?? mkdirSync;
   const mkdtemp = fsOps.mkdtempSync ?? mkdtempSync;
   const rename = fsOps.renameSync ?? renameSync;
@@ -248,18 +266,15 @@ function publishPack(stateDirectory: string, buildId: string, datasets: Extracte
   mkdir(stateDirectory, { recursive: true });
   const stage = mkdtemp(join(stateDirectory, '.pack-staging-'));
   try {
+    mkdir(join(stage, 'engine'), { recursive: true });
     mkdir(join(stage, 'data'), { recursive: true });
-    const packManifest = `${JSON.stringify({ schema_version: 1, build_id: buildId, generated_at: generatedAt }, null, 2)}\n`;
+    const packManifest = `${JSON.stringify({ schema_version: 2, build_id: model.build_id, generated_at: generatedAt }, null, 2)}\n`;
     write(join(stage, 'pack.json'), packManifest, { mode: 0o600 });
     write(join(stage, 'overlay.js'), overlay, { mode: 0o600 });
-    write(join(stage, 'planner.js'), planner, { mode: 0o600 });
     write(join(stage, 'executor.js'), executor, { mode: 0o600 });
-    for (const [key, filename] of DATA_FILES) {
-      const json = JSON.stringify(datasets[key], null, 2);
-      if (json === undefined) fail(`dataset ${key} is not JSON serializable`);
-      write(join(stage, 'data', filename), `${json}\n`, { mode: 0o600 });
-    }
-    validatePackDirectory(stage, buildId, datasets, generatedAt, overlay, planner, executor);
+    for (const [name, source] of Object.entries(engines)) write(join(stage, 'engine', `${name}.js`), source, { mode: 0o600 });
+    write(join(stage, 'data', 'model.json'), `${serializeModel(model)}\n`, { mode: 0o600 });
+    validatePackDirectory(stage, model.build_id, model, generatedAt, overlay, executor, engines);
 
     let existing = false;
     try {
@@ -327,17 +342,30 @@ export function refreshCompanion(options: RefreshOptions = {}): RefreshResult {
   if (bundles.length !== 1) fail(`renderer bundle index bundle is ${bundles.length === 0 ? 'missing' : 'ambiguous'}`);
   const extract = dependency(options, 'extractFile', extractFile);
   const source = extract(pristineArchive, bundles[0]!).toString('utf8');
-  const extractAllDatasets = dependency(options, 'extractDatasets', extractDatasets);
-  const datasets = extractAllDatasets(source, files);
+  const extractAllRegistries = dependency(options, 'extractRegistries', extractRegistries);
+  const raw = extractAllRegistries(source, files);
+  const model = compileModel(raw, manifest.buildid);
   const generatedAt = utcTimestamp(options.clock);
   const overlay = dependency(options, 'overlaySource', OVERLAY_SOURCE);
-  const planner = dependency(options, 'plannerSource', PLANNER_SOURCE);
   const executor = dependency(options, 'executorSource', EXECUTOR_SOURCE);
+  const embeddedEngines = Object.fromEntries(ENGINE_SOURCES);
+  const injectedEngines = dependency(options, 'engineSources', embeddedEngines);
+  const engineNames: string[] = ENGINE_SOURCES.map(([name]) => name);
+  if (Object.keys(injectedEngines).length !== engineNames.length || Object.keys(injectedEngines).some((name) => !engineNames.includes(name))) fail('embedded companion engine source set is invalid');
   if (typeof overlay !== 'string' || overlay.length === 0) fail('embedded companion overlay source is unavailable');
-  if (typeof planner !== 'string' || planner.length === 0) fail('embedded companion planner source is unavailable');
   if (typeof executor !== 'string' || executor.length === 0) fail('embedded companion executor source is unavailable');
-  const payloadRevision = computePayloadRevision([ELECTRON_HOST_SOURCE, FRACTURED_ADAPTER_SOURCE, overlay, planner, executor]);
-  const pack = publishPack(state, manifest.buildid, datasets, generatedAt, overlay, planner, executor, options.fileSystem ?? options.dependencies?.fileSystem ?? {});
+  for (const [name] of ENGINE_SOURCES) {
+    if (typeof injectedEngines[name] !== 'string' || injectedEngines[name].length === 0) fail(`embedded companion engine/${name}.js source is unavailable`);
+  }
+  const payloadRevision = computePayloadRevision([
+    ELECTRON_HOST_SOURCE,
+    FRACTURED_ADAPTER_SOURCE,
+    overlay,
+    executor,
+    ...ENGINE_SOURCES.map(([name]) => injectedEngines[name]!),
+  ]);
+  const pack = publishPack(state, model, generatedAt, overlay, executor, injectedEngines, options.fileSystem ?? options.dependencies?.fileSystem ?? {});
+  if (!writeModelDb(model, join(state, 'model.db'))) console.warn('model.db unavailable; continuing with model.json pack');
 
   const expectedOriginal = { sha256: original.sha256.toLowerCase(), size: original.size };
   if (options.noPatch) return { install, stateDirectory: state, packDirectory: pack, buildId: manifest.buildid, original: expectedOriginal, changed: false };

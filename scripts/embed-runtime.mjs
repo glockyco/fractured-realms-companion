@@ -8,8 +8,13 @@ const assets = [
   ['ELECTRON_HOST_SOURCE', 'runtime/electron-host.cjs'],
   ['FRACTURED_ADAPTER_SOURCE', 'runtime/fractured-adapter.cjs'],
   ['OVERLAY_SOURCE', 'overlay/overlay.js'],
-  ['PLANNER_SOURCE', 'overlay/planner.js'],
   ['EXECUTOR_SOURCE', 'overlay/executor.js'],
+  ['ENGINE_MODEL_SOURCE', 'overlay/engine/model.js'],
+  ['ENGINE_FORMULAS_SOURCE', 'overlay/engine/formulas.js'],
+  ['ENGINE_CLOSURE_SOURCE', 'overlay/engine/closure.js'],
+  ['ENGINE_EXPAND_SOURCE', 'overlay/engine/expand.js'],
+  ['ENGINE_SIMULATE_SOURCE', 'overlay/engine/simulate.js'],
+  ['ENGINE_QUEUE_SOURCE', 'overlay/engine/queue.js'],
 ];
 
 await mkdir(generatedDirectory, { recursive: true });

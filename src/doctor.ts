@@ -11,8 +11,9 @@ const APP_ID = '3789070';
 const PORT = 48766;
 const SERVICE = MARKER;
 const HEALTH_TIMEOUT_MS = 1500;
-const DATA_FILES = ['items.json', 'actions.json', 'skills.json', 'xp.json', 'buildings.json', 'digsites.json', 'strings-en.json'] as const;
-const PACK_ROOT = ['pack.json', 'overlay.js', 'planner.js', 'executor.js', 'data'] as const;
+const DATA_FILES = ['model.json'] as const;
+const ENGINE_FILES = ['model.js', 'formulas.js', 'closure.js', 'expand.js', 'simulate.js', 'queue.js'] as const;
+const PACK_ROOT = ['pack.json', 'overlay.js', 'executor.js', 'engine', 'data'] as const;
 const METADATA_KEYS = ['metadata_version', 'profile_id', 'profile_revision', 'marker', 'steam_build_id', 'timestamp', 'original', 'patched', 'backup'] as const;
 const METADATA_KEYS_V3 = [...METADATA_KEYS, 'payload_revision'] as const;
 const RECORD_KEYS = ['sha256', 'size'] as const;
@@ -144,21 +145,29 @@ function validPack(state: string, buildId: string, fs: Required<DoctorFileSystem
     if (names.length !== PACK_ROOT.length || names.some((name) => !(PACK_ROOT as readonly string[]).includes(name))) {
       return { ok: false, message: `Companion pack has unexpected root entries: ${pack}` };
     }
+    for (const name of ['pack.json', 'overlay.js', 'executor.js']) {
+      if (!regularFile(join(pack, name), fs)) return { ok: false, message: `Companion pack entry is not a regular file: ${join(pack, name)}` };
+    }
+    const engine = join(pack, 'engine');
+    if (!regularDirectory(engine, fs)) return { ok: false, message: `Companion pack engine directory is missing: ${engine}` };
+    const engineNames = fs.readdirSync(engine).map(String);
+    if (engineNames.length !== ENGINE_FILES.length || engineNames.some((name) => !(ENGINE_FILES as readonly string[]).includes(name))) {
+      return { ok: false, message: `Companion pack engine files are incomplete: ${engine}` };
+    }
+    for (const name of ENGINE_FILES) {
+      if (!regularFile(join(engine, name), fs)) return { ok: false, message: `Companion pack engine entry is not a regular file: ${join(engine, name)}` };
+    }
     const data = join(pack, 'data');
     if (!regularDirectory(data, fs)) return { ok: false, message: `Companion pack data directory is missing: ${data}` };
     const dataNames = fs.readdirSync(data).map(String);
     if (dataNames.length !== DATA_FILES.length || dataNames.some((name) => !(DATA_FILES as readonly string[]).includes(name))) {
       return { ok: false, message: `Companion pack data files are incomplete: ${data}` };
     }
-    for (const name of PACK_ROOT) {
-      if (name === 'data') continue;
-      if (!regularFile(join(pack, name), fs)) return { ok: false, message: `Companion pack entry is not a regular file: ${join(pack, name)}` };
-    }
     for (const name of DATA_FILES) {
       if (!regularFile(join(data, name), fs)) return { ok: false, message: `Companion pack data entry is not a regular file: ${join(data, name)}` };
     }
     const manifest = readJson(join(pack, 'pack.json'), fs);
-    if (!record(manifest) || !exactKeys(manifest, ['schema_version', 'build_id', 'generated_at']) || manifest.schema_version !== 1 || manifest.build_id !== buildId || typeof manifest.generated_at !== 'string' || manifest.generated_at.length === 0) {
+    if (!record(manifest) || !exactKeys(manifest, ['schema_version', 'build_id', 'generated_at']) || manifest.schema_version !== 2 || manifest.build_id !== buildId || typeof manifest.generated_at !== 'string' || manifest.generated_at.length === 0) {
       return { ok: false, message: `Companion pack build does not match Steam build ${buildId}` };
     }
     return { ok: true, message: `Companion pack is complete for Steam build ${buildId}` };

@@ -5,16 +5,26 @@ import { join, win32 } from 'node:path';
 import test from 'node:test';
 import { packDirInline } from '../src/lib/asar.ts';
 import { streamFingerprint } from '../src/patch/fingerprint.ts';
-import { EXECUTOR_SOURCE, OVERLAY_SOURCE, PLANNER_SOURCE } from '../src/generated/embedded.ts';
+import {
+  ENGINE_CLOSURE_SOURCE,
+  ENGINE_EXPAND_SOURCE,
+  ENGINE_FORMULAS_SOURCE,
+  ENGINE_MODEL_SOURCE,
+  ENGINE_QUEUE_SOURCE,
+  ENGINE_SIMULATE_SOURCE,
+  EXECUTOR_SOURCE,
+  OVERLAY_SOURCE,
+} from '../src/generated/embedded.ts';
 import { refreshCompanion, resolveBackupPath } from '../src/refresh.ts';
+import { sqliteAvailable } from '../src/lib/sqlite.ts';
 
 const DATA = {
-  items: { ancient_spore: { label: 'Ancient Spore', type: 'material' } },
+  items: { ancient_spore: { label: 'Ancient Spore', type: 'material', value: 1 } },
   actions: { archaeology: [{ id: 'dig_ancient_cairn', levelReq: 1, xp: 1, interval: 1, outputs: { ancient_spore: 1 } }] },
-  skills: [{ id: 'archaeology', name: 'Archaeology' }],
+  actionGates: {},
+  skills: [{ id: 'archaeology', name: 'Archaeology', category: 'gathering' }],
   xp: [0, 0, 1],
-  buildings: [],
-  digsites: [],
+  tools: {}, mapsRegular: [], mapsDeep: [], chartSupplyTiers: {}, agilityCourses: [], bags: [], machines: [], boons: [], restorations: [], recipeMeals: [], seals: [], patterns: {}, grandReward: {}, buildings: [], buildingXp: {}, zones: [], digsites: [], achievements: [], offlineGold: {}, prestigeTitles: null,
   stringsEn: { 'name.fossil_tracks': 'Fossil Tracks', 'itemdesc.ancient_spore': 'Ancient Spore' },
 } as any;
 
@@ -41,7 +51,7 @@ function mkdirp(path: string): void {
 
 function deps(data = DATA) {
   return {
-    extractDatasets: () => data,
+    extractRegistries: () => data,
   };
 }
 
@@ -61,12 +71,15 @@ test('noPatch builds a stable pack and leaves the pristine ASAR untouched', () =
   assert.equal(result.changed, false);
   assert.equal(result.buildId, '24185239');
   assert.deepEqual(readFileSync(f.archive), before);
-  assert.deepEqual(readdirSync(result.packDirectory).sort(), ['data', 'executor.js', 'overlay.js', 'pack.json', 'planner.js']);
-  assert.equal(readFileSync(join(result.packDirectory, 'data', 'strings-en.json'), 'utf8').endsWith('\n'), true);
+  assert.deepEqual(readdirSync(result.packDirectory).sort(), ['data', 'engine', 'executor.js', 'overlay.js', 'pack.json']);
+  assert.deepEqual(readdirSync(join(result.packDirectory, 'engine')).sort(), ['closure.js', 'expand.js', 'formulas.js', 'model.js', 'queue.js', 'simulate.js']);
+  assert.equal(readFileSync(join(result.packDirectory, 'data', 'model.json'), 'utf8').endsWith('\n'), true);
   assert.equal(readFileSync(join(result.packDirectory, 'overlay.js'), 'utf8'), OVERLAY_SOURCE);
-  assert.equal(readFileSync(join(result.packDirectory, 'planner.js'), 'utf8'), PLANNER_SOURCE);
   assert.equal(readFileSync(join(result.packDirectory, 'executor.js'), 'utf8'), EXECUTOR_SOURCE);
-  assert.deepEqual(JSON.parse(readFileSync(join(result.packDirectory, 'pack.json'), 'utf8')), { schema_version: 1, build_id: '24185239', generated_at: '2026-01-02T03:04:05.000Z' });
+  for (const [name, source] of [['model', ENGINE_MODEL_SOURCE], ['formulas', ENGINE_FORMULAS_SOURCE], ['closure', ENGINE_CLOSURE_SOURCE], ['expand', ENGINE_EXPAND_SOURCE], ['simulate', ENGINE_SIMULATE_SOURCE], ['queue', ENGINE_QUEUE_SOURCE]] as const) {
+    assert.equal(readFileSync(join(result.packDirectory, 'engine', `${name}.js`), 'utf8'), source);
+  }
+  if (sqliteAvailable()) assert.equal(existsSync(join(f.state, 'model.db')), true);
 });
 
 test('pristine refresh invokes the patch manager with the expected original', () => {

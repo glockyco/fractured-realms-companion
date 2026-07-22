@@ -7,11 +7,23 @@ import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { runInNewContext } from 'node:vm';
 import { FRACTURED_MARKER, createFracturedApply } from '../../src/patch/fracturedAdapter.ts';
-import { ELECTRON_HOST_SOURCE, EXECUTOR_SOURCE, FRACTURED_ADAPTER_SOURCE, OVERLAY_SOURCE, PLANNER_SOURCE } from '../../src/generated/embedded.ts';
+import {
+  ELECTRON_HOST_SOURCE,
+  ENGINE_CLOSURE_SOURCE,
+  ENGINE_EXPAND_SOURCE,
+  ENGINE_FORMULAS_SOURCE,
+  ENGINE_MODEL_SOURCE,
+  ENGINE_QUEUE_SOURCE,
+  ENGINE_SIMULATE_SOURCE,
+  EXECUTOR_SOURCE,
+  FRACTURED_ADAPTER_SOURCE,
+  OVERLAY_SOURCE,
+} from '../../src/generated/embedded.ts';
 
 const fixture = join(process.cwd(), 'tests/fixtures/fractured-realms/electron');
 const payloadRevision = 'c'.repeat(64);
-const dataNames = ['items', 'actions', 'skills', 'xp', 'buildings', 'digsites', 'strings-en'];
+const dataNames = ['model'];
+const engineSources = { model: ENGINE_MODEL_SOURCE, formulas: ENGINE_FORMULAS_SOURCE, closure: ENGINE_CLOSURE_SOURCE, expand: ENGINE_EXPAND_SOURCE, simulate: ENGINE_SIMULATE_SOURCE, queue: ENGINE_QUEUE_SOURCE };
 const { handleApi } = createRequire(import.meta.url)(join(process.cwd(), 'runtime/fractured-adapter.cjs')) as { handleApi: (request: Record<string, unknown>) => Promise<{ status: number; body: unknown }> };
 
 function snapshot(root: string): Map<string, Buffer> {
@@ -41,10 +53,11 @@ function createCase(buildId = '24185239'): { root: string; pack: string } {
   writeFileSync(join(root, 'node_modules/steamworks.js/dist/win64/steam_api64.dll'), 'dll');
   const pack = join(work, 'pack');
   mkdirSync(join(pack, 'data'), { recursive: true });
-  writeFileSync(join(pack, 'pack.json'), JSON.stringify({ schema_version: 1, build_id: buildId, generated_at: '2026-07-19T00:00:00Z' }));
+  mkdirSync(join(pack, 'engine'), { recursive: true });
+  writeFileSync(join(pack, 'pack.json'), JSON.stringify({ schema_version: 2, build_id: buildId, generated_at: '2026-07-19T00:00:00Z' }));
   writeFileSync(join(pack, 'overlay.js'), OVERLAY_SOURCE);
-  writeFileSync(join(pack, 'planner.js'), PLANNER_SOURCE);
   writeFileSync(join(pack, 'executor.js'), EXECUTOR_SOURCE);
+  for (const [name, source] of Object.entries(engineSources)) writeFileSync(join(pack, `engine/${name}.js`), source);
   for (const name of dataNames) writeFileSync(join(pack, `data/${name}.json`), '{}');
   return { root, pack };
 }
@@ -109,11 +122,11 @@ test('installs exact runtime profile, pack and companion bundle API', () => {
   assert.equal(readFileSync(join(root, 'electron/companion-host.cjs'), 'utf8'), ELECTRON_HOST_SOURCE);
   assert.equal(readFileSync(join(root, 'electron/companion-adapter.cjs'), 'utf8'), FRACTURED_ADAPTER_SOURCE);
   assert.equal(readFileSync(bundlePath, 'utf8').match(/__frCompanion/g)?.length, 1);
-  assert.equal(readFileSync(join(root, 'dist/companion/data/items.json'), 'utf8'), '{}');
-  assert.deepEqual(readdirSync(join(root, 'dist/companion')).sort(), ['data', 'executor.js', 'overlay.js', 'pack.json', 'planner.js']);
+  assert.equal(readFileSync(join(root, 'dist/companion/data/model.json'), 'utf8'), '{}');
+  assert.deepEqual(readdirSync(join(root, 'dist/companion')).sort(), ['data', 'engine', 'executor.js', 'overlay.js', 'pack.json']);
   assert.equal(readFileSync(join(root, 'dist/companion/overlay.js'), 'utf8'), OVERLAY_SOURCE);
-  assert.equal(readFileSync(join(root, 'dist/companion/planner.js'), 'utf8'), PLANNER_SOURCE);
   assert.equal(readFileSync(join(root, 'dist/companion/executor.js'), 'utf8'), EXECUTOR_SOURCE);
+  assert.deepEqual(readdirSync(join(root, 'dist/companion/engine')).sort(), Object.keys(engineSources).map((name) => `${name}.js`).sort());
 
   const startCalls: Array<[string, string]> = [];
   const stopCalls: number[] = [];
@@ -215,13 +228,13 @@ test('rejects a preexisting companion no-open flag without tree writes', () => {
 });
 test('rejects missing or unknown companion modules before mutation', () => {
   for (const mutate of [
-    (pack: string) => unlinkSync(join(pack, 'planner.js')),
+    (pack: string) => unlinkSync(join(pack, 'engine/model.js')),
     (pack: string) => writeFileSync(join(pack, 'unexpected.js'), 'unexpected'),
   ]) {
     const { root, pack } = createCase();
     mutate(pack);
     const before = snapshot(root);
-    assert.throws(() => apply(root, pack), /pack has unexpected root files|pack has missing or unknown/);
+    assert.throws(() => apply(root, pack), /pack has unexpected root files|pack engine has missing or unknown|pack has missing or unknown/);
     assert.deepEqual(snapshot(root), before);
   }
 });
@@ -229,11 +242,11 @@ test('rejects missing or unknown companion modules before mutation', () => {
 test('rejects pack build mismatch and symlinks before mutation', () => {
   const mismatch = createCase('different'); const beforeMismatch = snapshot(mismatch.root); assert.throws(() => apply(mismatch.root, mismatch.pack)); assert.deepEqual(snapshot(mismatch.root), beforeMismatch);
   const linked = createCase();
-  const linkedItems = join(linked.pack, 'data/items.json');
+  const linkedItems = join(linked.pack, 'data/model.json');
   const linkedContents = readFileSync(linkedItems);
-  const linkedSource = join(linked.pack, 'data/items-source.json');
+  const linkedSource = join(linked.pack, 'data/model-source.json');
   writeFileSync(linkedSource, linkedContents);
   unlinkSync(linkedItems);
-  symlinkSync('items-source.json', linkedItems);
+  symlinkSync('model-source.json', linkedItems);
   const beforeLinked = snapshot(linked.root); assert.throws(() => apply(linked.root, linked.pack)); assert.deepEqual(snapshot(linked.root), beforeLinked);
 });

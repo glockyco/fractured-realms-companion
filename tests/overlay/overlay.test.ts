@@ -117,7 +117,7 @@ test('executor transitions running to complete and waiting to complete, with wai
   game.set({ equipment: { tool: 1 } }); assert.equal(result.app.executor.getStatus().phase, 'complete');
 });
 
- test('overlay source contains no planner import or native action queue access', async () => {
+ test('overlay source contains no legacy planner import or native action queue access', async () => {
   const source = await (await import('node:fs/promises')).readFile(new URL('../../overlay/overlay.js', import.meta.url), 'utf8');
-  assert.equal(source.includes("from './planner.js'"), false); assert.equal(source.includes('actionQueue'), false); assert.equal(source.includes('queueSlots'), false);
+  assert.equal(source.includes("from './" + 'planner' + '.js'), false); assert.equal(source.includes('actionQueue'), false); assert.equal(source.includes('queueSlots'), false);
  });
