@@ -156,9 +156,9 @@ test('targets queued behind a blocked target remain visible', async () => {
   const html = result.shell.panels.plan.querySelector('#fr-plan-result').innerHTML; assert.match(html, /Missing/); assert.match(html, /queued behind blocked target/); assert.match(html, /Not planned/);
 });
 
-test('plan result surfaces optimistic and scheduler-faithful totals', async () => {
+test('plan result surfaces attended time and unattended presence summary', async () => {
   const result = await bootOverlay({ document: new FakeDocument(), window: { __frCompanion: fakeApi() }, fetch: fetchFor(model()) }); const plan = result.shell.panels.plan; plan.querySelector('#fr-plan-item').value = 'Log'; plan.querySelector('#fr-plan-form').dispatch('submit');
-  const html = plan.querySelector('#fr-plan-result').innerHTML; assert.match(html, /id="fr-queue-total"/); assert.match(html, /Optimistic:/); assert.match(html, /Scheduler-faithful:/);
+  const html = plan.querySelector('#fr-plan-result').innerHTML; assert.match(html, /id="fr-queue-total"/); assert.match(html, /attended/); assert.match(html, /unattended/); assert.match(html, /manual stop/);
 });
 
 test('planner validation uses a form error without changing executor phase', async () => {

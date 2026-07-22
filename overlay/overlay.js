@@ -376,6 +376,10 @@ tbody tr:last-child td { border-bottom: 0; }
 .queue-plan[data-state="blocked"] .queue-plan-title { color: var(--fr-brass-400); }
 .queue-header h3 { margin: 0; }
 .queue-total { color: var(--fr-neutral-300); font-size: 0.75rem; white-space: normal; text-align: right; }
+.plan-overview { margin: var(--fr-s4) 0 var(--fr-s2); }
+.plan-overview p { margin: var(--fr-s1) 0 0; font-size: 0.75rem; }
+.plan-overview-cost { color: var(--fr-neutral-100); }
+.plan-overview-presence { color: var(--fr-neutral-300); }
 .queue-list { margin: var(--fr-s2) 0 0; padding: 0; list-style: none; border-top: 1px solid var(--fr-neutral-700); }
 .queue-plan { padding: var(--fr-s3) 0; border-bottom: 1px solid var(--fr-neutral-700); }
 .queue-plan[data-state="active"] { background: var(--fr-harbor-950); margin-inline: calc(-1 * var(--fr-s2)); padding-inline: var(--fr-s2); }
@@ -1241,7 +1245,18 @@ function createApplication(shell, modelJson, api) {
       const inputsHtml = current.startsWith('blocked') ? stepInputsHtml(step) : '';
       return `<li class="record-row plan-step" data-step-id="${escapeHtml(step.id)}"><div class="record-top"><strong>${escapeHtml(step.label || actionName(actionFor(step.skillId, step.actionId)) || step.id)}</strong><div class="badges"><span class="badge">${escapeHtml(step.purpose || 'goal')}</span><span class="badge" data-status="${escapeHtml(current)}">${escapeHtml(current)}</span></div></div>${detailBits ? `<p class="step-detail">${detailBits}</p>` : ''}${inputsHtml ? `<p class="step-inputs">${inputsHtml}</p>` : ''}${progressMarkup}${step.kind === 'manual' ? `<div class="instruction-card"><strong>Waiting for you</strong><p>${escapeHtml(step.instruction || step.label || 'Complete this step in the game.')}</p></div>` : ''}</li>`;
     }).join('');
-    const totals = state.queueGoals.length ? `<p class="queue-total data" id="fr-queue-total">Optimistic: ${escapeHtml(formatDuration(result.optimisticMs || 0))} · Scheduler-faithful: ${escapeHtml(formatDuration(result.schedulerMs || 0))}</p>` : '';
+    const anchor = locked && Number.isFinite(Number(state.queueStartedAt)) ? Number(state.queueStartedAt) : Date.now();
+    const manualSteps = (result.steps || []).filter((step) => step.kind === 'manual');
+    const goldCost = (result.steps || []).reduce((sum, step) => sum + planNum(model._index.providersById?.get(step.providerId)?.consumesGold), 0);
+    const summaryBits = [`\u2248${formatDuration(result.optimisticMs || 0)} attended`];
+    if (goldCost > 0) summaryBits.push(`${planQtyText(goldCost)}g`);
+    summaryBits.push(`${manualSteps.length} manual stop${manualSteps.length === 1 ? '' : 's'}`);
+    const pendingManual = manualSteps.filter((step) => status.stepStatuses?.[step.id] !== 'done').sort((a, b) => planNum(result.readyAt?.[a.id]) - planNum(result.readyAt?.[b.id]));
+    const nextManual = pendingManual[0];
+    const presence = manualSteps.length
+      ? (nextManual ? `Runs ~${formatDuration(result.schedulerMs || 0)} unattended \u00b7 next: ${escapeHtml(nextManual.label || nextManual.id)} ~${escapeHtml(formatFinishTime(result.readyAt?.[nextManual.id] || 0, anchor))}` : `Runs ~${formatDuration(result.schedulerMs || 0)} unattended`)
+      : 'Runs fully unattended';
+    const totals = state.queueGoals.length ? `<div class="plan-overview" id="fr-queue-total"><p class="plan-overview-cost data">${escapeHtml(summaryBits.join(' \u00b7 '))}</p><p class="plan-overview-presence">${presence}</p></div>` : '';
     const infeasibility = result.infeasibility ? `<p class="banner warning" role="status">${ICONS.warning}<span>Simulation warning: ${escapeHtml(result.steps.find((step) => step.id === result.infeasibility.stepId)?.label || result.infeasibility.stepId || 'unknown step')} · ${escapeHtml(result.infeasibility.reason || 'infeasible')}</span></p>` : '';
     planPanel.querySelector('#fr-plan-result').innerHTML = state.queueGoals.length ? `${targetRows}${totals}${infeasibility}<h3>Timeline</h3><ol class="record-list">${rows || '<li class="empty">No steps required; targets are already satisfied.</li>'}</ol>` : '<div class="empty">Add a target to begin a queue.</div>';
     renderExecutor();
