@@ -1168,7 +1168,11 @@ function createApplication(shell, modelJson, api) {
     const totalSteps = Number(status.totalSteps) || state.resolvedQueue.steps.length || 0; const completedSteps = Number(status.completedSteps) || 0;
     const running = state.resolvedQueue.steps.find((step) => step.id === status.runningStepId);
     const phaseText = phase[0]?.toUpperCase() + phase.slice(1);
-    phaseNode.textContent = phaseText; messageNode.textContent = status.message || (phase === 'waiting' ? 'Waiting for a runnable step.' : '');
+    phaseNode.textContent = phaseText;
+    const remainMs = Number(status.stepRemainingMs ?? running?.expected?.ms) || 0;
+    const nowMeta = phase === 'running' && running ? `${Math.min(totalSteps, completedSteps + 1)}/${totalSteps}${remainMs > 0 ? ` \u00b7 ~${formatDuration(remainMs)} left` : ''}` : '';
+    const baseMessage = status.message || (phase === 'waiting' ? 'Waiting for a runnable step.' : '');
+    messageNode.textContent = nowMeta ? `${baseMessage || running.label || 'Working'} \u00b7 ${nowMeta}` : baseMessage;
     progress.max = Math.max(1, totalSteps); progress.value = Math.min(progress.max, completedSteps);
     const runButton = shell.queueControls.querySelector('#fr-run'); const resumeButton = shell.queueControls.querySelector('#fr-resume'); const stopButton = shell.queueControls.querySelector('#fr-stop'); const clearButton = shell.queueControls.querySelector('#fr-clear');
     runButton.disabled = !state.resolvedQueue.steps.length || locked;
