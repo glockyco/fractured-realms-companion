@@ -1198,7 +1198,7 @@ function createApplication(shell, modelJson, api) {
     const blocker = liveBlocker(model, live, step); return blocker ? `blocked: ${factLabel(blocker)}` : 'ready';
   };
   const planNum = (value) => Number(value) || 0;
-  const planQtyText = (value) => { const n = planNum(value); if (Number.isInteger(n)) return String(n); return n < 1 ? n.toFixed(2) : n.toFixed(1); };
+  const planQtyText = (value) => { const n = planNum(value); if (Number.isInteger(n)) return n.toLocaleString(); return n < 1 ? n.toFixed(2) : n.toFixed(1); };
   // The item a step drives toward: its item-quantity stop, else its largest whole output.
   const stepPrimaryOutput = (step) => {
     const produces = step.expected?.produces || {};
@@ -1210,7 +1210,7 @@ function createApplication(shell, modelJson, api) {
   const stepYieldHtml = (step) => {
     if (step.kind === 'manual') return '';
     const parts = []; const runs = planNum(step.expected?.runs);
-    if (runs > 1) parts.push(`<span class="data">\u00d7${escapeHtml(String(runs))}</span>`);
+    if (runs > 1) parts.push(`<span class="data">\u00d7${escapeHtml(planQtyText(runs))}</span>`);
     const primary = stepPrimaryOutput(step);
     if (primary) parts.push(`\u2192 <span class="data">${escapeHtml(planQtyText(step.expected?.produces?.[primary]))}</span> ${escapeHtml(labelFor(items, primary))}`);
     else if (planNum(step.expected?.produces?.gold)) parts.push(`\u2192 <span class="data">${escapeHtml(planQtyText(step.expected.produces.gold))}</span> gold`);
