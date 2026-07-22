@@ -99,7 +99,7 @@ export function plan(model, snapshot = {}, target = {}) {
   const applyExpected = (step, provider, runs) => {
     // Item consumption is NOT applied here: inputs are reserved out of the pool in
     // ensureProviderInputs, before sibling sub-chains plan against the same stock.
-    if (provider?.consumesGold) state.gold = Math.max(0, num(state.gold) - num(provider.consumesGold));
+    if (provider?.consumesGold) state.gold = Math.max(0, num(state.gold) - num(provider.consumesGold) * Math.max(1, runs));
     applyExpectedProduction(step, provider, runs);
   };
   const addStep = (provider, runs, purpose, stop, deps, extra = {}) => {
@@ -291,7 +291,12 @@ export function plan(model, snapshot = {}, target = {}) {
     const allDeps = [...new Set([...deps, ...inputDeps])];
     const threshold = quantity(itemId) + output * runs;
     const stop = provider.kind === 'action' || provider.kind === 'chart'
-      ? { type: 'itemQty', itemId, qty: threshold } : (provider.grantsFacts?.[0] ? { type: 'fact', fact: provider.grantsFacts[0] } : { type: 'runs', runs: 1 });
+      ? { type: 'itemQty', itemId, qty: threshold }
+      : provider.grantsFacts?.[0]
+        ? { type: 'fact', fact: provider.grantsFacts[0] }
+        : Object.keys(provider.producesItems ?? {}).length
+          ? { type: 'itemQty', itemId, qty: threshold }
+          : { type: 'runs', runs: 1 };
     const step = addStep(provider, runs, 'acquire', stop, allDeps, provider.kind === 'chart' ? { mapId: provider.mapId } : {});
     if (provider.kind === 'action' || provider.kind === 'chart') acquiredBy.set(itemId, { provider, step });
     if (provider.rare?.some((entry) => entry.item === itemId)) notes.push(`Expected-value rare source: ${provider.id}`);

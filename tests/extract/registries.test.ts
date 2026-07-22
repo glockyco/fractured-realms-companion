@@ -66,6 +66,7 @@ function fixture(): string {
     `const ACHIEVEMENTS=${achievements};`,
     'const DIGS=[{id:"millhaven_ruins",name:"Ruins",levelReq:1}];',
     'const OFFLINE={1:10,2:30,3:100};',
+    'const Nz=["wild_berries","venison","woodland_seed","bog_mushroom","plains_seed","ember_spore","ancient_spore"],eM=2,kU=new Set(["vial","bow_string",...Nz]);',
     'const STRINGS={"name.ancient_spore":"Ancient Spore","itemdesc.ancient_spore":"A spore."};',
     'function xpGenerator(){const a=new Array(100).fill(0);for(let i=2;i<100;i++)a[i]=i*10+300*Math.pow(2,i/7);return a;}',
     'const TITLES={woodcutting:"Master of the Grove",mining:"Lord of the Deep",fishing:"Leviathan Tamer"};',
@@ -97,6 +98,9 @@ test('extracts every raw registry from a synthetic bundle', () => {
   assert.equal(result.prestigeTitles?.woodcutting, 'Master of the Grove');
   assert.equal(result.xp.length, 100);
   assert.equal(result.xp[2] > result.xp[1], true);
+  assert.deepEqual(result.shopItems.slice(0, 2), ['vial', 'bow_string']);
+  assert.equal(result.shopItems.includes('wild_berries'), true);
+  assert.equal(result.shopPriceMultiplier, 2);
 });
 
 test('fails closed for missing, duplicate, and malformed registry anchors', () => {

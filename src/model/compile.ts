@@ -36,6 +36,7 @@ export interface GameModel {
   offlineGold: Record<string, number>;
   prestigeTitles: Record<string, string> | null;
   stringsEn: Record<string, string>;
+  shop: Record<string, number>;
 }
 
 function record(value: unknown): JsonRecord {
@@ -78,6 +79,15 @@ export function compileModel(raw: RawGameData, buildId: string): GameModel {
     ...raw.mapsDeep.map((map) => ({ ...record(map), group: 'deep' as const })),
   ];
 
+  // Shop-buyable materials are priced by the game's own source-graph rule
+  // (item value times the shop multiplier), matching how it lists shop sources.
+  const shop: Record<string, number> = {};
+  for (const id of raw.shopItems ?? []) {
+    const item = record(raw.items[id]);
+    const value = typeof item.value === 'number' && Number.isFinite(item.value) ? item.value : 0;
+    shop[id] = value * (raw.shopPriceMultiplier ?? 0);
+  }
+
   return {
     schema_version: 1,
     build_id: buildId,
@@ -105,6 +115,7 @@ export function compileModel(raw: RawGameData, buildId: string): GameModel {
     offlineGold: raw.offlineGold,
     prestigeTitles: raw.prestigeTitles,
     stringsEn: raw.stringsEn,
+    shop,
   };
 }
 

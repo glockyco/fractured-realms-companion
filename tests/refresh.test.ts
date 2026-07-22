@@ -25,6 +25,7 @@ const DATA = {
   skills: [{ id: 'archaeology', name: 'Archaeology', category: 'gathering' }],
   xp: [0, 0, 1],
   tools: {}, mapsRegular: [], mapsDeep: [], chartSupplyTiers: {}, agilityCourses: [], bags: [], machines: [], boons: [], restorations: [], recipeMeals: [], seals: [], patterns: {}, grandReward: {}, buildings: [], buildingXp: {}, zones: [], digsites: [], achievements: [], offlineGold: {}, prestigeTitles: null,
+  shopItems: [], shopPriceMultiplier: 2,
   stringsEn: { 'name.fossil_tracks': 'Fossil Tracks', 'itemdesc.ancient_spore': 'Ancient Spore' },
 } as any;
 

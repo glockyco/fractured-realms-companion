@@ -29,6 +29,8 @@ export interface RawGameData {
   offlineGold: Record<string, number>;
   prestigeTitles: Record<string, string> | null;
   stringsEn: Record<string, string>;
+  shopItems: string[];
+  shopPriceMultiplier: number;
 }
 
 const ACTION_SKILLS = [
@@ -244,6 +246,22 @@ function extractPrestigeTitles(source: string): Record<string, string> | null {
   return candidates.every((candidate) => JSON.stringify(candidate) === canonical) ? candidates[0] : null;
 }
 
+function extractShop(source: string): { items: string[]; multiplier: number } {
+  // Raw ingredient ids sold in the shop (Nz), spread into the buyable set.
+  const raw = array(extract(source, '["wild_berries","venison","woodland_seed"', 'shop'), 'shop').map((entry) => string(entry, 'shop'));
+  // Explicit non-ingredient buyables: kU = new Set(["vial","bow_string",...Nz]).
+  const setStart = anchor(source, 'new Set(["vial","bow_string"', 'shop');
+  const setEnd = source.indexOf(')', setStart);
+  if (setEnd < 0) fail('shop', 'buyable set is not terminated');
+  const explicit = [...source.slice(setStart, setEnd).matchAll(/"([^"]+)"/g)].map((match) => match[1]);
+  if (explicit.length === 0) fail('shop', 'buyable set has no explicit ids');
+  // Shop price multiplier: the game computes cost as item value * eM.
+  const multiplierMatch = /\beM\s*=\s*(\d+)\b/.exec(source);
+  if (!multiplierMatch) fail('shop', 'price multiplier not found');
+  const multiplier = number(Number(multiplierMatch[1]), 'shop');
+  return { items: [...new Set([...explicit, ...raw])], multiplier };
+}
+
 export function extractRegistries(source: string, archiveFiles: readonly string[]): RawGameData {
   const itemAt = anchor(source, 'witherwood_log:{label:', 'items');
   const rawItems = object(evalLiteral(sliceEnclosing(source, itemAt, '{'), 'items'), 'items');
@@ -346,10 +364,12 @@ export function extractRegistries(source: string, archiveFiles: readonly string[
   for (const [key, value] of Object.entries(rawStrings)) { stringsEn[key] = string(value, 'stringsEn'); if (key.startsWith('name.')) names++; if (key.startsWith('itemdesc.')) descriptions++; }
   if (!names || !descriptions) fail('stringsEn', 'catalog lacks name.* or itemdesc.* keys');
 
+  const shop = extractShop(source);
   return {
     items, actions, actionGates: rawGates, skills, xp: extractXp(source), tools,
     mapsRegular, mapsDeep, chartSupplyTiers, agilityCourses, bags, machines, boons,
     restorations, recipeMeals, seals, patterns, grandReward, buildings, buildingXp,
     zones, digsites, achievements, offlineGold, prestigeTitles: extractPrestigeTitles(source), stringsEn,
+    shopItems: shop.items, shopPriceMultiplier: shop.multiplier,
   };
 }

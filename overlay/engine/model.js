@@ -217,6 +217,15 @@ export function indexModel(modelJson = {}) {
       grantsFacts: [`map:${map.id}`], xpGain: { cartography: n(map.xp) }, map,
     });
   }
+  for (const [itemId, cost] of Object.entries(asObject(model.shop))) {
+    if (!index.itemsById.has(itemId)) continue;
+    const label = model.stringsEn?.[`name.${itemId}`] || index.itemsById.get(itemId)?.label || itemId;
+    addProvider(index, {
+      id: `buy:item:${itemId}`, kind: 'manual', automation: 'manual', label: `Buy ${label}`,
+      requires: [], consumesItems: {}, consumesGold: n(cost), producesItems: { [itemId]: 1 },
+      grantsFacts: [], xpGain: {}, purchase: { type: 'shop', id: itemId },
+    });
+  }
   for (const [itemId, list] of index.producersByItem) list.sort((a, b) => String(a.id).localeCompare(String(b.id)));
   for (const [fact, list] of index.providersByFact) list.sort((a, b) => String(a.id).localeCompare(String(b.id)));
   index.providers.sort((a, b) => String(a.id).localeCompare(String(b.id)));
