@@ -1,11 +1,12 @@
 import { strict as assert } from 'node:assert';
-import { mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { main, isEntryPoint } from '../src/cli.ts';
 import { restoreCompanion } from '../src/restore.ts';
+import { openDatabase } from '../src/lib/sqlite.ts';
 
 function io() {
   const out: string[] = [];
@@ -13,10 +14,72 @@ function io() {
   return { out, err, stdout: (text: string) => out.push(text), stderr: (text: string) => err.push(text) };
 }
 
+function modelPack(state: string): void {
+  const pack = join(state, 'pack');
+  mkdirSync(join(pack, 'data'), { recursive: true });
+  writeFileSync(join(pack, 'pack.json'), JSON.stringify({ schema_version: 2, build_id: 'build-model', generated_at: '2026-01-01T00:00:00.000Z' }));
+  writeFileSync(join(pack, 'data', 'model.json'), JSON.stringify({
+    schema_version: 1,
+    build_id: 'build-model',
+    actions: [{ id: 'chop', skillId: 'woodcutting' }],
+    items: [{ id: 'log' }],
+    skills: [{ id: 'woodcutting' }],
+    maps: [{ id: 'millhaven' }],
+    zones: [{ id: 'thornwood' }],
+    stringsEn: { 'name.log': 'Log' },
+  }));
+}
+
 const install = {
   steamRoot: '/steam', steamExe: '/steam/Steam.exe', manifestPath: '/steam/appmanifest.acf',
   installDir: '/steam/common/Fractured Realms', platform: 'linux' as const,
 };
+
+test('model info prints metadata, registry counts, and artifact paths', async () => {
+  const state = mkdtempSync(join(tmpdir(), 'fractured-cli-model-'));
+  modelPack(state);
+  const output = io();
+  assert.equal(await main(['model', 'info'], { ...output, stateDirectory: state }), 0);
+  const text = output.out.join('');
+  assert.match(text, /build_id: build-model/);
+  assert.match(text, /schema_version: 1/);
+  assert.match(text, /actions: 1/);
+  assert.match(text, /items: 1/);
+  assert.match(text, /skills: 1/);
+  assert.match(text, /maps: 1/);
+  assert.match(text, /zones: 1/);
+  assert.match(text, /model\.json: .*exists: true/);
+  assert.match(text, /model\.db: .*exists: false/);
+});
+
+test('model info without a published model returns a refresh hint', async () => {
+  const state = mkdtempSync(join(tmpdir(), 'fractured-cli-model-'));
+  const output = io();
+  assert.equal(await main(['model', 'info'], { ...output, stateDirectory: state }), 1);
+  assert.match(output.err.join(''), /model unavailable.*run refresh/);
+});
+
+test('model sql prints SELECT rows as JSON lines', async () => {
+  const state = mkdtempSync(join(tmpdir(), 'fractured-cli-model-'));
+  const database = openDatabase(join(state, 'model.db'));
+  assert.ok(database);
+  database.exec('CREATE TABLE items (id TEXT, value INTEGER)');
+  database.run('INSERT INTO items (id, value) VALUES (?, ?)', 'log', 7);
+  database.close();
+  const output = io();
+  assert.equal(await main(['model', 'sql', 'SELECT id, value FROM items'], { ...output, stateDirectory: state }), 0);
+  assert.deepEqual(output.out.join('').trim().split('\n').map((line) => JSON.parse(line)), [{ id: 'log', value: 7 }]);
+});
+
+test('model sql rejects writes and reports missing databases', async () => {
+  const state = mkdtempSync(join(tmpdir(), 'fractured-cli-model-'));
+  const rejectOutput = io();
+  assert.equal(await main(['model', 'sql', 'INSERT INTO items VALUES (1)'], { ...rejectOutput, stateDirectory: state }), 1);
+  assert.equal(rejectOutput.err.join(''), 'model sql accepts SELECT statements only\n');
+  const missingOutput = io();
+  assert.equal(await main(['model', 'sql', 'SELECT 1'], { ...missingOutput, stateDirectory: state }), 1);
+  assert.equal(missingOutput.err.join(''), 'model.db unavailable (run refresh; requires node:sqlite or bun)\n');
+});
 
 test('dispatches every command and forwards global/command options', async () => {
   const seen: Record<string, unknown> = {};
