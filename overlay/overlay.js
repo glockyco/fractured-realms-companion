@@ -1,15 +1,8 @@
-import { actionBlocker, createPlan, sourceSkillForItem, xpForLevel } from './planner.js';
+import { indexModel, liveBlocker, factSatisfied } from './engine/model.js';
+import { resolveQueue, nextUnlocks } from './engine/queue.js';
 import { createDirectExecutor } from './executor.js';
 
-export const DATA_FILES = Object.freeze([
-  ['items', 'items.json'],
-  ['actions', 'actions.json'],
-  ['skills', 'skills.json'],
-  ['xp', 'xp.json'],
-  ['buildings', 'buildings.json'],
-  ['digsites', 'digsites.json'],
-  ['strings', 'strings-en.json'],
-]);
+export const DATA_FILES = Object.freeze([['model', 'model.json']]);
 
 const HOST_ID = 'fractured-realms-companion';
 const POSITION_STORAGE_KEY = 'fractured-realms-companion.positions.v1';
@@ -541,124 +534,6 @@ export function formatFinishTime(remainingMs, now = Date.now()) {
   });
 }
 
-export function estimatePlanDuration(plan) {
-  return (plan?.steps || []).reduce((total, step) => {
-    const interval = Math.max(0, Number(step.interval) || 0);
-    const count = Math.max(0, Number(step.count) || 0);
-    return total + interval * count;
-  }, 0);
-}
-
-export function projectSteps(datasets, snapshot, steps) {
-  const projected = {
-    ...(snapshot || {}),
-    inventory: { ...(snapshot?.inventory || {}) },
-  };
-  const actionById = new Map();
-  for (const [skillId, actions] of Object.entries(datasets.actions || {})) {
-    for (const action of actions || []) actionById.set(`${skillId}:${action.id}`, action);
-  }
-  for (const step of steps || []) {
-    const action = actionById.get(`${step.skillId}:${step.actionId}`);
-    const count = Math.max(0, Number(step.count) || 0);
-    if (action && count) {
-      for (const [itemId, qty] of Object.entries(action.inputs || {})) {
-        projected.inventory[itemId] = Math.max(0, (Number(projected.inventory[itemId]) || 0) - (Number(qty) || 0) * count);
-      }
-      for (const [itemId, qty] of Object.entries(action.outputs || {})) {
-        projected.inventory[itemId] = Math.max(0, (Number(projected.inventory[itemId]) || 0) + (Number(qty) || 0) * count);
-      }
-    }
-    if (step.rare && step.produceItemId) {
-      projected.inventory[step.produceItemId] = Math.max(0, (Number(projected.inventory[step.produceItemId]) || 0) + Math.max(0, Number(step.produceQty) || 0));
-    }
-  }
-  return projected;
-}
-
-export function projectPlanState(datasets, snapshot, plans) {
-  return projectSteps(datasets, snapshot, (plans || []).filter((plan) => plan?.ok).flatMap((plan) => plan.steps || []));
-}
-
-function resolveGoalPlan(datasets, snapshot, goal) {
-  const target = goal?.target;
-  if (!target || (target.type !== 'gain' && target.type !== 'level' && target.type !== 'time')) {
-    return createPlan(datasets, snapshot, { itemId: goal.itemId, qty: goal.qty });
-  }
-  const have = Math.max(0, Number(snapshot?.inventory?.[goal.itemId]) || 0);
-  if (target.type === 'gain') {
-    return createPlan(datasets, snapshot, { itemId: goal.itemId, qty: have + target.gain });
-  }
-
-  const probe = createPlan(datasets, snapshot, { itemId: goal.itemId, qty: have + 1 });
-  if (!probe.ok) {
-    probe.goalSkillId = sourceSkillForItem(datasets, goal.itemId);
-    return probe;
-  }
-  if (!probe.steps.length) {
-    return {
-      ok: false,
-      steps: [],
-      satisfied: probe.satisfied,
-      reason: 'no-source',
-      message: 'No producing action found.',
-    };
-  }
-  const final = probe.steps.at(-1);
-  const action = datasets.actions?.[final.skillId]?.find((entry) => entry.id === final.actionId);
-  const outPerRun = Math.max(1, Number(action?.outputs?.[goal.itemId]) || 0);
-  let runs;
-  if (target.type === 'level') {
-    const xpGoal = xpForLevel(datasets.xp, target.level);
-    const xpNow = Number(snapshot?.skillXp?.[final.skillId]) || 0;
-    if (xpNow >= xpGoal) return { ok: true, steps: [], satisfied: [], message: 'Level already reached.' };
-    if (Number(action?.xp) <= 0 || !Number.isFinite(Number(action?.xp))) {
-      return {
-        ok: false,
-        steps: [],
-        satisfied: [],
-        reason: 'no-xp',
-        message: `${final.actionName} grants no XP.`,
-      };
-    }
-    runs = Math.ceil((xpGoal - xpNow) / Number(action.xp));
-  } else {
-    runs = Math.ceil((target.minutes * 60000) / Math.max(1, Number(action?.interval) || 0));
-  }
-
-  const perRunYield = final.rare ? Math.max(1e-9, final.produceQty / Math.max(1, final.count)) : outPerRun;
-  const requestQty = have + (final.rare ? Math.max(1, Math.ceil(runs * perRunYield)) : runs * outPerRun);
-  const plan = createPlan(datasets, snapshot, { itemId: goal.itemId, qty: requestQty });
-  if (!plan.ok) return plan;
-  const last = plan.steps.at(-1);
-  if (last) {
-    if (target.type === 'level') {
-      last.stopWhen = {
-        type: 'xp',
-        skillId: final.skillId,
-        xpAtLeast: xpForLevel(datasets.xp, target.level),
-        xpPerRun: Number(action.xp) || 0,
-      };
-    } else {
-      last.stopWhen = { type: 'time', ms: target.minutes * 60000 };
-    }
-  }
-  plan.goalSkillId = final.skillId;
-  return plan;
-}
-
-export function resolvePlanQueue(datasets, snapshot, goals) {
-  const queue = [];
-  let projected = projectPlanState(datasets, snapshot, []);
-  for (const goal of goals || []) {
-    const plan = resolveGoalPlan(datasets, projected, goal);
-    const entry = { ...goal, plan, estimateMs: estimatePlanDuration(plan) };
-    queue.push(entry);
-    projected = projectPlanState(datasets, projected, [plan]);
-  }
-  return queue;
-}
-
 export function clampFloatingPosition(position, size, viewport, gutter = 8, minVisible = 56) {
   const width = Math.max(0, Number(size?.width) || 0);
   const height = Math.max(0, Number(size?.height) || 0);
@@ -709,66 +584,6 @@ function quantityEntries(value, items) {
     .sort(([left], [right]) => labelFor(items, left).localeCompare(labelFor(items, right)))
     .map(([id, qty]) => `${escapeHtml(labelFor(items, id))} <span class="data">×${escapeHtml(qty)}</span>`)
     .join('<br>') || '—';
-}
-
-export function buildIndexes(datasets) {
-  const sourcesOf = Object.create(null);
-  const usesOf = Object.create(null);
-  const add = (index, itemId, entry) => {
-    (index[itemId] ||= []).push(entry);
-  };
-
-  for (const [skillId, actions] of Object.entries(datasets.actions || {})) {
-    for (const action of actions || []) {
-      for (const [itemId, qty] of Object.entries(action.outputs || {})) {
-        add(sourcesOf, itemId, {
-          kind: 'action', rare: false, skillId, actionId: action.id,
-          actionName: action.name || action.id, levelReq: action.levelReq,
-          interval: action.interval, spot: action.spot, qty,
-        });
-      }
-      for (const rare of action.rareOutputs || []) {
-        if (!rare?.item) continue;
-        add(sourcesOf, rare.item, {
-          kind: 'action', rare: true, skillId, actionId: action.id,
-          actionName: action.name || action.id, levelReq: action.levelReq,
-          interval: action.interval, spot: action.spot, qty: rare.qty,
-          chance: rare.chance,
-        });
-      }
-      for (const [itemId, qty] of Object.entries(action.inputs || {})) {
-        add(usesOf, itemId, {
-          kind: 'action', skillId, actionId: action.id,
-          actionName: action.name || action.id, qty,
-        });
-      }
-    }
-  }
-
-  for (const building of datasets.buildings || []) {
-    for (const upgrade of building.upgrades || []) {
-      for (const [itemId, qty] of Object.entries(upgrade.cost || {})) {
-        add(usesOf, itemId, {
-          kind: 'building', buildingId: building.id,
-          buildingName: building.name || building.label || building.id,
-          upgradeLevel: upgrade.level, upgradeLabel: upgrade.label, qty,
-        });
-      }
-    }
-  }
-
-  const sourceSort = (left, right) =>
-    Number(left.rare) - Number(right.rare)
-    || String(left.skillId).localeCompare(String(right.skillId))
-    || Number(left.levelReq || 0) - Number(right.levelReq || 0)
-    || Number(left.interval || 0) - Number(right.interval || 0)
-    || String(left.actionName).localeCompare(String(right.actionName));
-  const useSort = (left, right) =>
-    String(left.kind).localeCompare(String(right.kind))
-    || String(left.actionName || left.buildingName).localeCompare(String(right.actionName || right.buildingName));
-  for (const values of Object.values(sourcesOf)) values.sort(sourceSort);
-  for (const values of Object.values(usesOf)) values.sort(useSort);
-  return { sourcesOf, usesOf };
 }
 
 export function nextTabIndex(currentIndex, key, count = TAB_IDS.length) {
@@ -1107,1057 +922,213 @@ function blockedShort(blocked) {
   return 'blocked';
 }
 
-function createApplication(shell, datasets, api) {
+function actionName(action) {
+  return action?.name || humanizeId(action?.id);
+}
+
+function factLabel(fact) {
+  const value = String(fact || '');
+  const [kind, ...parts] = value.split(':');
+  return kind === 'level' ? `${humanizeId(parts[0])} level ${parts[1]}` : `${humanizeId(kind)}: ${humanizeId(parts.join(':'))}`;
+}
+
+export function buildIndexes(model) {
+  const sourcesOf = Object.create(null);
+  const usesOf = Object.create(null);
+  const add = (index, itemId, entry) => {
+    if (!itemId) return;
+    (index[itemId] ||= []).push(entry);
+  };
+  for (const action of model?.actions || []) {
+    const base = {
+      kind: action.skillId === 'bounty' ? 'bounty' : 'action',
+      rare: false,
+      skillId: action.skillId,
+      actionId: action.id,
+      actionName: actionName(action),
+      levelReq: action.levelReq,
+      interval: action.interval,
+      spot: action.spot,
+    };
+    for (const [itemId, qty] of Object.entries(action.outputs || {})) {
+      if (itemId === 'gold') continue;
+      add(sourcesOf, itemId, { ...base, qty });
+    }
+    for (const rare of action.rareOutputs || []) {
+      if (rare?.item) add(sourcesOf, rare.item, { ...base, rare: true, qty: rare.qty, chance: rare.chance });
+    }
+    for (const [itemId, qty] of Object.entries(action.inputs || {})) {
+      add(usesOf, itemId, { kind: 'action', skillId: action.skillId, actionId: action.id, actionName: actionName(action), qty });
+    }
+  }
+  for (const zone of model?.zones || []) for (const enemy of zone?.enemies || []) for (const drop of enemy?.drops || []) {
+    if (!drop?.id || drop.id === 'gold') continue;
+    add(sourcesOf, drop.id, { kind: 'enemy-drop', rare: true, enemyName: enemy.name || enemy.id, zoneName: zone.name || zone.id, qty: drop.qty, chance: drop.chance });
+  }
+  for (const building of model?.buildings || []) for (const upgrade of building?.upgrades || []) {
+    for (const [itemId, qty] of Object.entries(upgrade.cost || {})) if (itemId !== 'gold') {
+      add(usesOf, itemId, { kind: 'building', buildingId: building.id, buildingName: building.name || building.id, upgradeLevel: upgrade.level, upgradeLabel: upgrade.label, qty });
+    }
+  }
+  const sourceSort = (a, b) => Number(a.rare) - Number(b.rare)
+    || String(a.kind).localeCompare(String(b.kind))
+    || String(a.skillId || a.zoneName || '').localeCompare(String(b.skillId || b.zoneName || ''))
+    || Number(a.levelReq || 0) - Number(b.levelReq || 0)
+    || String(a.actionName || a.enemyName || '').localeCompare(String(b.actionName || b.enemyName || ''));
+  const useSort = (a, b) => String(a.kind).localeCompare(String(b.kind))
+    || String(a.actionName || a.buildingName || '').localeCompare(String(b.actionName || b.buildingName || ''));
+  for (const values of Object.values(sourcesOf)) values.sort(sourceSort);
+  for (const values of Object.values(usesOf)) values.sort(useSort);
+  return { sourcesOf, usesOf };
+}
+
+function createApplication(shell, modelJson, api) {
   const documentRef = shell.panel.ownerDocument;
-  const indexes = buildIndexes(datasets);
-  const items = datasets.items || {};
-  const sortedItems = Object.entries(items).sort(([, left], [, right]) =>
-    String(left.label || '').localeCompare(String(right.label || '')),
-  );
-  const skillNames = Object.fromEntries((datasets.skills || []).map((skill) => [skill.id, skill.name || skill.label || skill.id]));
+  const model = indexModel(modelJson || {});
+  const datasets = model;
+  const indexes = buildIndexes(model);
+  const items = model.items || {};
+  const strings = model.stringsEn || {};
+  const skillNames = Object.fromEntries((model.skills || []).map((skill) => [skill.id, skill.name || skill.id]));
+  const skills = (model.skills || []).filter((skill) => model._index.actionsBySkill.has(skill.id));
+  const sortedItems = Object.entries(items).sort(([, a], [, b]) => String(a.label || '').localeCompare(String(b.label || '')));
+  const actionFor = (skillId, actionId) => (model._index.actionsBySkill.get(skillId) || []).find((action) => action.id === actionId);
   const state = {
     selectedItemId: null,
-    planItemId: '',
-    recentPlanItemIds: [],
-    query: '',
-    currentPlan: null,
-    planNotice: null,
+    selectedPlanItemId: null,
     queueGoals: [],
-    planQueue: [],
-    executionSteps: [],
+    resolvedQueue: { steps: [], targets: [] },
+    executorStatus: { phase: 'idle', message: 'Add a target to begin.', stepStatuses: {}, runningStepId: null },
     nextPlanId: 1,
-    executorStatus: { phase: 'idle', currentStep: null, message: 'Add one or more plans to the queue.' },
   };
-
-  const storage = shell.panel.ownerDocument.defaultView?.localStorage;
-  const persistQueue = () => {
-    try {
-      storage?.setItem(QUEUE_STORAGE_KEY, JSON.stringify({ goals: state.queueGoals, nextPlanId: state.nextPlanId }));
-    } catch { /* persistence is optional */ }
+  const storage = documentRef.defaultView?.localStorage;
+  const liveState = () => { try { return api.getState() || {}; } catch { return {}; } };
+  const persistQueue = () => { try { storage?.setItem(QUEUE_STORAGE_KEY, JSON.stringify({ goals: state.queueGoals, nextPlanId: state.nextPlanId })); } catch { /* optional */ } };
+  const refreshQueue = () => {
+    state.resolvedQueue = resolveQueue(model, liveState(), state.queueGoals.map((entry) => entry.target));
+    return state.resolvedQueue;
   };
-  const restoreQueue = () => {
-    try {
-      const parsed = JSON.parse(storage?.getItem(QUEUE_STORAGE_KEY) || 'null');
-      if (!parsed || !Array.isArray(parsed.goals)) return false;
-      const goals = parsed.goals;
-      if (!goals.every((goal) => goal && typeof goal === 'object' && typeof goal.id === 'string'
-        && Object.prototype.hasOwnProperty.call(items, goal.itemId)
-        && (!goal.target
-          ? Number.isInteger(goal.qty) && goal.qty >= 1
-          : goal.target.type === 'gain'
-            ? Number.isInteger(goal.target.gain) && goal.target.gain >= 1
-            : goal.target.type === 'level'
-              ? Number.isInteger(goal.target.level) && goal.target.level >= 2 && goal.target.level <= 99
-              : goal.target.type === 'time'
-                ? Number.isInteger(goal.target.minutes) && goal.target.minutes >= 1
-                : false))) return false;
-      const maxGoalId = goals.reduce((max, goal) => {
-        const match = /^plan-(\d+)$/u.exec(goal.id);
-        return Math.max(max, match ? Number(match[1]) || 0 : 0);
-      }, 0);
-      state.queueGoals = goals.map((goal) => ({
-        id: goal.id,
-        itemId: goal.itemId,
-        qty: goal.qty,
-        ...(goal.target ? { target: goal.target } : {}),
-      }));
-      state.nextPlanId = Math.max(Number(parsed.nextPlanId) || 0, maxGoalId + 1);
-      rebuildQueue();
-      state.executorStatus.message = `Restored ${goals.length} queued plan(s).`;
-      return true;
-    } catch { return false; }
-  };
-
-  const compactPhase = shell.compactStrip?.querySelector?.('#fr-compact-phase');
-  const compactMessage = shell.compactStrip?.querySelector?.('#fr-compact-message');
-  const compactProgress = shell.compactStrip?.querySelector?.('#fr-compact-progress');
-  const compactStart = shell.compactStrip?.querySelector?.('#fr-compact-start');
-  const compactResume = shell.compactStrip?.querySelector?.('#fr-compact-resume');
-  const compactStop = shell.compactStrip?.querySelector?.('#fr-compact-stop');
 
   shell.loading.hidden = true;
   shell.launcher.dataset.state = 'ready';
-  let lastStructuralKey = '';
-  let lastBoundaryPlanIndex = -1;
-  let refillGuard = { planId: null, have: -1, stale: 0 };
-  const stalledPlanIds = new Set();
-  const executor = createDirectExecutor(api, {
-    onUpdate(status) {
-      state.executorStatus = status;
-      if (status.phase === 'running') {
-        // At each plan boundary, re-resolve still-blocked pending plans against
-        // live + projected state so a formerly blocked plan can splice in once
-        // its blocker (level, tool, recipe) clears mid-run.
-        const planIndexNow = queueView(status).currentPlanIndex;
-        if (planIndexNow > lastBoundaryPlanIndex) {
-          lastBoundaryPlanIndex = planIndexNow;
-          if (state.planQueue.some((entry, i) => i > planIndexNow && !entry.plan?.ok)) rebuildPending();
-        }
-      } else if (status.phase === 'idle' || status.phase === 'complete' || status.phase === 'error') {
-        lastBoundaryPlanIndex = -1;
-        refillGuard = { planId: null, have: -1, stale: 0 };
-      }
-      if (status.phase === 'complete') {
-        const skipped = state.planQueue.filter((entry) => !entry.plan?.ok);
-        if (!skipped.length) {
-          try { storage?.setItem(QUEUE_STORAGE_KEY, JSON.stringify({ goals: [], nextPlanId: state.nextPlanId })); } catch { /* persistence is optional */ }
-        } else {
-          const remainingGoals = state.queueGoals.filter((goal) => skipped.some((entry) => entry.id === goal.id));
-          const resolved = resolvePlanQueue(datasets, api.getState(), remainingGoals);
-          for (const candidate of resolved) {
-            if (stalledPlanIds.has(candidate.id) && candidate.plan?.ok) {
-              candidate.plan = { ...candidate.plan, ok: false, reason: 'rare-stalled', blocked: { reason: 'rare-stalled', itemId: candidate.itemId }, message: 'No rare drops after 8 restocks.' };
-            }
-          }
-          if (resolved.some((entry) => entry.plan?.ok && entry.plan.steps?.length)) {
-            // A blocker cleared while the queue ran: resume the newly runnable
-            // plans. The microtask avoids re-entering onUpdate synchronously.
-            queueMicrotask(() => {
-              state.queueGoals = remainingGoals;
-              state.planQueue = resolved;
-              state.executionSteps = flattenQueue();
-              persistQueue();
-              executor.run(state.executionSteps);
-            });
-          } else {
-            state.queueGoals = remainingGoals.filter((goal, i) => !resolved[i]?.plan?.ok);
-            persistQueue();
-            state.executorStatus = { ...status, message: `Queue done · ${skipped.length} skipped — still blocked` };
-          }
-        }
-      } else if (status.phase === 'error' || status.phase === 'idle') {
-        stalledPlanIds.clear();
-        persistQueue();
-      } else if (status.phase === 'paused' && status.pausedReason === 'inputs') {
-        queueMicrotask(() => refillRareInputs(status));
-      }
-      const key = `${status.phase}:${status.currentStep}:${state.planQueue.length}`;
-      if (key !== lastStructuralKey) { lastStructuralKey = key; renderPlan(); }
-      else renderExecutor();
-    },
-  });
 
   const itemsPanel = shell.panels.items;
-  itemsPanel.innerHTML = `
-    <div class="items-layout">
-      <section class="item-browser" aria-label="Item browser">
-        <div class="toolbar"><div class="field grow"><label for="fr-item-search">Search items</label><div class="search-control">${ICONS.search}<input id="fr-item-search" type="search" autocomplete="off" placeholder="Item name"></div></div></div>
-        <p class="result-count" id="fr-result-count" aria-live="polite"></p>
-        <ul class="item-list" id="fr-item-list"></ul>
-      </section>
-      <article class="detail" id="fr-item-detail" aria-live="polite"></article>
-    </div>`;
-  const search = itemsPanel.querySelector('#fr-item-search');
+  itemsPanel.innerHTML = `<div class="items-layout"><section class="item-browser" aria-label="Item browser"><div class="toolbar"><div class="field grow"><label for="fr-item-search">Search items</label><div class="search-control">${ICONS.search}<input id="fr-item-search" type="search" autocomplete="off" placeholder="Item name"></div></div></div><p class="result-count" id="fr-result-count" aria-live="polite"></p><ul class="item-list" id="fr-item-list"></ul></section><article class="detail" id="fr-item-detail" aria-live="polite"></article></div>`;
+  const itemSearch = itemsPanel.querySelector('#fr-item-search');
   const resultCount = itemsPanel.querySelector('#fr-result-count');
   const itemList = itemsPanel.querySelector('#fr-item-list');
   const detail = itemsPanel.querySelector('#fr-item-detail');
-
-  function filteredItems() {
-    const needle = state.query.trim().toLocaleLowerCase();
-    if (!needle) return sortedItems;
-    return sortedItems.filter(([id, item]) => `${item.label || ''}\n${id}`.toLocaleLowerCase().includes(needle));
-  }
-
-  function renderItemList() {
-    const matches = filteredItems();
-    const limit = state.query ? SEARCH_LIMIT : LIST_LIMIT;
-    const visible = matches.slice(0, limit);
-    resultCount.textContent = matches.length > limit
-      ? `${matches.length.toLocaleString()} results · showing first ${limit}`
-      : `${matches.length.toLocaleString()} ${matches.length === 1 ? 'result' : 'results'}`;
-    itemList.innerHTML = visible.length ? visible.map(([id, item]) => `
-      <li><button class="item-row" type="button" data-item-id="${escapeHtml(id)}" aria-current="${id === state.selectedItemId}">
-        <span>${escapeHtml(item.label || humanizeId(id))}</span>
-      </button></li>`).join('') : '<li class="empty">No items match. Try a shorter name.</li>';
-  }
-
-  function renderItemDetail() {
-    const id = state.selectedItemId;
-    const item = id ? items[id] : null;
-    if (!item) {
-      detail.innerHTML = '<div class="detail-empty">Select an item to inspect its sources, uses, and game data.</div>';
-      return;
-    }
-    const itemSources = indexes.sourcesOf[id] || [];
-    const itemUses = indexes.usesOf[id] || [];
-    const description = item.desc || datasets.strings?.[`itemdesc.${id}`] || 'No description is available in this build.';
-    const sourceRows = itemSources.map((source) => {
-      const skill = skillNames[source.skillId] || source.skillId;
-      const spot = source.spot ? (datasets.strings?.[`name.${source.spot}`] || source.spot) : null;
-      const badge = source.rare
-        ? `<span class="badge warning">Rare ${escapeHtml(formatChance(source.chance))}</span>`
-        : '<span class="badge signal">Guaranteed</span>';
-      return `<li class="record-row"><div class="record-top"><strong>${escapeHtml(source.actionName)}</strong><div class="badges">${badge}<span class="badge">×${escapeHtml(source.qty ?? 1)}</span></div></div><p>${escapeHtml(skill)} level <span class="data">${escapeHtml(source.levelReq ?? 1)}</span> · <span class="data">${escapeHtml(formatInterval(source.interval))}</span>${spot ? ` · ${escapeHtml(spot)}` : ''}</p></li>`;
-    }).join('') || '<li class="record-row"><p>No action source is recorded for this item.</p></li>';
-    const useRows = itemUses.map((use) => use.kind === 'building'
+  const filteredItems = () => {
+    const needle = String(itemSearch?.value || '').trim().toLocaleLowerCase();
+    return (needle ? sortedItems.filter(([id, item]) => `${item.label || ''}\n${id}`.toLocaleLowerCase().includes(needle)) : sortedItems);
+  };
+  const renderItemList = () => {
+    const matches = filteredItems(); const limit = itemSearch?.value ? SEARCH_LIMIT : LIST_LIMIT;
+    resultCount.textContent = matches.length > limit ? `${matches.length} results · showing first ${limit}` : `${matches.length} ${matches.length === 1 ? 'result' : 'results'}`;
+    itemList.innerHTML = matches.slice(0, limit).map(([id, item]) => `<li><button class="item-row" type="button" data-item-id="${escapeHtml(id)}" aria-current="${id === state.selectedItemId}"><span>${escapeHtml(item.label || humanizeId(id))}</span></button></li>`).join('') || '<li class="empty">No items match.</li>';
+  };
+  const renderItemDetail = () => {
+    const id = state.selectedItemId; const item = id ? items[id] : null;
+    if (!item) { detail.innerHTML = '<div class="detail-empty">Select an item to inspect its sources and uses.</div>'; return; }
+    const sources = indexes.sourcesOf[id] || []; const uses = indexes.usesOf[id] || [];
+    const sourceRows = sources.map((source) => {
+      const origin = source.kind === 'enemy-drop' ? `${source.enemyName} · ${source.zoneName}` : source.actionName;
+      const context = source.kind === 'enemy-drop' ? 'Manual enemy drop' : `${skillNames[source.skillId] || source.skillId} level ${source.levelReq ?? 1} · ${formatInterval(source.interval)}`;
+      return `<li class="record-row"><div class="record-top"><strong>${escapeHtml(origin)}</strong><div class="badges"><span class="badge ${source.rare ? 'warning' : 'signal'}">${source.rare ? `Rare ${formatChance(source.chance)}` : 'Guaranteed'}</span><span class="badge">×${escapeHtml(source.qty ?? 1)}</span></div></div><p>${escapeHtml(context)}</p></li>`;
+    }).join('') || '<li class="record-row"><p>No source is recorded for this item.</p></li>';
+    const useRows = uses.map((use) => use.kind === 'building'
       ? `<li class="record-row"><div class="record-top"><strong>${escapeHtml(use.buildingName)}</strong><span class="badge">Cost ×${escapeHtml(use.qty)}</span></div><p>${escapeHtml(use.upgradeLabel || `Upgrade level ${use.upgradeLevel ?? '—'}`)}</p></li>`
       : `<li class="record-row"><div class="record-top"><strong>${escapeHtml(use.actionName)}</strong><span class="badge">Input ×${escapeHtml(use.qty)}</span></div><p>${escapeHtml(skillNames[use.skillId] || use.skillId)}</p></li>`).join('') || '<li class="record-row"><p>No action or building upgrade consumes this item.</p></li>';
-    detail.innerHTML = `
-      <div class="item-heading${item.art ? ' has-art' : ''}">
-        ${item.art ? `<img class="item-art" src="/art/icons/items/${encodeURIComponent(id)}.png" alt="">` : ''}
-        <div><h2>${escapeHtml(item.label || humanizeId(id))}</h2><p class="meta">${escapeHtml(item.type || 'Unknown type')}${item.subtype ? ` / ${escapeHtml(item.subtype)}` : ''}</p></div>
-        <button class="button" id="fr-detail-plan" type="button" data-plan-item="${escapeHtml(id)}">Plan this item</button>
-      </div>
-      <p class="prose">${escapeHtml(description)}</p>
-      <dl class="facts">
-        ${item.value != null ? `<div><dt>Value</dt><dd>${escapeHtml(item.value)}</dd></div>` : ''}
-        ${item.healAmount != null ? `<div><dt>Healing</dt><dd>${escapeHtml(item.healAmount)}</dd></div>` : ''}
-      </dl>
-      <h3>Sources</h3><ul class="record-list">${sourceRows}</ul>
-      <h3>Uses</h3><ul class="record-list">${useRows}</ul>`;
-  }
-
-  let searchTimer;
-  search.addEventListener('input', () => {
-    clearTimeout(searchTimer);
-    searchTimer = setTimeout(() => {
-      state.query = search.value;
-      renderItemList();
-    }, 140);
-  });
-  itemList.addEventListener('click', (event) => {
-    const row = event.target.closest?.('[data-item-id]');
-    if (!row) return;
-    state.selectedItemId = row.dataset.itemId;
-    renderItemList();
-    renderItemDetail();
-  });
-  detail.addEventListener('error', (event) => {
-    if (event.target.matches?.('.item-art')) event.target.hidden = true;
-  }, true);
+    detail.innerHTML = `<div class="item-heading${item.art ? ' has-art' : ''}">${item.art ? `<img class="item-art" src="/art/icons/items/${encodeURIComponent(id)}.png" alt="">` : ''}<div><h2>${escapeHtml(item.label || humanizeId(id))}</h2><p class="meta">${escapeHtml(item.type || 'Unknown type')}${item.subtype ? ` / ${escapeHtml(item.subtype)}` : ''}</p></div><button class="button" type="button" data-plan-item="${escapeHtml(id)}">Plan this item</button></div><p class="prose">${escapeHtml(item.desc || strings[`itemdesc.${id}`] || 'No description is available in this build.')}</p><dl class="facts">${item.value != null ? `<div><dt>Value</dt><dd>${escapeHtml(item.value)}</dd></div>` : ''}</dl><h3>Sources</h3><ul class="record-list">${sourceRows}</ul><h3>Uses</h3><ul class="record-list">${useRows}</ul>`;
+  };
+  itemSearch.addEventListener('input', renderItemList);
+  itemList.addEventListener('click', (event) => { const row = event.target.closest?.('[data-item-id]'); if (!row) return; state.selectedItemId = row.dataset.itemId; renderItemList(); renderItemDetail(); });
+  detail.addEventListener('click', (event) => { const button = event.target.closest?.('[data-plan-item]'); if (!button) return; state.selectedPlanItemId = button.dataset.planItem; planKind.value = 'item'; planItem.value = items[state.selectedPlanItemId]?.label || state.selectedPlanItemId; updateTargetFields(); shell.selectTab(2, true); });
+  detail.addEventListener('error', (event) => { if (event.target.matches?.('.item-art')) event.target.hidden = true; }, true);
 
   const skillsPanel = shell.panels.skills;
-  skillsPanel.innerHTML = `<div class="skills-view"><div class="skills-toolbar field"><label for="fr-skill-select">Skill</label><select class="control" id="fr-skill-select"></select></div><p class="skill-action-status" id="fr-skill-action-status" role="status" aria-live="polite">Start an action directly from the table. This stops the current game action.</p><div id="fr-skill-table"></div></div>`;
-  const skillSelect = skillsPanel.querySelector('#fr-skill-select');
-  const skillActionStatus = skillsPanel.querySelector('#fr-skill-action-status');
-  const skillTable = skillsPanel.querySelector('#fr-skill-table');
-  const actionSkillIds = Object.keys(datasets.actions || {});
-  skillSelect.innerHTML = actionSkillIds.map((id) => `<option value="${escapeHtml(id)}">${escapeHtml(skillNames[id] || id)}</option>`).join('');
-
-  function renderSkillTable() {
-    const skillId = skillSelect.value || actionSkillIds[0];
-    const actions = datasets.actions?.[skillId] || [];
-    if (!actions.length) {
-      skillTable.innerHTML = '<div class="empty">This build has no recorded actions for the selected skill.</div>';
-      return;
-    }
-    let snapshot = {};
-    try { snapshot = api.getState() || {}; } catch { /* action buttons remain available for runtime validation */ }
-    const locked = isExecutionLocked(state.executorStatus?.phase);
-    skillTable.innerHTML = `<div class="table-wrap"><table><caption>${escapeHtml(skillNames[skillId] || skillId)} actions · ${actions.length.toLocaleString()} total</caption><thead><tr><th scope="col">Action</th><th scope="col">Level</th><th scope="col">Interval</th><th scope="col">Inputs</th><th scope="col">Outputs</th><th scope="col">Tool</th><th scope="col"><span class="visually-hidden">Start action</span></th></tr></thead><tbody>${actions.map((action) => {
-      const rare = (action.rareOutputs || []).map((entry) => `${escapeHtml(labelFor(items, entry.item))} <span class="data">×${escapeHtml(entry.qty ?? 1)}</span> <span class="badge warning">${escapeHtml(formatChance(entry.chance))}</span>`).join('<br>');
-      const blocker = actionBlocker(datasets, snapshot, skillId, action);
-      const blockerMessage = blockedText(blocker);
-      return `<tr><td><span class="cell-title">${escapeHtml(action.name || humanizeId(action.id))}</span>${action.spot ? `<span class="cell-id">${escapeHtml(datasets.strings?.[`name.${action.spot}`] || humanizeId(action.spot))}</span>` : ''}</td><td class="data">${escapeHtml(action.levelReq)}</td><td class="data">${escapeHtml(formatInterval(action.interval))}</td><td>${quantityEntries(action.inputs, items)}</td><td>${quantityEntries(action.outputs, items)}${rare ? `<br>${rare}` : ''}</td><td>${action.toolReq ? escapeHtml(datasets.strings?.[`name.${action.toolReq}`] || labelFor(items, action.toolReq)) : '—'}</td><td><button class="button compact" type="button" data-start-action data-skill-id="${escapeHtml(skillId)}" data-action-id="${escapeHtml(action.id)}" aria-label="Start ${escapeHtml(action.name || humanizeId(action.id))}"${blockerMessage ? ` title="${escapeHtml(blockerMessage)}"` : ''}${locked ? ' disabled' : ''}>${ICONS.play}Start</button></td></tr>`;
-    }).join('')}</tbody></table></div>`;
-  }
+  skillsPanel.innerHTML = `<div class="skills-view"><div class="skills-toolbar field"><label for="fr-skill-select">Skill</label><select class="control" id="fr-skill-select"></select></div><p class="skill-action-status" id="fr-skill-action-status" role="status" aria-live="polite">Start an action directly from the table.</p><div id="fr-skill-table"></div></div>`;
+  const skillSelect = skillsPanel.querySelector('#fr-skill-select'); const skillTable = skillsPanel.querySelector('#fr-skill-table'); const skillStatus = skillsPanel.querySelector('#fr-skill-action-status');
+  skillSelect.innerHTML = skills.map((skill) => `<option value="${escapeHtml(skill.id)}">${escapeHtml(skillNames[skill.id] || skill.id)}</option>`).join('');
+  const renderSkillTable = () => {
+    const skillId = skillSelect.value || skills[0]?.id; const actions = model._index.actionsBySkill.get(skillId) || []; const snapshot = liveState();
+    skillTable.innerHTML = actions.length ? `<div class="table-wrap"><table><caption>${escapeHtml(skillNames[skillId] || skillId)} actions · ${actions.length} total</caption><thead><tr><th>Action</th><th>Level</th><th>Interval</th><th>Inputs</th><th>Outputs</th><th></th></tr></thead><tbody>${actions.map((action) => { const blocker = liveBlocker(model, snapshot, { kind: 'action', skillId, actionId: action.id }); const rare = (action.rareOutputs || []).map((entry) => `${escapeHtml(labelFor(items, entry.item))} ×${escapeHtml(entry.qty ?? 1)} <span class="badge warning">${escapeHtml(formatChance(entry.chance))}</span>`).join('<br>'); return `<tr><td><span class="cell-title">${escapeHtml(actionName(action))}</span>${action.spot ? `<span class="cell-id">${escapeHtml(strings[`name.${action.spot}`] || humanizeId(action.spot))}</span>` : ''}</td><td class="data">${escapeHtml(action.levelReq ?? '—')}</td><td class="data">${escapeHtml(formatInterval(action.interval))}</td><td>${quantityEntries(action.inputs, items)}</td><td>${quantityEntries(action.outputs, items)}${rare ? `<br>${rare}` : ''}</td><td><button class="button compact" type="button" data-start-action data-skill-id="${escapeHtml(skillId)}" data-action-id="${escapeHtml(action.id)}" ${blocker ? `aria-label="Blocked: ${escapeHtml(blockedText(blocker))}"` : ''}>Start</button></td></tr>`; }).join('')}</tbody></table></div>` : '<div class="empty">No actions recorded for this skill.</div>';
+  };
   skillSelect.addEventListener('change', renderSkillTable);
-  skillTable.addEventListener('click', async (event) => {
-    const control = event.target.closest?.('[data-start-action]');
-    if (!control || control.disabled || isExecutionLocked(state.executorStatus?.phase)) return;
-    const skillId = control.dataset.skillId;
-    const action = (datasets.actions?.[skillId] || []).find((candidate) => String(candidate.id) === control.dataset.actionId);
-    if (!action) return;
-    const blocker = actionBlocker(datasets, api.getState(), skillId, action);
-    if (blocker) {
-      skillActionStatus.dataset.state = 'error';
-      skillActionStatus.textContent = blockedText(blocker);
-      return;
-    }
-    control.disabled = true;
-    skillActionStatus.dataset.state = 'idle';
-    skillActionStatus.textContent = `Starting ${action.name || humanizeId(action.id)}…`;
-    try {
-      await api.stopAction();
-      await api.startAction(skillId, action.id);
-      skillActionStatus.textContent = `${action.name || humanizeId(action.id)} started. Starting another action will replace it.`;
-    } catch (error) {
-      skillActionStatus.dataset.state = 'error';
-      skillActionStatus.textContent = error instanceof Error ? error.message : `Unable to start ${action.name || humanizeId(action.id)}.`;
-    } finally {
-      control.disabled = false;
-    }
-  });
+  skillTable.addEventListener('click', async (event) => { const button = event.target.closest?.('[data-start-action]'); if (!button) return; const skillId = button.dataset.skillId; const action = actionFor(skillId, button.dataset.actionId); const blocker = liveBlocker(model, liveState(), { kind: 'action', skillId, actionId: action?.id }); if (blocker) { skillStatus.textContent = `Blocked: ${factLabel(blocker)}`; skillStatus.dataset.state = 'error'; return; } try { await api.stopAction(); await api.startAction(skillId, action.id); skillStatus.textContent = `${actionName(action)} started.`; skillStatus.dataset.state = 'idle'; } catch (error) { skillStatus.textContent = error instanceof Error ? error.message : String(error); skillStatus.dataset.state = 'error'; } });
 
   const planPanel = shell.panels.plan;
-  planPanel.innerHTML = `
-    <div class="plan-view">
-      <form class="plan-form" id="fr-plan-form">
-        <div class="field"><label for="fr-plan-item">Desired item</label><div class="plan-combobox"><input class="control" id="fr-plan-item" type="search" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded="false" aria-controls="fr-plan-options" autocomplete="off" placeholder="Search item names" required></div></div>
-        <div class="field"><label for="fr-plan-target">Until</label><select class="control" id="fr-plan-target"><option value="qty" selected>In bag</option><option value="gain">New items</option><option value="level">Skill level</option><option value="time">Minutes</option></select></div>
-        <div class="field"><label for="fr-plan-qty" id="fr-plan-qty-label">Quantity</label><input class="control data" id="fr-plan-qty" type="number" min="1" step="1" value="1" inputmode="numeric"></div>
-        <button class="button" id="fr-resolve-plan" type="submit">Add plan</button>
-      </form>
-      <div class="combobox-popover" id="fr-plan-options" role="listbox" aria-label="Matching items" hidden></div>
-      <div id="fr-plan-result"><div class="empty">Add an item to begin a queue. Each plan is resolved against the output of plans before it.</div></div>
-      <div class="executor" aria-label="Queue status"><div class="executor-status" role="status" aria-live="polite" aria-atomic="true"><strong id="fr-executor-phase">Ready</strong><p id="fr-executor-message">Add one or more plans to the queue.</p><progress class="executor-progress" id="fr-executor-progress" max="1" value="0" aria-label="Queue progress"></progress></div></div>
-    </div>`;
-  const planForm = planPanel.querySelector('#fr-plan-form');
-  const planItem = planPanel.querySelector('#fr-plan-item');
-  const planQty = planPanel.querySelector('#fr-plan-qty');
-  const planTarget = planPanel.querySelector('#fr-plan-target');
-  const planQtyLabel = planPanel.querySelector('#fr-plan-qty-label');
-  const applyPlanTargetType = (type) => {
-    const map = { qty: ['Total', '1'], gain: ['New', '1'], level: ['Level', '2'], time: ['Minutes', '1'] };
-    const [labelText, min] = map[type] || map.qty;
-    if (planQtyLabel) planQtyLabel.textContent = labelText;
-    planQty.min = min;
+  planPanel.innerHTML = `<div class="plan-view"><form class="plan-form" id="fr-plan-form"><div class="field"><label for="fr-plan-target">Target type</label><select class="control" id="fr-plan-target"><option value="item">Item total</option><option value="item-gain">Item gain</option><option value="level">Skill level</option><option value="xp">Skill XP</option><option value="action">Action</option><option value="unlock">Unlock</option><option value="gold">Gold</option></select></div><div class="field" id="fr-plan-item-field"><label for="fr-plan-item">Desired item</label><div class="plan-combobox"><input class="control" id="fr-plan-item" type="search" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded="false" autocomplete="off" placeholder="Search item names"><div class="combobox-popover" id="fr-plan-options" role="listbox" hidden></div></div></div><div class="field" id="fr-plan-skill-field" hidden><label for="fr-plan-skill">Skill</label><select class="control" id="fr-plan-skill"></select></div><div class="field" id="fr-plan-action-field" hidden><label for="fr-plan-action">Action</label><select class="control" id="fr-plan-action"></select></div><div class="field" id="fr-plan-unlock-field" hidden><label for="fr-plan-unlock">Unlock</label><select class="control" id="fr-plan-unlock"></select></div><div class="field"><label for="fr-plan-qty" id="fr-plan-qty-label">Quantity</label><input class="control data" id="fr-plan-qty" type="number" min="1" step="1" value="1" inputmode="numeric"></div><div class="field" id="fr-plan-mode-field" hidden><label for="fr-plan-action-mode">Action target</label><select class="control" id="fr-plan-action-mode"><option value="runs">Runs</option><option value="minutes">Minutes</option></select></div><button class="button" id="fr-resolve-plan" type="submit">Add target</button></form><div id="fr-plan-result"><div class="empty">Add a target to begin a queue.</div></div><div class="executor" aria-label="Queue status"><div class="executor-status" role="status" aria-live="polite"><strong id="fr-executor-phase">Ready</strong><p id="fr-executor-message">Add a target to begin a queue.</p><progress class="executor-progress" id="fr-executor-progress" max="1" value="0" aria-label="Queue progress"></progress></div></div></div>`;
+  const planForm = planPanel.querySelector('#fr-plan-form'); const planKind = planPanel.querySelector('#fr-plan-target'); const planItem = planPanel.querySelector('#fr-plan-item'); const planOptions = planPanel.querySelector('#fr-plan-options'); const planSkill = planPanel.querySelector('#fr-plan-skill'); const planAction = planPanel.querySelector('#fr-plan-action'); const planUnlock = planPanel.querySelector('#fr-plan-unlock'); const planQty = planPanel.querySelector('#fr-plan-qty'); const planQtyLabel = planPanel.querySelector('#fr-plan-qty-label'); const planMode = planPanel.querySelector('#fr-plan-action-mode');
+  planSkill.innerHTML = skills.map((skill) => `<option value="${escapeHtml(skill.id)}">${escapeHtml(skillNames[skill.id] || skill.id)}</option>`).join('');
+  if (!planKind.value) planKind.value = 'item';
+  if (!planSkill.value) planSkill.value = skills[0]?.id || '';
+  const renderActionOptions = () => { const actions = model._index.actionsBySkill.get(planSkill.value) || []; planAction.innerHTML = actions.map((action) => `<option value="${escapeHtml(action.id)}">${escapeHtml(actionName(action))}</option>`).join(''); planAction.value = actions[0]?.id || ''; };
+  const renderUnlockOptions = () => { const entries = nextUnlocks(model, liveState(), 30); planUnlock.innerHTML = entries.map((entry) => `<option value="${escapeHtml(entry.fact)}">${escapeHtml(factLabel(entry.fact))} · ${escapeHtml(formatDuration(entry.costMs))}</option>`).join('') || '<option value="">No outstanding unlocks</option>'; planUnlock.value = entries[0]?.fact || ''; };
+  const updateTargetFields = () => {
+    const kind = planKind.value; const itemKind = kind === 'item' || kind === 'item-gain'; const skillKind = kind === 'level' || kind === 'xp' || kind === 'action';
+    planPanel.querySelector('#fr-plan-item-field').hidden = !itemKind; planPanel.querySelector('#fr-plan-skill-field').hidden = !skillKind; planPanel.querySelector('#fr-plan-action-field').hidden = kind !== 'action'; planPanel.querySelector('#fr-plan-unlock-field').hidden = kind !== 'unlock'; planPanel.querySelector('#fr-plan-mode-field').hidden = kind !== 'action';
+    planQtyLabel.textContent = kind === 'level' ? 'Level' : kind === 'xp' ? 'XP' : kind === 'gold' ? 'Gold' : kind === 'item-gain' ? 'Gain' : kind === 'action' ? 'Amount' : 'Quantity';
+    planQty.min = kind === 'level' ? '2' : '1';
+    renderActionOptions(); if (kind === 'unlock') renderUnlockOptions();
   };
-  planTarget?.addEventListener('change', () => applyPlanTargetType(planTarget.value));
-  const planResult = planPanel.querySelector('#fr-plan-result');
-  const executorPhase = planPanel.querySelector('#fr-executor-phase');
-  const executorMessage = planPanel.querySelector('#fr-executor-message');
-  const executorProgress = planPanel.querySelector('#fr-executor-progress');
-  const runButton = shell.queueControls.querySelector('#fr-run');
-  const resumeButton = shell.queueControls.querySelector('#fr-resume');
-  const stopButton = shell.queueControls.querySelector('#fr-stop');
-  const clearButton = shell.queueControls.querySelector('#fr-clear');
-  const planOptions = planPanel.querySelector('#fr-plan-options');
-  shell.shadow.append(planOptions);
-  let planTargetResults = [];
-  let activePlanTarget = -1;
-
-  function planTargetPriorities() {
-    const ids = [];
-    const context = new Map();
-    const add = (id, label) => {
-      if (!id || !items[id] || context.has(id)) return;
-      ids.push(id);
-      context.set(id, label);
-    };
-    add(state.selectedItemId, 'Current item');
-    for (const id of state.recentPlanItemIds) add(id, 'Recent');
-    let snapshot = {};
-    try { snapshot = api.getState() || {}; } catch { /* ranking remains available without live inventory */ }
-    for (const [id, amount] of Object.entries(snapshot.inventory || {})) if (Number(amount) > 0) add(id, 'In bag');
-    const skillId = skillSelect.value || actionSkillIds[0];
-    for (const action of datasets.actions?.[skillId] || []) {
-      for (const id of Object.keys(action.outputs || {})) add(id, `${skillNames[skillId] || humanizeId(skillId)} output`);
-    }
-    return { ids, context };
-  }
-
-  function positionPlanOptions() {
-    const rect = planItem.getBoundingClientRect();
-    const view = documentRef.defaultView || globalThis;
-    const viewportWidth = Number(view.innerWidth) || 1024;
-    const viewportHeight = Number(view.innerHeight) || 768;
-    const gutter = 8;
-    const width = Math.min(rect.width, viewportWidth - (2 * gutter));
-    const left = Math.max(gutter, Math.min(rect.left, viewportWidth - width - gutter));
-    const top = Math.min(rect.bottom + 4, viewportHeight - gutter);
-    planOptions.style.left = `${left}px`;
-    planOptions.style.top = `${top}px`;
-    planOptions.style.width = `${width}px`;
-    planOptions.style.maxHeight = `${Math.max(96, Math.min(280, viewportHeight - top - gutter))}px`;
-  }
-
-  function renderPlanTargetOptions(query = '') {
-    const { ids, context } = planTargetPriorities();
-    planTargetResults = searchPlanTargets(sortedItems, query, ids, 10);
-    if (activePlanTarget >= planTargetResults.length) activePlanTarget = planTargetResults.length - 1;
-    planOptions.innerHTML = planTargetResults.length
-      ? planTargetResults.map((entry, index) => `<button class="combobox-option" id="fr-plan-option-${index}" type="button" role="option" data-plan-item-id="${escapeHtml(entry.id)}" aria-selected="${index === activePlanTarget}"><strong>${escapeHtml(entry.label)}</strong><small>${escapeHtml(context.get(entry.id) || entry.item?.type || 'Item')}</small></button>`).join('')
-      : '<div class="combobox-empty" role="status">No matching items</div>';
-    planItem.setAttribute('aria-activedescendant', activePlanTarget >= 0 ? `fr-plan-option-${activePlanTarget}` : '');
-  }
-
-  function openPlanTargets(query = '') {
-    if (planItem.disabled) return;
-    activePlanTarget = -1;
-    renderPlanTargetOptions(query);
-    positionPlanOptions();
-    planOptions.hidden = false;
-    planItem.setAttribute('aria-expanded', 'true');
-  }
-
-  function closePlanTargets() {
-    planOptions.hidden = true;
-    planItem.setAttribute('aria-expanded', 'false');
-    planItem.setAttribute('aria-activedescendant', '');
-    activePlanTarget = -1;
-  }
-
-  function selectPlanTarget(itemId) {
-    if (!items[itemId]) return false;
-    state.planItemId = itemId;
-    planItem.value = labelFor(items, itemId);
-    planItem.setCustomValidity?.('');
-    closePlanTargets();
-    return true;
-  }
-
-  function movePlanTarget(delta) {
-    if (planOptions.hidden) openPlanTargets(state.planItemId ? '' : planItem.value);
-    if (!planTargetResults.length) return;
-    activePlanTarget = activePlanTarget < 0
-      ? (delta > 0 ? 0 : planTargetResults.length - 1)
-      : (activePlanTarget + delta + planTargetResults.length) % planTargetResults.length;
-    renderPlanTargetOptions(state.planItemId ? '' : planItem.value);
-    planOptions.querySelector?.(`#fr-plan-option-${activePlanTarget}`)?.scrollIntoView?.({ block: 'nearest' });
-  }
-
-  planItem.addEventListener('focus', () => openPlanTargets(state.planItemId ? '' : planItem.value));
-  planItem.addEventListener('input', () => {
-    state.planItemId = '';
-    planItem.setCustomValidity?.('');
-    openPlanTargets(planItem.value);
-  });
-  planItem.addEventListener('keydown', (event) => {
-    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-      event.preventDefault();
-      movePlanTarget(event.key === 'ArrowDown' ? 1 : -1);
-    } else if (event.key === 'Enter' && !planOptions.hidden && activePlanTarget >= 0) {
-      event.preventDefault();
-      selectPlanTarget(planTargetResults[activePlanTarget]?.id);
-    } else if (event.key === 'Escape' && !planOptions.hidden) {
-      event.preventDefault();
-      closePlanTargets();
-    } else if (event.key === 'Tab') closePlanTargets();
-  });
-  planOptions.addEventListener('click', (event) => {
-    const option = event.target.closest?.('[data-plan-item-id]');
-    if (option) selectPlanTarget(option.dataset.planItemId);
-  });
-  shell.shadow.addEventListener('pointerdown', (event) => {
-    if (event.target !== planItem && !planOptions.contains?.(event.target)) closePlanTargets();
-  });
-  shell.panel.addEventListener('scroll', closePlanTargets, true);
-  shell.close.addEventListener('click', closePlanTargets);
-  documentRef.defaultView?.addEventListener?.('resize', closePlanTargets);
-
-  function flattenQueue() {
-    const flattened = [];
-    state.planQueue.forEach((entry, planIndex) => {
-      (entry.plan?.ok ? entry.plan.steps : []).forEach((step, planStepIndex) => flattened.push({
-        ...step,
-        queuePlanId: entry.id,
-        queuePlanIndex: planIndex,
-        queuePlanCount: state.planQueue.length,
-        queuePlanStep: planStepIndex,
-        queuePlanSteps: entry.plan.steps.length,
-        queuePlanLabel: labelFor(items, entry.itemId),
-      }));
-    });
-    return flattened;
-  }
-
-  const queueView = (status = state.executorStatus) => {
-    const currentIndex = Number.isInteger(status?.currentStep) ? Number(status.currentStep) : -1;
-    const currentPlanIndex = currentIndex >= 0 ? state.executionSteps[currentIndex]?.queuePlanIndex ?? -1 : -1;
-    const locked = isExecutionLocked(status?.phase);
-    return {
-      status, currentIndex, currentPlanIndex, locked,
-      frozenIds: new Set(state.planQueue.slice(0, currentPlanIndex + 1).map((entry) => entry.id)),
-      hasPending: state.planQueue.some((_, planIndex) => planIndex > currentPlanIndex),
-    };
+  planKind.addEventListener('change', updateTargetFields); planSkill.addEventListener('change', renderActionOptions);
+  const showItemOptions = () => { const query = planItem.value.trim(); const entries = searchPlanTargets(sortedItems, query, [state.selectedItemId, state.selectedPlanItemId].filter(Boolean), 12); planOptions.innerHTML = entries.map((entry) => `<button type="button" role="option" class="item-row" data-plan-option="${escapeHtml(entry.id)}">${escapeHtml(entry.label)}</button>`).join('') || '<span class="empty">No matching items</span>'; planOptions.hidden = false; planItem.setAttribute('aria-expanded', 'true'); };
+  planItem.addEventListener('input', showItemOptions); planItem.addEventListener('focus', showItemOptions); planItem.addEventListener('keydown', (event) => { if (event.key === 'Enter') { const first = planOptions.querySelector?.('[data-plan-option]'); if (first && !planOptions.hidden) { event.preventDefault(); first.click(); } } if (event.key === 'Escape') planOptions.hidden = true; });
+  planOptions.addEventListener('click', (event) => { const button = event.target.closest?.('[data-plan-option]'); if (!button) return; state.selectedPlanItemId = button.dataset.planOption; planItem.value = items[state.selectedPlanItemId]?.label || state.selectedPlanItemId; planOptions.hidden = true; planItem.setAttribute('aria-expanded', 'false'); });
+  const makeTarget = () => {
+    const kind = planKind.value; const amount = Math.max(1, Math.trunc(Number(planQty.value) || 0));
+    if (kind === 'item' || kind === 'item-gain') { const itemId = state.selectedPlanItemId || sortedItems.find(([id, item]) => String(item.label || '').toLocaleLowerCase() === planItem.value.trim().toLocaleLowerCase())?.[0]; if (!itemId || !items[itemId]) throw new Error('Choose an item from the search results.'); return { type: kind, itemId, [kind === 'item' ? 'qty' : 'gain']: amount }; }
+    if (kind === 'level') return { type: 'level', skillId: planSkill.value, level: amount };
+    if (kind === 'xp') return { type: 'xp', skillId: planSkill.value, xp: amount };
+    if (kind === 'action') { const target = { type: 'action', skillId: planSkill.value, actionId: planAction.value }; target[planMode.value] = amount; return target; }
+    if (kind === 'unlock') { if (!planUnlock.value) throw new Error('No unlock is currently available.'); return { type: 'unlock', fact: planUnlock.value }; }
+    return { type: 'gold', amount };
   };
 
-  function rebuildQueue() {
-    state.planQueue = resolvePlanQueue(datasets, api.getState(), state.queueGoals);
-    state.executionSteps = flattenQueue();
-    state.currentPlan = state.planQueue.at(-1)?.plan || null;
-  }
-
-  function remainingFrozenSteps(status) {
-    const { currentIndex, currentPlanIndex } = queueView(status);
-    if (currentPlanIndex < 0) return [];
-    const remaining = [];
-    for (let globalIndex = currentIndex + 1; globalIndex < state.executionSteps.length; globalIndex += 1) {
-      const step = state.executionSteps[globalIndex];
-      if ((step.queuePlanIndex ?? -1) > currentPlanIndex) break;
-      if (globalIndex !== currentIndex + 1) {
-        remaining.push({ ...step });
-        continue;
-      }
-      const outputRemaining = Math.max(0, Number(status?.stepTarget) - Number(status?.stepProduced));
-      if (!outputRemaining) continue;
-      const perCount = Math.max(1, Number(step.produceQty) / Math.max(1, Number(step.count)));
-      remaining.push({ ...step, produceQty: outputRemaining, count: Math.ceil(outputRemaining / perCount) });
-    }
-    return remaining;
-  }
-
-  function pendingPlanSteps(currentPlanIndex) {
-    return state.planQueue
-      .slice(currentPlanIndex + 1)
-      .filter((entry) => entry.plan?.ok)
-      .flatMap((entry) => entry.plan.steps || []);
-  }
-
-  function rebuildPending() {
-    const build = (status) => {
-      const { currentPlanIndex, frozenIds } = queueView(status);
-      const frozen = state.planQueue.slice(0, currentPlanIndex + 1);
-      const pendingGoals = state.queueGoals.filter((goal) => !frozenIds.has(goal.id));
-      const projected = projectSteps(datasets, api.getState(), remainingFrozenSteps(status));
-      const pending = resolvePlanQueue(datasets, projected, pendingGoals);
-      state.planQueue = [...frozen, ...pending];
-      state.executionSteps = flattenQueue();
-      const cutIndex = frozen.reduce((total, entry) => total + (entry.plan?.ok ? entry.plan.steps?.length || 0 : 0), 0);
-      return { ok: true, cutIndex, replacement: state.executionSteps.slice(cutIndex) };
-    };
-
-    let status = state.executorStatus;
-    let built = build(status);
-    if (!built.ok) return false;
-    if (!executor.splice(built.cutIndex, built.replacement)) {
-      status = executor.getStatus();
-      state.executorStatus = status;
-      built = build(status);
-      if (!built.ok) return false;
-      if (!executor.splice(built.cutIndex, built.replacement)) {
-        state.planNotice = { itemId: '', qty: 0, plan: { ok: false, steps: [], reason: 'The queue advanced while editing. Try again.' } };
-        renderPlan();
-        return false;
-      }
-    }
-    state.planNotice = null;
-    persistQueue();
-    renderPlan();
-    return true;
-  }
-
-  function queueEstimate() {
-    return state.planQueue.reduce((total, entry) => total + entry.estimateMs, 0);
-  }
-
-  function queueIsRunnable() {
-    return state.planQueue.some((entry) => entry.plan?.ok)
-      && state.executionSteps.length > 0;
-  }
-
-  function satisfiedPrerequisites(plan) {
-    const byItem = new Map();
-    for (const entry of plan?.satisfied || []) {
-      const current = byItem.get(entry.itemId) || { itemId: entry.itemId, requiredQty: 0, satisfiedQty: 0 };
-      current.requiredQty += Math.max(0, Number(entry.requiredQty) || 0);
-      current.satisfiedQty += Math.max(0, Number(entry.satisfiedQty) || 0);
-      byItem.set(entry.itemId, current);
-    }
-    return [...byItem.values()];
-  }
-
-  const describeStatus = (view) => {
-    const { status, currentIndex, locked } = view;
-    const total = state.executionSteps.length;
-    const current = currentIndex >= 0 ? state.executionSteps[currentIndex] : null;
-    const phaseLabels = { idle: 'Ready', starting: 'Starting', running: 'Running', paused: 'Paused', complete: 'Complete', error: 'Stopped' };
-    const phaseText = state.planNotice?.plan && !state.planNotice.plan.ok ? 'Plan blocked' : (phaseLabels[status.phase] || status.phase);
-    let messageText;
-    let actionText;
-    let metaText = '';
-    if (current) {
-      const stop = current.stopWhen;
-      const produced = stop?.type === 'time'
-        ? `${formatDuration(Number(status.stepProduced) || 0)} of ${formatDuration(Number(status.stepTarget) || 0)}`
-        : stop?.type === 'xp'
-          ? `${formatCompactNumber(Number(status.stepProduced) || 0)} of ${formatCompactNumber(Number(status.stepTarget) || 0)} XP`
-          : `${formatCompactNumber(Number(status.stepProduced) || 0)} of ${formatCompactNumber(Number(status.stepTarget) || 0)}${current.rare ? ' rare drops' : ''}`;
-      const planPos = `plan ${current.queuePlanIndex + 1}/${state.planQueue.length}`;
-      const remaining = Number(status.remainingMs) > 0 ? ` · ~${formatDuration(status.remainingMs)}` : '';
-      actionText = current.actionName || humanizeId(current.actionId);
-      metaText = `${produced} · ${planPos}${remaining}`;
-      messageText = `${actionText} · ${metaText}`;
-    } else if (state.planQueue.length) {
-      const estimate = queueEstimate();
-      messageText = `${state.planQueue.length} ${state.planQueue.length === 1 ? 'plan' : 'plans'} · ${total} ${total === 1 ? 'action' : 'actions'}${estimate ? ` · ~${formatDuration(estimate)}` : ''}`;
-      actionText = messageText;
-    } else {
-      messageText = status.message || 'Add one or more plans to the queue.';
-      actionText = messageText;
-    }
-    const stepFraction = Number(status.stepTarget) > 0 ? Math.min(1, Math.max(0, Number(status.stepProduced) / Number(status.stepTarget))) : 0;
-    const launcherText = locked
-      ? (status.phase === 'paused'
-        ? 'Companion · paused'
-        : `Companion · ${Math.min(total, currentIndex + 1)}/${total}${Number(status.remainingMs) > 0 ? ` · ${formatDuration(status.remainingMs)}` : ''}`)
-      : status.phase === 'complete' ? 'Companion · queue done'
-        : status.phase === 'error' ? 'Companion · queue stopped' : 'Companion';
-    return {
-      phaseText, messageText, actionText, metaText, launcherText,
-      progressMax: Math.max(1, total),
-      progressValue: status.phase === 'complete' ? total : Math.max(0, Math.max(0, currentIndex) + stepFraction),
-    };
+  let renderPlan;
+  const renderExecutor = () => {
+    const status = state.executorStatus || {}; const phase = status.phase || 'idle'; const phaseNode = planPanel.querySelector('#fr-executor-phase'); const messageNode = planPanel.querySelector('#fr-executor-message'); const progress = planPanel.querySelector('#fr-executor-progress');
+    phaseNode.textContent = phase[0]?.toUpperCase() + phase.slice(1); messageNode.textContent = status.message || (phase === 'waiting' ? 'Waiting for a runnable step.' : ''); progress.value = status.totalSteps ? status.completedSteps / status.totalSteps : 0;
+    shell.queueControls.querySelector('#fr-run').disabled = !state.resolvedQueue.steps.length || isExecutionLocked(phase); shell.queueControls.querySelector('#fr-stop').disabled = !isExecutionLocked(phase); shell.queueControls.querySelector('#fr-resume').hidden = true;
+    shell.compactStrip.querySelector('#fr-compact-phase').textContent = phase; shell.compactStrip.querySelector('#fr-compact-message').textContent = messageNode.textContent;
   };
-
-  const stepTimeLabel = (step, status, active) => {
-    const estimate = Math.max(0, (Number(step.interval) || 0) * (Number(step.count) || 0));
-    const base = active && Number(status.stepRemainingMs) > 0
-      ? `about ${formatDuration(status.stepRemainingMs)} left`
-      : estimate ? `about ${formatDuration(estimate)}` : '—';
-    return step.rare ? `${base} (avg)` : base;
+  const stepStatus = (step, live, status) => {
+    if (status.stepStatuses?.[step.id] === 'done') return 'done';
+    if (step.kind === 'manual') return 'waiting on you';
+    if (status.stepStatuses?.[step.id] === 'running') return 'running';
+    const blocker = liveBlocker(model, live, step); return blocker ? `blocked: ${factLabel(blocker)}` : 'ready';
   };
-
-  const updateActiveStepRow = (view) => {
-    const { status, currentIndex } = view;
-    if (currentIndex < 0) return;
-    const row = planResult.querySelector?.(`[data-step-global="${currentIndex}"]`);
-    if (!row) return;
-    const step = state.executionSteps[currentIndex];
-    if (!step) return;
-    const timeCell = row.querySelector?.('.queue-step-time');
-    if (timeCell) timeCell.textContent = stepTimeLabel(step, status, true);
-    const bar = row.querySelector?.('.step-progress');
-    if (bar && Number(status.stepTarget) > 0) {
-      bar.max = Number(status.stepTarget);
-      bar.value = Number(status.stepProduced) || 0;
-    }
-  };
-
-  const setStatusMessage = (el, described) => {
-    if (!el) return;
-    const meta = described.metaText ? `<span class="exec-meta">· ${escapeHtml(described.metaText)}</span>` : '';
-    el.innerHTML = `<span class="exec-name">${escapeHtml(described.actionText ?? described.messageText)}</span>${meta}`;
-  };
-
-  function renderExecutor() {
-    const view = queueView();
-    const { status, locked } = view;
-    const described = describeStatus(view);
-    updateActiveStepRow(view);
-    const queueTotal = planResult.querySelector?.('#fr-queue-total');
-    if (queueTotal) {
-      const queueFinish = locked && Number(status.remainingMs) > 0 ? ` · done ~${formatFinishTime(status.remainingMs)}` : '';
-      queueTotal.textContent = `${state.planQueue.length} ${state.planQueue.length === 1 ? 'plan' : 'plans'} · about ${formatDuration(queueEstimate())}${queueFinish}`;
-    }
-    executorPhase.textContent = described.phaseText;
-    setStatusMessage(executorMessage, described);
-    executorProgress.max = described.progressMax;
-    executorProgress.value = described.progressValue;
-    for (const control of skillTable.querySelectorAll?.('[data-start-action]') || []) control.disabled = locked;
-    runButton.disabled = locked || status.phase === 'complete' || !queueIsRunnable();
-    resumeButton.hidden = status.phase !== 'paused';
-    resumeButton.classList?.toggle?.('attention', status.phase === 'paused');
-    stopButton.disabled = !locked;
-    clearButton.disabled = locked ? !view.hasPending : !state.planQueue.length;
-    const clearLabel = locked ? 'Clear pending plans' : 'Clear queue';
-    clearButton.title = clearLabel;
-    clearButton.setAttribute('aria-label', clearLabel);
-    const label = shell.launcher.querySelector?.('#fr-launcher-label') ?? shell.shadow.querySelector?.('#fr-launcher-label');
-    if (label) label.textContent = described.launcherText;
-    if (compactPhase) compactPhase.textContent = described.phaseText;
-    setStatusMessage(compactMessage, described);
-    if (compactProgress) {
-      compactProgress.max = executorProgress.max;
-      compactProgress.value = executorProgress.value;
-    }
-    if (compactResume) compactResume.hidden = status.phase !== 'paused';
-    if (compactStart) {
-      compactStart.hidden = locked;
-      compactStart.disabled = runButton.disabled;
-    }
-    if (compactStop) compactStop.hidden = !locked;
-  }
-
-  function renderPlanNotice(notice) {
-    const plan = notice?.plan;
-    if (!plan) return '';
-    const prerequisites = satisfiedPrerequisites(plan);
-    const prerequisiteRows = prerequisites.map((entry) => `<li class="queue-step" data-kind="prerequisite"><span class="queue-step-marker">${ICONS.check}</span><span>${escapeHtml(labelFor(items, entry.itemId))}<span class="queue-step-detail">Prerequisite satisfied</span></span><span class="queue-step-time data">${escapeHtml(entry.satisfiedQty)} of ${escapeHtml(entry.requiredQty)} ready</span></li>`).join('');
-    if (plan.ok) {
-      return `<div class="banner success" role="status">${ICONS.check}<div><strong>${escapeHtml(labelFor(items, notice.itemId))} is already satisfied</strong><p>The requested quantity is available without another action.</p></div></div>${prerequisiteRows ? `<ol class="queue-steps">${prerequisiteRows}</ol>` : ''}`;
-    }
-    const block = blockedText(plan.blocked || plan.reason);
-    if (notice.queued) {
-      return `<div class="banner warning" role="status">${ICONS.warning}<div><strong>${escapeHtml(labelFor(items, notice.itemId))} is queued but blocked</strong><p>${escapeHtml(block || plan.message || 'Resolve the blocker.')} It starts automatically once this is resolved.</p></div></div>${prerequisiteRows ? `<ol class="queue-steps">${prerequisiteRows}</ol>` : ''}`;
-    }
-    return `<div class="banner plan-blocked" role="alert">${ICONS.error}<div><strong>${escapeHtml(labelFor(items, notice.itemId))} could not be queued</strong><p>${escapeHtml(block || plan.message || 'Resolve the blockers and try again.')}</p></div></div>${prerequisiteRows ? `<ol class="queue-steps">${prerequisiteRows}</ol>` : ''}`;
-  }
-
-  function renderPlan() {
-    const status = state.executorStatus || { phase: 'idle' };
-    const view = queueView(status);
-    const { currentPlanIndex } = view;
-    const currentIndex = view.currentIndex < 0 ? null : view.currentIndex;
-    let globalIndex = 0;
-    const queueRows = state.planQueue.map((entry, planIndex) => {
-      const startIndex = globalIndex;
-      const steps = entry.plan?.steps || [];
-      // Blocked plans keep their partial steps for display, but flattenQueue()
-      // excludes them from the execution queue. Only runnable plans may consume
-      // global step indices, or every plan after a skipped one shifts.
-      const runnable = !!entry.plan?.ok;
-      const endIndex = startIndex + (runnable ? steps.length : 0);
-      globalIndex = endIndex;
-      const planComplete = status.phase === 'complete'
-        || (currentIndex != null && currentIndex >= endIndex && status.phase !== 'idle');
-      const planActive = currentIndex != null && currentIndex >= startIndex && currentIndex < endIndex && status.phase !== 'idle';
-      const planState = !entry.plan?.ok ? 'blocked' : planComplete ? 'complete' : planActive ? 'active' : 'pending';
-      const prerequisites = satisfiedPrerequisites(entry.plan);
-      const prerequisiteRows = prerequisites.map((requirement) => `<li class="queue-step" data-state="complete" data-kind="prerequisite"><span class="queue-step-marker">${ICONS.check}</span><span>${escapeHtml(labelFor(items, requirement.itemId))}<span class="queue-step-detail">Prerequisite satisfied</span></span><span class="queue-step-time data">${escapeHtml(requirement.satisfiedQty)} of ${escapeHtml(requirement.requiredQty)} ready</span></li>`).join('');
-      const stepRows = steps.map((step, planStepIndex) => {
-        const stepIndex = startIndex + planStepIndex;
-        const complete = runnable && (status.phase === 'complete' || (currentIndex != null && stepIndex < currentIndex && status.phase !== 'idle'));
-        const active = runnable && currentIndex === stepIndex && status.phase !== 'idle';
-        const stepState = complete ? 'complete' : active ? 'active' : 'pending';
-        const marker = complete ? ICONS.check : String(planStepIndex + 1);
-        const activeProgress = active && Number(status.stepTarget) > 0
-          ? `<progress class="step-progress" max="${escapeHtml(status.stepTarget)}" value="${escapeHtml(status.stepProduced || 0)}" aria-label="${escapeHtml(step.actionName)} progress"></progress>`
-          : '';
-        const time = stepTimeLabel(step, status, active);
-        const quantity = step.rare ? `~×${escapeHtml(step.count)}` : `×${escapeHtml(step.count)}`;
-        const chanceBadge = step.rare
-          ? ` <span class="badge warning">${escapeHtml(formatChance(step.chance))}</span>` : '';
-        return `<li class="queue-step" data-state="${stepState}"${runnable ? ` data-step-global="${stepIndex}"` : ''}><span class="queue-step-marker">${marker}</span><span>${escapeHtml(step.actionName || humanizeId(step.actionId))}${chanceBadge} <span class="data">${quantity}</span></span><span class="queue-step-time data">${escapeHtml(time)}</span>${activeProgress}</li>`;
-      }).join('');
-      const locked = isExecutionLocked(status.phase);
-      const mutable = !locked || planIndex !== currentPlanIndex;
-      const label = labelFor(items, entry.itemId);
-      const blockedBadge = !entry.plan?.ok ? '<span class="badge danger">blocked</span>' : '';
-      const blockedTitle = !entry.plan?.ok ? ` title="${escapeHtml(blockedText(entry.plan?.blocked || entry.plan?.reason) || 'Blocked until its requirement is met.')}"` : '';
-      const goalSkillId = entry.plan?.goalSkillId || entry.plan?.blocked?.skillId;
-      const targetLabel = entry.target?.type === 'gain'
-        ? `<span class="data">+${escapeHtml(entry.target.gain)}</span>`
-        : entry.target?.type === 'level'
-          ? `→ ${escapeHtml(skillNames[goalSkillId] || 'level')} <span class="data">${escapeHtml(entry.target.level)}</span>`
-          : entry.target?.type === 'time'
-            ? `for <span class="data">${escapeHtml(entry.target.minutes)}m</span>`
-            : `<span class="data">×${escapeHtml(entry.qty)}</span>`;
-      const upIsPromote = locked && planIndex - 1 === currentPlanIndex;
-      const upDisabled = !mutable || planIndex === 0;
-      const upLabel = upIsPromote ? 'Run now — interrupts the current plan' : `Move ${label} up`;
-      const upTitle = upIsPromote ? 'Run now — interrupts the current plan' : 'Move up';
-      const downDisabled = !mutable || planIndex === state.planQueue.length - 1;
-      const editDisabled = !mutable;
-      const actionLabel = `${steps.length} ${steps.length === 1 ? 'action' : 'actions'}`;
-      const planMeta = planState === 'blocked'
-        ? blockedShort(entry.plan?.blocked || entry.plan?.reason)
-        : planState === 'complete'
-          ? `${actionLabel} · done`
-          : `${actionLabel}${prerequisites.length ? ` · ${prerequisites.length} ready` : ''} · about ${escapeHtml(formatDuration(entry.estimateMs))}`;
-      return `<li class="queue-plan" data-state="${planState}" data-plan-id="${escapeHtml(entry.id)}"${blockedTitle}><div class="queue-plan-top"><span class="queue-plan-index data">${planIndex + 1}</span><span class="queue-plan-title">${escapeHtml(label)} ${targetLabel}</span>${blockedBadge}<span class="queue-plan-meta">${planMeta}</span><span class="queue-plan-actions"><button class="icon-button" type="button" data-queue-action="up" data-plan-id="${escapeHtml(entry.id)}" aria-label="${escapeHtml(upLabel)}" title="${escapeHtml(upTitle)}"${upDisabled ? ' disabled' : ''}>${ICONS.up}</button><button class="icon-button" type="button" data-queue-action="down" data-plan-id="${escapeHtml(entry.id)}" aria-label="Move ${escapeHtml(label)} down" title="Move down"${downDisabled ? ' disabled' : ''}>${ICONS.down}</button><button class="icon-button" type="button" data-queue-action="remove" data-plan-id="${escapeHtml(entry.id)}" aria-label="Remove ${escapeHtml(label)}" title="Remove"${editDisabled ? ' disabled' : ''}>${ICONS.remove}</button><button class="icon-button" type="button" data-queue-action="edit" data-plan-id="${escapeHtml(entry.id)}" aria-label="Edit ${escapeHtml(label)}" title="Edit"${editDisabled ? ' disabled' : ''}>${ICONS.edit}</button></span></div><ol class="queue-steps">${prerequisiteRows}${stepRows || (!prerequisiteRows ? '<li class="queue-step" data-state="complete"><span class="queue-step-marker">✓</span><span>Already satisfied by current inventory</span><span></span></li>' : '')}</ol></li>`;
-    }).join('');
-    const notice = renderPlanNotice(state.planNotice);
-    const queueFinish = isExecutionLocked(status.phase) && Number(status.remainingMs) > 0
-      ? ` · done ~${formatFinishTime(status.remainingMs)}` : '';
-    planResult.innerHTML = `${notice}${state.planQueue.length ? `<div class="queue-header"><h3>Plan queue</h3><span class="queue-total data" id="fr-queue-total">${state.planQueue.length} ${state.planQueue.length === 1 ? 'plan' : 'plans'} · about ${escapeHtml(formatDuration(queueEstimate()))}${queueFinish}</span></div><ol class="queue-list">${queueRows}</ol>` : '<div class="empty">Add an item to begin a queue. Each plan is resolved against the output of plans before it.</div>'}`;
+  renderPlan = () => {
+    const result = state.resolvedQueue; const live = liveState(); const status = state.executorStatus || {}; const labels = Object.fromEntries(state.queueGoals.map((entry) => [entry.id, targetLabel(entry.target)]));
+    const targetRows = result.targets.map((entry, index) => `<section class="queue-plan" data-target-index="${index}"><h3>${escapeHtml(labels[state.queueGoals[index]?.id] || targetLabel(entry.target))} ${entry.ok ? '<span class="badge signal">ready</span>' : '<span class="badge danger">blocked</span>'}</h3>${entry.blocked ? `<p class="banner warning">Blocked: ${escapeHtml(entry.blocked.fact || '')}${entry.blocked.reason ? ` · ${escapeHtml(entry.blocked.reason)}` : ''}</p>` : ''}</section>`).join('');
+    const rows = (result.steps || []).map((step) => { const current = stepStatus(step, live, status); const per = result.perStep?.find((entry) => entry.id === step.id); const depManual = (step.deps || []).map((dep) => result.steps.find((candidate) => candidate.id === dep)).find((dep) => dep?.kind === 'manual'); const eta = depManual && (per?.endMs == null || step.expected?.ms == null) ? `after ${depManual.label || depManual.id}` : per ? `~${formatDuration(Math.max(0, per.endMs - per.startMs))}` : ''; const readyAt = step.kind === 'manual' ? formatFinishTime(result.readyAt?.[step.id] || 0) : null; return `<li class="record-row plan-step" data-step-id="${escapeHtml(step.id)}"><div class="record-top"><strong>${escapeHtml(step.label || actionName(actionFor(step.skillId, step.actionId)) || step.id)}</strong><div class="badges"><span class="badge">${escapeHtml(step.purpose || 'goal')}</span><span class="badge" data-status="${escapeHtml(current)}">${escapeHtml(current)}</span></div></div><p>${escapeHtml(eta)}${step.kind === 'manual' ? ` · ready for you at ~${escapeHtml(readyAt)}` : ''}</p>${step.kind === 'manual' ? `<div class="instruction-card"><strong>Waiting for you</strong><p>${escapeHtml(step.instruction || step.label || 'Complete this step in the game.')}</p></div>` : ''}</li>`; }).join('');
+    planPanel.querySelector('#fr-plan-result').innerHTML = state.queueGoals.length ? `${targetRows}<h3>Timeline</h3><ol class="record-list">${rows || '<li class="empty">No steps required; targets are already satisfied.</li>'}</ol>` : '<div class="empty">Add a target to begin a queue.</div>';
     renderExecutor();
-  }
-
-  planForm.addEventListener('submit', (event) => {
-    event.preventDefault();
-    const locked = isExecutionLocked(state.executorStatus?.phase);
-    const targetType = planTarget?.value || 'qty';
-    const raw = Math.trunc(Number(planQty.value) || 0);
-    let goalPayload;
-    let noticeQty;
-    if (targetType === 'gain') {
-      const gain = Math.max(1, raw || 1);
-      planQty.value = String(gain);
-      noticeQty = gain;
-      goalPayload = { itemId: state.planItemId, qty: 0, target: { type: 'gain', gain } };
-    } else if (targetType === 'level') {
-      const level = Math.min(99, Math.max(2, raw || 2));
-      planQty.value = String(level);
-      noticeQty = level;
-      goalPayload = { itemId: state.planItemId, qty: 0, target: { type: 'level', level } };
-    } else if (targetType === 'time') {
-      const minutes = Math.max(1, raw || 1);
-      planQty.value = String(minutes);
-      noticeQty = minutes;
-      goalPayload = { itemId: state.planItemId, qty: 0, target: { type: 'time', minutes } };
-    } else {
-      const qty = Math.max(1, raw || 1);
-      planQty.value = String(qty);
-      noticeQty = qty;
-      goalPayload = { itemId: state.planItemId, qty };
-    }
-    if (!state.planItemId) {
-      planItem.setCustomValidity?.('Choose an item from the suggestions.');
-      planItem.reportValidity?.();
-      openPlanTargets(planItem.value);
-      return;
-    }
-    try {
-      let projected;
-      if (locked) {
-        const status = state.executorStatus;
-        const { currentPlanIndex } = queueView(status);
-        projected = projectSteps(datasets, api.getState(), [
-          ...remainingFrozenSteps(status),
-          ...pendingPlanSteps(currentPlanIndex),
-        ]);
-      } else {
-        projected = projectPlanState(datasets, api.getState(), state.planQueue.map((entry) => entry.plan));
-      }
-      const plan = resolveGoalPlan(datasets, projected, goalPayload);
-      state.currentPlan = plan;
-      state.recentPlanItemIds = [state.planItemId, ...state.recentPlanItemIds.filter((id) => id !== state.planItemId)].slice(0, 5);
-      if (plan.ok && plan.steps?.length) {
-        state.queueGoals.push({ id: `plan-${state.nextPlanId++}`, ...goalPayload });
-        persistQueue();
-        state.planNotice = null;
-        if (locked) {
-          if (!rebuildPending()) {
-            state.queueGoals.pop();
-            persistQueue();
-          }
-        } else {
-          rebuildQueue();
-          persistQueue();
-          state.executorStatus = { phase: 'idle', currentStep: null, message: 'Plan added to the queue.' };
-        }
-      } else if (plan.ok) {
-        state.planNotice = { itemId: state.planItemId, qty: noticeQty, plan };
-        if (!locked) state.executorStatus = { phase: 'idle', currentStep: null, message: `${labelFor(items, state.planItemId)} is already available in the requested quantity.` };
-      } else {
-        state.queueGoals.push({ id: `plan-${state.nextPlanId++}`, ...goalPayload });
-        persistQueue();
-        state.planNotice = { itemId: state.planItemId, qty: noticeQty, plan, queued: true };
-        if (locked) {
-          if (!rebuildPending()) {
-            state.queueGoals.pop();
-            persistQueue();
-          }
-        } else {
-          rebuildQueue();
-          persistQueue();
-          state.executorStatus = { phase: 'idle', currentStep: null, message: 'Plan queued — it starts automatically once its blocker clears.' };
-        }
-      }
-    } catch (error) {
-      const plan = { ok: false, steps: [], reason: error instanceof Error ? error.message : String(error) };
-      state.currentPlan = plan;
-      state.planNotice = { itemId: state.planItemId, qty: noticeQty, plan };
-      state.executorStatus = { phase: 'error', currentStep: null, message: 'The plan could not be resolved.' };
-    }
-    renderPlan();
-  });
-
-  const promotePlan = (planId, view) => {
-    const previousGoals = [...state.queueGoals];
-    const currentEntry = state.planQueue[view.currentPlanIndex];
-    if (!currentEntry) return false;
-    const currentGoalId = currentEntry.id;
-    const promoted = state.queueGoals.find((goal) => goal.id === planId);
-    if (!promoted) return false;
-    const remaining = state.queueGoals.filter((goal) => goal.id !== planId);
-    const anchor = remaining.findIndex((goal) => goal.id === currentGoalId);
-    if (anchor < 0) return false;
-    remaining.splice(anchor, 0, promoted);
-    state.queueGoals = remaining;
-
-    const completed = state.planQueue.slice(0, view.currentPlanIndex);
-    const completedIds = new Set(completed.map((entry) => entry.id));
-    const tail = resolvePlanQueue(datasets, api.getState(), state.queueGoals.filter((goal) => !completedIds.has(goal.id)));
-    state.planQueue = [...completed, ...tail];
-    state.executionSteps = flattenQueue();
-    const startIndex = completed.reduce((total, entry) => total + (entry.plan?.ok ? entry.plan.steps?.length || 0 : 0), 0);
-    if (startIndex >= state.executionSteps.length) {
-      executor.stop();
-      state.planNotice = null;
-      persistQueue();
-      renderPlan();
-      return true;
-    }
-    if (!executor.jump(state.executionSteps, startIndex)) {
-      state.queueGoals = previousGoals;
-      rebuildPending();
-      state.planNotice = { itemId: '', qty: 0, plan: { ok: false, steps: [], reason: 'The queue advanced while editing. Try again.' } };
-      renderPlan();
-      return false;
-    }
-    state.planNotice = null;
-    persistQueue();
-    renderPlan();
-    return true;
   };
+  const targetLabel = (target) => { if (!target) return 'Target'; if (target.type === 'item' || target.type === 'item-gain') return `${target.type === 'item-gain' ? 'Gain' : 'Reach'} ${target.qty ?? target.gain} ${labelFor(items, target.itemId)}`; if (target.type === 'level') return `${skillNames[target.skillId] || target.skillId} level ${target.level}`; if (target.type === 'xp') return `${skillNames[target.skillId] || target.skillId} XP ${target.xp}`; if (target.type === 'action') return `${actionName(actionFor(target.skillId, target.actionId))} · ${target.runs ? `${target.runs} runs` : `${target.minutes} minutes`}`; if (target.type === 'unlock') return `Unlock ${factLabel(target.fact)}`; return `${target.amount} gold`; };
+  planForm.addEventListener('submit', (event) => { event.preventDefault(); try { const target = makeTarget(); state.queueGoals.push({ id: `plan-${state.nextPlanId++}`, target }); persistQueue(); refreshQueue(); renderPlan(); } catch (error) { state.executorStatus = { ...state.executorStatus, phase: 'error', message: error instanceof Error ? error.message : String(error) }; renderExecutor(); } });
 
-  const refillRareInputs = (status) => {
-    if (state.executorStatus?.phase !== 'paused') return;
-    const currentIndex = Number(status.currentStep);
-    const step = state.executionSteps[currentIndex];
-    const { currentPlanIndex } = queueView(status);
-    const entry = state.planQueue[currentPlanIndex];
-    if (!entry || !step?.rare) return;
-    const live = api.getState();
-    const have = Math.max(0, Number(live?.inventory?.[step.produceItemId]) || 0);
-    if (refillGuard.planId === entry.id && have <= refillGuard.have) refillGuard.stale += 1;
-    else refillGuard = { planId: entry.id, have, stale: 0 };
-    refillGuard.have = have;
-    if (refillGuard.stale >= 8) {
-      stalledPlanIds.add(entry.id);
-      entry.plan = {
-        ...entry.plan,
-        ok: false,
-        reason: 'rare-stalled',
-        blocked: { reason: 'rare-stalled', itemId: entry.itemId, actionName: step.actionName },
-        message: 'No rare drops after 8 restocks.',
-      };
-      entry.estimateMs = 0;
-      state.executionSteps = flattenQueue();
-      const nextIdx = state.executionSteps.findIndex((candidate) => candidate.queuePlanIndex > currentPlanIndex);
-      if (nextIdx < 0) {
-        executor.stop();
-        state.executorStatus = { phase: 'complete', currentStep: null, totalSteps: 0, message: 'Queue done · 1 skipped — rare drops stalled' };
-      } else {
-        executor.jump(state.executionSteps, nextIdx);
-      }
-      renderPlan();
-      return;
-    }
-    const derivedGoal = step.stopWhen?.type === 'time'
-      ? { ...entry, target: { type: 'time', minutes: Math.max(0.01, (Number(status.stepRemainingMs) || 0) / 60000) } }
-      : step.stopWhen?.type === 'xp' ? entry
-        : step.produceItemId === entry.itemId
-          ? { id: entry.id, itemId: entry.itemId, qty: Math.max(have + 1, Number(status.stepInventoryTarget) || 0), target: null }
-          : entry;
-    const plan = resolveGoalPlan(datasets, live, derivedGoal);
-    if (!plan.ok) {
-      state.executorStatus = { ...status, message: `restock blocked — ${blockedShort(plan.blocked || plan.reason)}` };
-      renderExecutor();
-      return;
-    }
-    entry.plan = plan;
-    entry.estimateMs = estimatePlanDuration(plan);
-    state.executionSteps = flattenQueue();
-    const startIdx = state.executionSteps.findIndex((candidate) => candidate.queuePlanIndex >= currentPlanIndex);
-    if (startIdx < 0) {
-      executor.stop();
-      state.executorStatus = { phase: 'complete', currentStep: null, totalSteps: 0, message: 'Queue complete' };
-      renderPlan();
-      return;
-    }
-    executor.jump(state.executionSteps, startIdx);
-    renderPlan();
-  };
+  const executor = createDirectExecutor(api, { liveBlocker: (stateSnapshot, step) => liveBlocker(model, stateSnapshot, step), factSatisfied: (stateSnapshot, fact) => factSatisfied(model, stateSnapshot, fact), onUpdate(status) { state.executorStatus = status; renderPlan?.(); } });
+  const runQueue = () => { if (isExecutionLocked(state.executorStatus?.phase)) return; refreshQueue(); if (state.resolvedQueue.steps.length) { renderPlan(); executor.run(state.resolvedQueue.steps); } };
+  const stopQueue = () => executor.stop();
+  shell.queueControls.querySelector('#fr-run').addEventListener('click', runQueue); shell.queueControls.querySelector('#fr-stop').addEventListener('click', stopQueue); shell.queueControls.querySelector('#fr-clear').addEventListener('click', () => { if (isExecutionLocked(state.executorStatus?.phase)) return; state.queueGoals = []; state.resolvedQueue = { steps: [], targets: [] }; persistQueue(); renderPlan(); });
+  shell.compactStrip.querySelector('#fr-compact-start').addEventListener('click', runQueue); shell.compactStrip.querySelector('#fr-compact-stop').addEventListener('click', stopQueue);
 
-  const rebuildFromLive = () => {
-    const resolved = resolvePlanQueue(datasets, api.getState(), state.queueGoals);
-    state.planQueue = resolved;
-    state.executionSteps = flattenQueue();
-    state.planNotice = null;
-    if (!state.executionSteps.length) {
-      executor.stop();
-      persistQueue();
-      renderPlan();
-      return true;
-    }
-    if (!executor.jump(state.executionSteps, 0)) {
-      state.planNotice = { itemId: '', qty: 0, plan: { ok: false, steps: [], reason: 'The queue advanced while editing. Try again.' } };
-      renderPlan();
-      return false;
-    }
-    persistQueue();
-    renderPlan();
-    return true;
-  };
-
-  planResult.addEventListener('click', (event) => {
-    const control = event.target.closest?.('[data-queue-action][data-plan-id]');
-    if (!control || control.disabled) return;
-    const index = state.queueGoals.findIndex((goal) => goal.id === control.dataset.planId);
-    if (index < 0) return;
-    const view = queueView();
-    const locked = view.locked;
-    const action = control.dataset.queueAction;
-    // First pending plan promoted over the running one keeps the targeted, mostly
-    // non-disruptive preemption path.
-    if (action === 'up' && locked && index - 1 === view.currentPlanIndex) {
-      promotePlan(control.dataset.planId, view);
-      return;
-    }
-    const previousGoals = [...state.queueGoals];
-    // Editing anything at or before the running plan re-resolves the whole queue
-    // from live inventory; pure pending edits stay on the non-disruptive splice.
-    let touchesFrozen;
-    if (action === 'edit') {
-      const goal = state.queueGoals[index];
-      touchesFrozen = locked && index <= view.currentPlanIndex;
-      selectPlanTarget(goal.itemId);
-      const targetType = goal.target?.type || 'qty';
-      if (planTarget) planTarget.value = targetType;
-      applyPlanTargetType(targetType);
-      const editValue = goal.target?.type === 'gain' ? goal.target.gain
-        : goal.target?.type === 'level' ? goal.target.level
-          : goal.target?.type === 'time' ? goal.target.minutes
-            : goal.qty;
-      planQty.value = String(editValue);
-      state.queueGoals.splice(index, 1);
-    } else if (action === 'remove') {
-      touchesFrozen = locked && index <= view.currentPlanIndex;
-      state.queueGoals.splice(index, 1);
-    } else {
-      const target = action === 'up' ? index - 1 : index + 1;
-      if (target < 0 || target >= state.queueGoals.length) return;
-      touchesFrozen = locked && Math.min(index, target) <= view.currentPlanIndex;
-      [state.queueGoals[index], state.queueGoals[target]] = [state.queueGoals[target], state.queueGoals[index]];
-    }
-    persistQueue();
-    state.planNotice = null;
-    if (locked) {
-      const rebuilt = touchesFrozen ? rebuildFromLive() : rebuildPending();
-      if (!rebuilt && touchesFrozen) {
-        state.queueGoals = previousGoals;
-        persistQueue();
-        renderPlan();
-      }
-    } else {
-      rebuildQueue();
-      state.executorStatus = { phase: 'idle', currentStep: null, message: state.planQueue.length ? 'Queue updated.' : 'Queue cleared.' };
-      renderPlan();
-    }
-    if (action === 'edit') planItem.focus?.();
-  });
-
-  const startQueue = () => {
-    if (isExecutionLocked(state.executorStatus?.phase) || !state.planQueue.length) return;
-    stalledPlanIds.clear();
-    rebuildQueue();
-    state.executionSteps = flattenQueue();
-    if (state.executionSteps.length) executor.run(state.executionSteps);
-  };
-  runButton.addEventListener('click', startQueue);
-  resumeButton.addEventListener('click', () => executor.resume());
-  stopButton.addEventListener('click', () => executor.stop());
-  compactStart?.addEventListener('click', startQueue);
-  compactResume?.addEventListener('click', () => executor.resume());
-  compactStop?.addEventListener('click', () => executor.stop());
-  clearButton.addEventListener('click', () => {
-    const locked = isExecutionLocked(state.executorStatus?.phase);
-    if (locked) {
-      const { frozenIds } = queueView(state.executorStatus);
-      state.queueGoals = state.queueGoals.filter((goal) => frozenIds.has(goal.id));
-      persistQueue();
-      rebuildPending();
-      return;
-    }
-    state.queueGoals = [];
-    persistQueue();
-    state.planQueue = [];
-    state.executionSteps = [];
-    state.currentPlan = null;
-    state.planNotice = null;
-    state.executorStatus = { phase: 'idle', currentStep: null, message: 'Queue cleared.' };
-    renderPlan();
-  });
-  detail.addEventListener('click', (event) => {
-    const target = event.target.closest?.('[data-plan-item]');
-    if (!target) return;
-    selectPlanTarget(target.dataset.planItem);
-    shell.selectTab(2, true);
-  });
-
-  restoreQueue();
-  renderItemList();
-  renderItemDetail();
-  renderSkillTable();
-  renderPlan();
-  return { datasets, indexes, state, executor, renderItemList, renderItemDetail, renderSkillTable, renderPlan };
+  const restore = () => { try { const parsed = JSON.parse(storage?.getItem(QUEUE_STORAGE_KEY) || 'null'); if (Array.isArray(parsed?.goals)) { state.queueGoals = parsed.goals.filter((entry) => entry?.target).map((entry) => ({ id: entry.id || `plan-${state.nextPlanId++}`, target: entry.target })); state.nextPlanId = Math.max(state.nextPlanId, Number(parsed.nextPlanId) || 1); } } catch { /* optional */ } refreshQueue(); };
+  const restoreAndRender = () => { restore(); renderItemList(); renderItemDetail(); renderSkillTable(); renderPlan(); };
+  updateTargetFields(); restoreAndRender();
+  return { model, indexedModel: model, datasets, indexes, state, executor, renderItemList, renderItemDetail, renderSkillTable, renderPlan, refreshQueue };
 }
 
-export async function fetchDatasets(fetchRef) {
-  const entries = await Promise.all(DATA_FILES.map(async ([key, filename]) => {
-    const response = await fetchRef(`/companion/data/${filename}`);
-    if (!response?.ok) throw new Error(`${filename} returned HTTP ${response?.status ?? 'unknown'}`);
-    try {
-      return [key, await response.json()];
-    } catch (error) {
-      throw new Error(`${filename} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }));
-  return Object.fromEntries(entries);
+function targetLabelFallback(target) {
+  return target?.type || 'target';
+}
+
+export async function fetchModel(fetchRef) {
+  const response = await fetchRef('/companion/data/model.json');
+  if (!response?.ok) throw new Error(`model.json returned HTTP ${response?.status ?? 'unknown'}`);
+  try { return await response.json(); } catch (error) { throw new Error(`model.json is not valid JSON: ${error instanceof Error ? error.message : String(error)}`); }
 }
 
 export async function bootOverlay(options = {}) {
@@ -2170,9 +1141,9 @@ export async function bootOverlay(options = {}) {
   const shell = createOverlayShell(documentRef);
   try {
     const api = await waitForCompanion(windowRef, options.poll);
-    const datasets = await fetchDatasets(fetchRef);
-    const app = createApplication(shell, datasets, api);
-    return { shell, app, api, datasets };
+    const model = await fetchModel(fetchRef);
+    const app = createApplication(shell, model, api);
+    return { shell, app, api, model, datasets: model };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const timeout = message.includes('did not become available');
@@ -2181,6 +1152,4 @@ export async function bootOverlay(options = {}) {
   }
 }
 
-if (typeof window !== 'undefined' && typeof document !== 'undefined') {
-  queueMicrotask(() => { void bootOverlay(); });
-}
+if (typeof window !== 'undefined' && typeof document !== 'undefined') queueMicrotask(() => { void bootOverlay(); });

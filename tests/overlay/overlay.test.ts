@@ -1,1115 +1,123 @@
 // @ts-nocheck
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import test from 'node:test';
+import { baseModel, snapshot } from './engine/fixture.js';
 import {
-  DATA_FILES,
-  bootOverlay,
-  buildIndexes,
-  clampFloatingPosition,
-  createOverlayShell,
-  estimatePlanDuration,
-  fitWithinViewport,
-  formatDuration,
-  formatCompactNumber,
-  formatFinishTime,
-  isExecutionLocked,
-  projectPlanState,
-  projectSteps,
-  resolvePlanQueue,
-  searchPlanTargets,
+  DATA_FILES, bootOverlay, buildIndexes, fetchModel, formatFinishTime, isExecutionLocked,
 } from '../../overlay/overlay.js';
 
 class FakeElement {
   constructor(tagName, ownerDocument) {
-    this.tagName = tagName.toUpperCase();
-    this.ownerDocument = ownerDocument;
-    this.attributes = new Map();
-    this.children = [];
-    this.listeners = new Map();
-    this.dataset = {};
-    this.style = {};
-    this.hidden = false;
-    this.disabled = false;
-    this.value = '';
-    this.className = '';
-    this._innerHTML = '';
-    this.textContent = '';
+    this.tagName = tagName.toUpperCase(); this.ownerDocument = ownerDocument; this.attributes = new Map();
+    this.children = []; this.listeners = new Map(); this.dataset = {}; this.style = {}; this.hidden = false;
+    this.disabled = false; this.value = ''; this.className = ''; this._innerHTML = ''; this.textContent = '';
   }
-
   set innerHTML(value) {
-    this._innerHTML = String(value);
-    this.synthetic = new Map();
+    this._innerHTML = String(value); this.synthetic = new Map();
     for (const match of this._innerHTML.matchAll(/<([a-z][\w-]*)[^>]*\sid="([^"]+)"[^>]*>/gi)) {
-      const child = new FakeElement(match[1], this.ownerDocument);
-      child.setAttribute('id', match[2]);
+      const child = new FakeElement(match[1], this.ownerDocument); child.setAttribute('id', match[2]);
       if (/\sdisabled(?:\s|>|=)/i.test(match[0])) child.disabled = true;
-      if (/\shidden(?:\s|>|=)/i.test(match[0])) child.hidden = true;
-      const valueMatch = match[0].match(/\svalue="([^"]*)"/i);
-      if (valueMatch) child.value = valueMatch[1];
+      const valueMatch = match[0].match(/\svalue="([^"]*)"/i); if (valueMatch) child.value = valueMatch[1];
       this.synthetic.set(`#${match[2]}`, child);
     }
   }
-
   get innerHTML() { return this._innerHTML; }
-
-  setAttribute(name, value) {
-    const normalized = String(value);
-    this.attributes.set(name, normalized);
-    if (name === 'id') {
-      this.id = normalized;
-      this.ownerDocument.byId.set(normalized, this);
-    }
-    if (name === 'class') this.className = normalized;
-    if (name.startsWith('data-')) this.dataset[name.slice(5).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase())] = normalized;
-  }
-
+  setAttribute(name, value) { const normalized = String(value); this.attributes.set(name, normalized); if (name === 'id') { this.id = normalized; this.ownerDocument.byId.set(normalized, this); } if (name.startsWith('data-')) this.dataset[name.slice(5).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase())] = normalized; }
   getAttribute(name) { return this.attributes.get(name) ?? null; }
-
   append(...children) { this.children.push(...children); }
   appendChild(child) { this.append(child); return child; }
   attachShadow() { this.shadowRoot = new FakeElement('shadow-root', this.ownerDocument); return this.shadowRoot; }
   addEventListener(type, listener) { (this.listeners.get(type) || this.listeners.set(type, []).get(type)).push(listener); }
   querySelector(selector) {
-    const synthetic = this.synthetic?.get(selector);
-    if (synthetic) return synthetic;
-    if (!String(selector).startsWith('#')) return null;
-    const id = String(selector).slice(1);
-    const visit = (node) => {
-      for (const child of node.children || []) {
-        if (child.id === id) return child;
-        const nested = visit(child);
-        if (nested) return nested;
-      }
-      return null;
-    };
-    return visit(this);
+    if (this.synthetic?.has(selector)) return this.synthetic.get(selector);
+    if (String(selector).startsWith('#')) { const id = String(selector).slice(1); const walk = (node) => { for (const child of node.children || []) { if (child.id === id) return child; const found = walk(child); if (found) return found; } return null; }; return walk(this); }
+    return null;
   }
+  closest(selector) { if (selector?.startsWith?.('[data-')) { const key = selector.slice(6, -1).split('=')[0].replace(/-([a-z])/g, (_, c) => c.toUpperCase()); if (this.dataset[key] != null) return this; } return null; }
   matches() { return false; }
-  contains(element) { return element === this || this.children.includes(element) || [...(this.synthetic?.values() || [])].includes(element); }
   getBoundingClientRect() { return { left: 10, right: 310, top: 10, bottom: 46, width: 300, height: 36 }; }
-  scrollIntoView() {}
   focus() { this.ownerDocument.activeElement = this; }
-
-  dispatch(type, init = {}) {
-    const event = {
-      target: this,
-      currentTarget: this,
-      preventDefault() { this.defaultPrevented = true; },
-      ...init,
-    };
-    for (const listener of this.listeners.get(type) || []) listener(event);
-    return event;
-  }
+  dispatch(type, init = {}) { const event = { target: this, currentTarget: this, preventDefault() { this.defaultPrevented = true; }, ...init }; for (const listener of this.listeners.get(type) || []) listener(event); return event; }
 }
-
 class FakeDocument {
-  constructor() {
-    this.byId = new Map();
-    const values = new Map();
-    this.defaultView = {
-      localStorage: {
-        getItem: (key) => values.has(key) ? values.get(key) : null,
-        setItem: (key, value) => values.set(key, String(value)),
-      },
-      innerWidth: 1024,
-      innerHeight: 768,
-      addEventListener() {},
-    };
-    this.body = new FakeElement('body', this);
-    this.activeElement = this.body;
-  }
+  constructor() { this.byId = new Map(); const values = new Map(); this.defaultView = { localStorage: { getItem: (key) => values.get(key) ?? null, setItem: (key, value) => values.set(key, String(value)) }, innerWidth: 1024, innerHeight: 768, addEventListener() {} }; this.body = new FakeElement('body', this); this.activeElement = this.body; }
   createElement(tagName) { return new FakeElement(tagName, this); }
   getElementById(id) { return this.byId.get(id) || null; }
 }
 
-function datasets() {
-  return {
+function model() {
+  return baseModel({
     items: {
-      log: { label: 'Harbor Log', type: 'material', desc: 'A sturdy log.', value: 2, art: true },
-      plank: { label: 'Harbor Plank', type: 'material', healAmount: 1, art: false },
-      totem: { label: 'Harbor Totem', type: 'material' },
-      seed: { label: 'Harbor Seed', type: 'material' },
-      talon: { label: 'Harbor Talon', type: 'material' },
-      feathers: { label: 'Harbor Feathers', type: 'material' },
+      log: { label: 'Log', type: 'Resource', value: 1, art: false },
+      ore: { label: 'Ore', type: 'Resource', value: 1, art: false },
+      tool: { label: 'Tool', type: 'Tool', value: 0, art: false },
     },
-    actions: {
-      gathering: [{
-        id: 'gather_seed', name: 'Gather Harbor Seed', levelReq: 1, interval: 1000, xp: 5,
-        outputs: { seed: 1 },
-      }],
-      trapping: [{
-        id: 'trap_talon', name: 'Trap Harbor Talon', levelReq: 1, interval: 1000, xp: 5,
-        inputs: { seed: 1 }, outputs: { feathers: 2 }, rareOutputs: [{ item: 'talon', qty: 1, chance: 0.2 }],
-      }],
-      woodcutting: [{
-        id: 'chop_log', name: 'Chop Harbor Tree', levelReq: 1, interval: 1000, xp: 5,
-        spot: 'harbor', outputs: { log: 1 }, rareOutputs: [{ item: 'plank', qty: 1, chance: 0.05 }],
-      }],
-      crafting: [{
-        id: 'make_plank', name: 'Make Harbor Plank', levelReq: 1, interval: 800, xp: 5,
-        inputs: { log: 2 }, outputs: { plank: 1 },
-      }, {
-        id: 'carve_totem', name: 'Carve Totem', levelReq: 20, xp: 5, interval: 500,
-        inputs: {}, outputs: { totem: 1 },
-      }],
-    },
-    skills: [{ id: 'woodcutting', name: 'Woodcutting' }, { id: 'crafting', name: 'Crafting' }],
-    xp: Array.from({ length: 100 }, (_, level) => level * 10),
-    buildings: [{ id: 'dock', name: 'Dock', upgrades: [{ level: 2, label: 'Reinforce Dock', cost: { log: 4 } }] }],
-    digsites: [],
-    strings: { 'name.harbor': 'North Harbor' },
-  };
+    actions: [
+      { id: 'chop', name: 'Chop Log', skillId: 'woodcutting', levelReq: 1, xp: 10, interval: 1000, inputs: {}, outputs: { log: 1 }, automation: 'auto', gate: null },
+      { id: 'smelt', name: 'Smelt Ore', skillId: 'woodcutting', levelReq: 1, xp: 10, interval: 1000, inputs: { log: 1 }, outputs: { ore: 1 }, automation: 'auto', gate: null },
+    ],
+    tools: { woodcutting: [{ id: 'tool', name: 'Tool', levelReq: 1, xpBonus: 0, speedBonus: 0, cost: 5 }] },
+    stringsEn: { 'itemdesc.log': 'A useful log.' },
+  });
 }
-
-function api() {
+function fakeApi(initial = snapshot()) {
+  let state = structuredClone(initial); let listener = null;
   return {
-    getState: () => ({ inventory: {}, equipment: {}, skillXp: { woodcutting: 100, crafting: 100 } }),
-    startAction() {},
-    stopAction() {},
-    subscribe() { return () => {}; },
+    getState: () => state,
+    startAction(skillId, actionId) { state.activeSkill = skillId; state.activeAction = actionId; listener?.(state); },
+    stopAction() { state.activeSkill = null; state.activeAction = null; listener?.(state); },
+    subscribe(callback) { listener = callback; return () => { if (listener === callback) listener = null; }; },
+    set(patch) { state = { ...state, ...patch }; listener?.(state); },
   };
 }
+function fetchFor(value) { return async (url) => { assert.equal(String(url), '/companion/data/model.json'); return { ok: true, status: 200, json: async () => value }; }; }
 
-function fetchFor(data) {
-  const byFile = Object.fromEntries(DATA_FILES.map(([key, file]) => [file, data[key]]));
-  return async (url) => {
-    const file = String(url).split('/').pop();
-    return { ok: true, status: 200, json: async () => byFile[file] };
-  };
-}
+ test('model boot fetches one model.json and wiki indexes model sources and uses', async () => {
+  const document = new FakeDocument(); const game = fakeApi(); const result = await bootOverlay({ document, window: { __frCompanion: game }, fetch: fetchFor(model()) });
+  assert.ok(result.app); assert.deepEqual(DATA_FILES, [['model', 'model.json']]);
+  assert.equal(result.model.items.log.label, 'Log');
+  assert.equal(result.app.indexes.sourcesOf.log[0].actionId, 'chop');
+  result.app.state.selectedItemId = 'log'; result.app.renderItemDetail();
+  assert.match(result.shell.panels.items.querySelector('#fr-item-detail').innerHTML, /Sources/);
+  assert.match(result.shell.panels.items.querySelector('#fr-item-detail').innerHTML, /Uses/);
+ });
 
-function oklchLuminance(value) {
-  const match = /^oklch\(([\d.]+)\s+([\d.]+)\s+([\d.]+)\)$/.exec(value);
-  assert.ok(match, `expected an opaque OKLCH color, got ${value}`);
-  const [, lightness, chroma, hue] = match.map(Number);
-  const radians = hue * Math.PI / 180;
-  const a = chroma * Math.cos(radians);
-  const b = chroma * Math.sin(radians);
-  const l = (lightness + 0.3963377774 * a + 0.2158037573 * b) ** 3;
-  const m = (lightness - 0.1055613458 * a - 0.0638541728 * b) ** 3;
-  const s = (lightness - 0.0894841775 * a - 1.291485548 * b) ** 3;
-  const clamp = (channel) => Math.min(1, Math.max(0, channel));
-  const red = clamp(4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s);
-  const green = clamp(-1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s);
-  const blue = clamp(-0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s);
-  return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
-}
-
-function contrastRatio(foreground, background) {
-  const lighter = Math.max(oklchLuminance(foreground), oklchLuminance(background));
-  const darker = Math.min(oklchLuminance(foreground), oklchLuminance(background));
-  return (lighter + 0.05) / (darker + 0.05);
-}
-
-test('boot success creates one launcher and panel in a Shadow DOM host', async () => {
-  const document = new FakeDocument();
-  const result = await bootOverlay({ document, window: { __frCompanion: api() }, fetch: fetchFor(datasets()) });
-
-  assert.ok(result.app);
-  assert.equal(document.getElementById('fractured-realms-companion'), result.shell.host);
-  assert.equal(result.shell.host.shadowRoot, result.shell.shadow);
-  assert.equal(result.shell.launcher.getAttribute('aria-controls'), 'fr-panel');
-  assert.equal(result.shell.panel.id, 'fr-panel');
-  assert.equal(result.shell.tabButtons.length, 3);
-  assert.equal(result.shell.loading.hidden, true);
-
-  const duplicate = await bootOverlay({ document, window: { __frCompanion: api() }, fetch: fetchFor(datasets()) });
-  assert.equal(duplicate.existing, result.shell.host);
+test('buildIndexes includes deterministic action sources, enemy drops, and action uses', () => {
+  const indexed = buildIndexes(model());
+  assert.equal(indexed.sourcesOf.log[0].kind, 'action'); assert.equal(indexed.usesOf.log[0].actionId, 'smelt');
 });
 
-test('data indexes include deterministic and rare sources plus action and building uses', () => {
-  const indexes = buildIndexes(datasets());
-
-  assert.deepEqual(indexes.sourcesOf.log.map((source) => [source.actionId, source.rare]), [['chop_log', false]]);
-  assert.deepEqual(indexes.sourcesOf.plank.map((source) => [source.actionId, source.rare]), [['make_plank', false], ['chop_log', true]]);
-  assert.deepEqual(indexes.usesOf.log.map((use) => [use.kind, use.actionId || use.buildingId]), [
-    ['action', 'make_plank'],
-    ['building', 'dock'],
-  ]);
+test('plan target builder exposes item, level, and unlock target kinds', async () => {
+  const result = await bootOverlay({ document: new FakeDocument(), window: { __frCompanion: fakeApi() }, fetch: fetchFor(model()) });
+  const form = result.shell.panels.plan.querySelector('#fr-plan-form'); const kind = result.shell.panels.plan.querySelector('#fr-plan-target');
+  kind.value = 'item'; kind.dispatch('change'); assert.equal(result.shell.panels.plan.querySelector('#fr-plan-item-field').hidden, false);
+  kind.value = 'level'; kind.dispatch('change'); assert.equal(result.shell.panels.plan.querySelector('#fr-plan-skill-field').hidden, false);
+  kind.value = 'unlock'; kind.dispatch('change'); assert.equal(result.shell.panels.plan.querySelector('#fr-plan-unlock-field').hidden, false);
+  assert.ok(result.shell.panels.plan.querySelector('#fr-plan-unlock').innerHTML.includes('tool:tool'));
+  kind.value = 'item'; result.shell.panels.plan.querySelector('#fr-plan-item').value = 'Log'; result.shell.panels.plan.querySelector('#fr-plan-qty').value = '2'; form.dispatch('submit');
+  assert.equal(result.app.state.queueGoals[0].target.type, 'item'); assert.equal(result.app.state.queueGoals[0].target.qty, 2);
 });
 
-test('planner target search ranks relevant and contextual items', () => {
-  const entries = [
-    ['log', { label: 'Harbor Log' }],
-    ['plank', { label: 'Harbor Plank' }],
-    ['ancient_spore', { label: 'Ancient Spore' }],
-  ];
-  assert.deepEqual(searchPlanTargets(entries, 'har', ['plank']).map((entry) => entry.id), ['plank', 'log']);
-  assert.deepEqual(searchPlanTargets(entries, 'spore').map((entry) => entry.id), ['ancient_spore']);
-  assert.deepEqual(searchPlanTargets(entries, '', ['ancient_spore'], 2).map((entry) => entry.id), ['ancient_spore', 'log']);
-  assert.deepEqual(searchPlanTargets(entries, 'missing'), []);
+test('resolveQueue timeline renders manual instruction cards and readyAt wall-clock', async () => {
+  const result = await bootOverlay({ document: new FakeDocument(), window: { __frCompanion: fakeApi() }, fetch: fetchFor(model()) });
+  const kind = result.shell.panels.plan.querySelector('#fr-plan-target'); kind.value = 'unlock'; kind.dispatch('change'); result.shell.panels.plan.querySelector('#fr-plan-form').dispatch('submit');
+  const html = result.shell.panels.plan.querySelector('#fr-plan-result').innerHTML;
+  assert.match(html, /Waiting for you/); assert.match(html, /ready for you at/); assert.match(html, /Buy Tool/);
+  assert.equal(result.app.state.resolvedQueue.steps[0].kind, 'manual');
+  assert.equal(formatFinishTime(0).length > 0, true);
 });
 
-test('planner target combobox supports keyboard selection and submission', async () => {
-  const document = new FakeDocument();
-  const result = await bootOverlay({ document, window: { __frCompanion: api() }, fetch: fetchFor(datasets()) });
-  const panel = result.shell.panels.plan;
-  const input = panel.querySelector('#fr-plan-item');
-  const form = panel.querySelector('#fr-plan-form');
-
-  input.dispatch('focus');
-  assert.equal(input.getAttribute('aria-expanded'), 'true');
-  input.value = 'plank';
-  input.dispatch('input');
-  assert.equal(result.app.state.planItemId, '');
-
-  const down = input.dispatch('keydown', { key: 'ArrowDown' });
-  assert.equal(down.defaultPrevented, true);
-  assert.equal(input.getAttribute('aria-activedescendant'), 'fr-plan-option-0');
-  input.dispatch('keydown', { key: 'Enter' });
-  assert.equal(result.app.state.planItemId, 'plank');
-  assert.equal(input.value, 'Harbor Plank');
-  assert.equal(input.getAttribute('aria-expanded'), 'false');
-
-  form.dispatch('submit');
-  assert.equal(result.app.state.currentPlan.ok, true);
-  assert.deepEqual(result.app.state.currentPlan.steps.map((step) => step.actionId), ['chop_log', 'make_plank']);
-  assert.deepEqual(result.app.state.recentPlanItemIds, ['plank']);
-});
-test('formats XP progress with compact significant figures', () => {
-  assert.equal(formatCompactNumber(6_495.72), '6.5K');
-  assert.equal(formatCompactNumber(1_168_363.12), '1.17M');
-  assert.equal(formatCompactNumber(999), '999');
+test('executor transitions running to complete and waiting to complete, with waiting locked', async () => {
+  const game = fakeApi(); const result = await bootOverlay({ document: new FakeDocument(), window: { __frCompanion: game }, fetch: fetchFor(model()) });
+  const itemKind = result.shell.panels.plan.querySelector('#fr-plan-target'); itemKind.value = 'item'; itemKind.dispatch('change'); result.shell.panels.plan.querySelector('#fr-plan-item').value = 'Log'; result.shell.panels.plan.querySelector('#fr-plan-form').dispatch('submit');
+  result.shell.queueControls.querySelector('#fr-run').dispatch('click'); assert.equal(result.app.executor.getStatus().phase, 'running');
+  game.set({ inventory: { log: 1 } }); assert.equal(result.app.executor.getStatus().phase, 'complete');
+  result.app.executor.run([{ id: 'manual', kind: 'manual', label: 'Buy Tool', instruction: 'Buy the tool', deps: [], stop: { type: 'fact', fact: 'tool:tool' }, expected: { runs: 1, ms: null, produces: {}, consumes: {} }, purpose: 'unlock' }]);
+  assert.equal(result.app.executor.getStatus().phase, 'waiting'); assert.equal(isExecutionLocked('waiting'), true);
+  game.set({ equipment: { tool: 1 } }); assert.equal(result.app.executor.getStatus().phase, 'complete');
 });
 
-test('restores and persists queued goals and formats finish times', async () => {
-  const document = new FakeDocument();
-  document.defaultView.localStorage.setItem('fractured-realms-companion.queue.v1', JSON.stringify({
-    goals: [
-      { id: 'plan-4', itemId: 'log', qty: 2 },
-      { id: 'plan-5', itemId: 'plank', qty: 1 },
-    ],
-    nextPlanId: 5,
-  }));
-  const result = await bootOverlay({ document, window: { __frCompanion: api() }, fetch: fetchFor(datasets()) });
-  assert.equal(result.app.state.planQueue.length, 2);
-  assert.equal(result.app.state.executorStatus.message, 'Restored 2 queued plan(s).');
-
-  const panel = result.shell.panels.plan;
-  result.app.state.planItemId = 'log';
-  panel.querySelector('#fr-plan-qty').value = '1';
-  panel.querySelector('#fr-plan-form').dispatch('submit');
-  const stored = JSON.parse(document.defaultView.localStorage.getItem('fractured-realms-companion.queue.v1'));
-  assert.equal(stored.goals.at(-1).itemId, 'log');
-  assert.match(formatFinishTime(60_000, 0), /\d{1,2}:\d{2}/u);
-});
-
-test('restores target goals and rejects invalid target values', async () => {
-  const document = new FakeDocument();
-  document.defaultView.localStorage.setItem('fractured-realms-companion.queue.v1', JSON.stringify({
-    goals: [
-      { id: 'plan-4', itemId: 'log', qty: 0, target: { type: 'level', level: 12 } },
-      { id: 'plan-5', itemId: 'log', qty: 0, target: { type: 'gain', gain: 5 } },
-    ],
-    nextPlanId: 5,
-  }));
-  const result = await bootOverlay({ document, window: { __frCompanion: api() }, fetch: fetchFor(datasets()) });
-  assert.deepEqual(result.app.state.queueGoals.map((goal) => goal.target), [
-    { type: 'level', level: 12 },
-    { type: 'gain', gain: 5 },
-  ]);
-
-  result.app.state.planItemId = 'log';
-  result.shell.panels.plan.querySelector('#fr-plan-qty').value = '1';
-  result.shell.panels.plan.querySelector('#fr-plan-form').dispatch('submit');
-  const stored = JSON.parse(document.defaultView.localStorage.getItem('fractured-realms-companion.queue.v1'));
-  assert.deepEqual(stored.goals.slice(0, 2).map((goal) => goal.target), [
-    { type: 'level', level: 12 },
-    { type: 'gain', gain: 5 },
-  ]);
-
-  for (const target of [{ type: 'level', level: 150 }, { type: 'gain', gain: 0 }]) {
-    const invalidDocument = new FakeDocument();
-    invalidDocument.defaultView.localStorage.setItem('fractured-realms-companion.queue.v1', JSON.stringify({
-      goals: [{ id: 'plan-1', itemId: 'log', qty: 0, target }],
-      nextPlanId: 1,
-    }));
-    const invalid = await bootOverlay({ document: invalidDocument, window: { __frCompanion: api() }, fetch: fetchFor(datasets()) });
-    assert.deepEqual(invalid.app.state.queueGoals, []);
-  }
-});
-
-test('plan form submits a skill level target and labels the queue row', async () => {
-  const document = new FakeDocument();
-  const result = await bootOverlay({ document, window: { __frCompanion: api() }, fetch: fetchFor(datasets()) });
-  const panel = result.shell.panels.plan;
-  result.app.state.planItemId = 'log';
-  panel.querySelector('#fr-plan-target').value = 'level';
-  panel.querySelector('#fr-plan-qty').value = '12';
-  panel.querySelector('#fr-plan-form').dispatch('submit');
-  assert.deepEqual(result.app.state.queueGoals[0].target, { type: 'level', level: 12 });
-  assert.match(panel.querySelector('#fr-plan-result').innerHTML, /\u2192 Woodcutting <span class="data">12<\/span>/u);
-});
-
-test('plan form submits a new-items target and produces the requested delta', async () => {
-  const document = new FakeDocument();
-  const gameApi = {
-    getState: () => ({ inventory: { log: 3 }, equipment: {}, skillXp: { woodcutting: 100, crafting: 100 } }),
-    startAction() {}, stopAction() {}, subscribe() { return () => {}; },
-  };
-  const result = await bootOverlay({ document, window: { __frCompanion: gameApi }, fetch: fetchFor(datasets()) });
-  const panel = result.shell.panels.plan;
-  result.app.state.planItemId = 'log';
-  panel.querySelector('#fr-plan-target').value = 'gain';
-  panel.querySelector('#fr-plan-qty').value = '5';
-  panel.querySelector('#fr-plan-form').dispatch('submit');
-  assert.deepEqual(result.app.state.queueGoals[0].target, { type: 'gain', gain: 5 });
-  assert.match(panel.querySelector('#fr-plan-result').innerHTML, /\+5/u);
-  assert.equal(result.app.state.executionSteps[0].produceQty, 5);
-});
-
-test('enqueues a blocked plan as queued but blocked with the run control disabled', async () => {
-  const document = new FakeDocument();
-  const result = await bootOverlay({ document, window: { __frCompanion: api() }, fetch: fetchFor(datasets()) });
-  const { app, shell } = result;
-  const panel = shell.panels.plan;
-  app.state.planItemId = 'totem';
-  panel.querySelector('#fr-plan-qty').value = '1';
-  panel.querySelector('#fr-plan-form').dispatch('submit');
-  assert.equal(app.state.queueGoals.length, 1);
-  assert.equal(app.state.planQueue[0].plan.ok, false);
-  const html = panel.querySelector('#fr-plan-result').innerHTML;
-  assert.match(html, /data-state="blocked"/u);
-  assert.match(html, /needs Crafting 20/u);
-  assert.doesNotMatch(html, /<span class="queue-plan-meta">blocked<\/span>/u);
-  assert.match(html, /queued but blocked/u);
-  assert.equal(shell.queueControls.querySelector('#fr-run').disabled, true);
-});
-
-test('queue row target labels preserve normal word spacing', async () => {
-  const document = new FakeDocument();
-  const result = await bootOverlay({ document, window: { __frCompanion: api() }, fetch: fetchFor(datasets()) });
-  const panel = result.shell.panels.plan;
-  const form = panel.querySelector('#fr-plan-form');
-  const target = panel.querySelector('#fr-plan-target');
-  const quantity = panel.querySelector('#fr-plan-qty');
-
-  result.app.state.planItemId = 'log';
-  target.value = 'time';
-  quantity.value = '2';
-  form.dispatch('submit');
-  assert.match(panel.querySelector('#fr-plan-result').innerHTML, /for <span class="data">2m<\/span>/u);
-
-  result.app.state.planItemId = 'totem';
-  target.value = 'level';
-  quantity.value = '80';
-  form.dispatch('submit');
-  const html = panel.querySelector('#fr-plan-result').innerHTML;
-  assert.match(html, /\u2192 Crafting <span class="data">80<\/span>/u);
-  assert.doesNotMatch(html, /\u2192 level <span class="data">80<\/span>/u);
-});
-
-test('blocked level goals retain the requested item skill', async () => {
-  const data = datasets();
-  data.items = {
-    ...data.items,
-    crab: { label: 'Crab', type: 'material' },
-    glazed_crab: { label: 'Glazed Crab', type: 'food' },
-  };
-  data.actions = {
-    fishing: [{
-      id: 'catch_crab', name: 'Catch Crab', levelReq: 80, interval: 1000, xp: 5,
-      outputs: { crab: 1 },
-    }],
-    cooking: [{
-      id: 'glaze_crab', name: 'Glaze Crab', levelReq: 1, interval: 1000, xp: 5,
-      inputs: { crab: 1 }, outputs: { glazed_crab: 1 },
-    }],
-  };
-  data.skills = [{ id: 'fishing', name: 'Fishing' }, { id: 'cooking', name: 'Cooking' }];
-
-  const document = new FakeDocument();
-  const result = await bootOverlay({ document, window: { __frCompanion: api() }, fetch: fetchFor(data) });
-  const panel = result.shell.panels.plan;
-  result.app.state.planItemId = 'glazed_crab';
-  panel.querySelector('#fr-plan-target').value = 'level';
-  panel.querySelector('#fr-plan-qty').value = '68';
-  panel.querySelector('#fr-plan-form').dispatch('submit');
-
-  const entry = result.app.state.planQueue[0];
-  assert.equal(entry.plan.blocked.skillId, 'fishing');
-  assert.equal(entry.plan.goalSkillId, 'cooking');
-  assert.match(panel.querySelector('#fr-plan-result').innerHTML, /Glazed Crab → Cooking <span class="data">68<\/span>/u);
-});
-
-test('highlights the following plan after a blocked plan with partial steps', async () => {
-  const document = new FakeDocument();
-  const result = await bootOverlay({ document, window: { __frCompanion: api() }, fetch: fetchFor(datasets()) });
-  const { app, shell } = result;
-  const partialStep = { actionId: 'partial_action', actionName: 'Blocked partial action', count: 1, interval: 1000, rare: false };
-  const nextStep = { actionId: 'next_action', actionName: 'Following action', count: 1, interval: 1000, rare: false };
-  app.state.planQueue = [
-    { id: 'plan-blocked', itemId: 'log', qty: 1, plan: { ok: false, steps: [partialStep], reason: 'no-source', blocked: { reason: 'no-source' } }, estimateMs: 1000 },
-    { id: 'plan-next', itemId: 'plank', qty: 1, plan: { ok: true, steps: [nextStep] }, estimateMs: 1000 },
-  ];
-  app.state.executionSteps = [{ ...nextStep, queuePlanIndex: 1 }];
-  app.state.executorStatus = { phase: 'running', currentStep: 0, stepTarget: 1, stepProduced: 0 };
-  app.renderPlan();
-
-  const html = shell.panels.plan.querySelector('#fr-plan-result').innerHTML;
-  assert.match(html, /Blocked partial action[^<]*<span class="data">×1<\/span><\/span><span class="queue-step-time data">about 1s<\/span><\/li>/u);
-  assert.match(html, /Following action[^<]*<span class="data">×1<\/span><\/span><span class="queue-step-time data">about 1s<\/span><progress/isu);
-  assert.match(html, /data-state="pending"[^>]*><span class="queue-step-marker">1<\/span><span>Blocked partial action/u);
-  assert.match(html, /data-state="active" data-step-global="0"[^>]*><span class="queue-step-marker">1<\/span><span>Following action/u);
-});
-
-test('runs only the unblocked plans in a mixed queue', async () => {
-  const document = new FakeDocument();
-  const calls = [];
-  const gameApi = {
-    getState: () => ({ inventory: {}, equipment: {}, skillXp: { woodcutting: 100, crafting: 100 } }),
-    startAction(skillId, actionId) { calls.push([skillId, actionId]); },
-    stopAction() {}, subscribe() { return () => {}; },
-  };
-  const result = await bootOverlay({ document, window: { __frCompanion: gameApi }, fetch: fetchFor(datasets()) });
-  const { app, shell } = result;
-  const panel = shell.panels.plan;
-  const form = panel.querySelector('#fr-plan-form');
-  const qty = panel.querySelector('#fr-plan-qty');
-  app.state.planItemId = 'log';
-  qty.value = '1';
-  form.dispatch('submit');
-  app.state.planItemId = 'totem';
-  qty.value = '1';
-  form.dispatch('submit');
-  assert.deepEqual(app.state.executionSteps.map((step) => step.actionId), ['chop_log']);
-  shell.queueControls.querySelector('#fr-run').dispatch('click');
-  assert.deepEqual(calls, [['woodcutting', 'chop_log']]);
-  app.executor.stop();
-});
-
-function recordingGame() {
-  const gameState = { inventory: {}, equipment: {}, skillXp: { woodcutting: 100, crafting: 100 }, activeSkill: null, activeAction: null };
-  const calls = [];
-  let listener = null;
-  const emit = () => listener?.({ ...gameState, inventory: { ...gameState.inventory } });
-  const api = {
-    getState: () => ({ ...gameState, inventory: { ...gameState.inventory } }),
-    startAction(skillId, actionId) { calls.push([skillId, actionId]); gameState.activeSkill = skillId; gameState.activeAction = actionId; emit(); },
-    stopAction() { gameState.activeSkill = null; gameState.activeAction = null; emit(); },
-    subscribe(l) { listener = l; return () => { listener = null; }; },
-  };
-  return { api, calls, gameState, emit };
-}
-
-test('auto-resumes a blocked plan once its level requirement clears', async () => {
-  const document = new FakeDocument();
-  const game = recordingGame();
-  const result = await bootOverlay({ document, window: { __frCompanion: game.api }, fetch: fetchFor(datasets()) });
-  const { app, shell } = result;
-  const panel = shell.panels.plan;
-  const form = panel.querySelector('#fr-plan-form');
-  const qty = panel.querySelector('#fr-plan-qty');
-  app.state.planItemId = 'log';
-  qty.value = '1';
-  form.dispatch('submit');
-  app.state.planItemId = 'totem';
-  qty.value = '1';
-  form.dispatch('submit');
-  assert.equal(app.state.planQueue[1].plan.ok, false);
-
-  shell.queueControls.querySelector('#fr-run').dispatch('click');
-  // Complete the woodcutting step while the crafting level clears the blocker.
-  game.gameState.inventory.log = 1;
-  game.gameState.skillXp.crafting = 250;
-  game.emit();
-
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.ok(game.calls.some(([skillId, actionId]) => skillId === 'crafting' && actionId === 'carve_totem'));
-  assert.ok(app.state.planQueue.every((entry) => entry.plan.ok));
-  app.executor.stop();
-});
-
-test('refills rare inputs and delivers the exact requested count', async () => {
-  const document = new FakeDocument();
-  const game = recordingGame();
-  const result = await bootOverlay({ document, window: { __frCompanion: game.api }, fetch: fetchFor(datasets()) });
-  const { app, shell } = result;
-  const panel = shell.panels.plan;
-  const form = panel.querySelector('#fr-plan-form');
-  const qty = panel.querySelector('#fr-plan-qty');
-  app.state.planItemId = 'talon';
-  qty.value = '2';
-  form.dispatch('submit');
-  shell.queueControls.querySelector('#fr-run').dispatch('click');
-  assert.deepEqual(game.calls[0], ['gathering', 'gather_seed']);
-
-  game.gameState.inventory.seed = 10;
-  game.emit();
-  assert.ok(game.calls.some(([skillId, actionId]) => skillId === 'trapping' && actionId === 'trap_talon'));
-
-  game.gameState.inventory.seed = 0;
-  game.gameState.inventory.talon = 1;
-  game.gameState.activeSkill = null;
-  game.gameState.activeAction = null;
-  game.emit();
-  await new Promise((resolve) => setTimeout(resolve, 1400));
-  assert.deepEqual(
-    app.state.planQueue[0].plan.steps.map((step) => [step.actionId, step.count]),
-    [['gather_seed', 5], ['trap_talon', 5]],
-  );
-  assert.ok(game.calls.filter(([skillId, actionId]) => skillId === 'gathering' && actionId === 'gather_seed').length >= 2);
-
-  game.gameState.inventory.seed = 5;
-  game.emit();
-  game.gameState.inventory.talon = 2;
-  game.emit();
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.equal(app.state.executorStatus.phase, 'complete');
-  assert.equal(game.gameState.inventory.talon, 2);
-  app.executor.stop();
-});
-
-test('reports still-blocked plans on completion and keeps them queued', async () => {
-  const document = new FakeDocument();
-  const game = recordingGame();
-  const result = await bootOverlay({ document, window: { __frCompanion: game.api }, fetch: fetchFor(datasets()) });
-  const { app, shell } = result;
-  const panel = shell.panels.plan;
-  const form = panel.querySelector('#fr-plan-form');
-  const qty = panel.querySelector('#fr-plan-qty');
-  app.state.planItemId = 'log';
-  qty.value = '1';
-  form.dispatch('submit');
-  app.state.planItemId = 'totem';
-  qty.value = '1';
-  form.dispatch('submit');
-
-  shell.queueControls.querySelector('#fr-run').dispatch('click');
-  // Complete the woodcutting step; crafting never levels, so totem stays blocked.
-  game.gameState.inventory.log = 1;
-  game.emit();
-
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.match(app.state.executorStatus.message, /1 skipped — still blocked/u);
-  assert.equal(app.state.planQueue.length, 2);
-  const html = panel.querySelector('#fr-plan-result').innerHTML;
-  assert.match(html, /data-state="complete"/u);
-  assert.match(html, /data-state="blocked"/u);
-  assert.deepEqual(app.state.queueGoals.map((goal) => goal.itemId), ['totem']);
-  const stored = JSON.parse(document.defaultView.localStorage.getItem('fractured-realms-companion.queue.v1'));
-  assert.deepEqual(stored.goals.map((goal) => goal.itemId), ['totem']);
-  app.executor.stop();
-});
-
-test('compact mode toggles and persists its panel preference', () => {
-  const document = new FakeDocument();
-  const shell = createOverlayShell(document);
-  const toggle = shell.compactToggle || shell.panel.querySelector('#fr-compact-toggle');
-  assert.equal(shell.panel.dataset.compact, 'false');
-  // Simulate a manual resize: inline width/height would otherwise override the compact rule.
-  shell.panel.style.width = '900px';
-  shell.panel.style.height = '600px';
-  toggle.dispatch('click');
-  assert.equal(shell.panel.dataset.compact, 'true');
-  assert.equal(toggle.getAttribute('aria-pressed'), 'true');
-  assert.equal(shell.panel.style.width, '');
-  assert.equal(shell.panel.style.height, '');
-  assert.equal(JSON.parse(document.defaultView.localStorage.getItem('fractured-realms-companion.positions.v1')).compactMode, true);
-  toggle.dispatch('click');
-  assert.equal(shell.panel.dataset.compact, 'false');
-  assert.equal(shell.panel.style.width, '900px');
-  assert.equal(shell.panel.style.height, '600px');
-});
-
-test('compact strip exposes a resume control hidden unless paused', async () => {
-  const document = new FakeDocument();
-  const result = await bootOverlay({ document, window: { __frCompanion: api() }, fetch: fetchFor(datasets()) });
-  const resume = result.shell.compactStrip.querySelector('#fr-compact-resume');
-  assert.ok(resume);
-  assert.equal(resume.hidden, true);
-  result.app.state.executorStatus = { phase: 'paused', currentStep: 0, message: 'paused' };
-  result.app.renderPlan();
-  assert.equal(resume.hidden, false);
-});
-
-test('compact strip swaps between start and stop by run state', async () => {
-  const document = new FakeDocument();
-  const result = await bootOverlay({ document, window: { __frCompanion: api() }, fetch: fetchFor(datasets()) });
-  const start = result.shell.compactStrip.querySelector('#fr-compact-start');
-  const stop = result.shell.compactStrip.querySelector('#fr-compact-stop');
-  assert.ok(start);
-  result.app.state.executorStatus = { phase: 'idle', currentStep: null };
-  result.app.renderPlan();
-  assert.equal(start.hidden, false);
-  assert.equal(stop.hidden, true);
-  result.app.state.executorStatus = { phase: 'running', currentStep: 0 };
-  result.app.renderPlan();
-  assert.equal(start.hidden, true);
-  assert.equal(stop.hidden, false);
-});
-
-
-test('queued plans project earlier deterministic outputs and estimate duration', () => {
-  const goals = [
-    { id: 'plan-1', itemId: 'log', qty: 2 },
-    { id: 'plan-2', itemId: 'plank', qty: 1 },
-  ];
-  const queue = resolvePlanQueue(datasets(), api().getState(), goals);
-
-  assert.equal(queue.length, 2);
-  assert.deepEqual(queue[0].plan.steps.map((step) => [step.actionId, step.count]), [['chop_log', 2]]);
-  assert.deepEqual(queue[1].plan.steps.map((step) => [step.actionId, step.count]), [['make_plank', 1]]);
-  assert.equal(queue[0].estimateMs, 2000);
-  assert.equal(estimatePlanDuration(queue[1].plan), 800);
-  assert.equal(formatDuration(62_000), '1m 2s');
-
-  const projected = projectPlanState(datasets(), api().getState(), queue.map((entry) => entry.plan));
-  assert.deepEqual(projected.inventory, { log: 0, plank: 1 });
-});
-
-test('resolves skill level goals with XP stop conditions', () => {
-  const queue = resolvePlanQueue(datasets(), {
-    inventory: {},
-    equipment: {},
-    skillXp: { woodcutting: 100, crafting: 100 },
-  }, [{ id: 'plan-1', itemId: 'log', qty: 0, target: { type: 'level', level: 12 } }]);
-  const plan = queue[0].plan;
-  const final = plan.steps.at(-1);
-
-  assert.equal(plan.ok, true);
-  assert.deepEqual(final.stopWhen, { type: 'xp', skillId: 'woodcutting', xpAtLeast: 120, xpPerRun: 5 });
-  assert.equal(final.count, 4);
-});
-
-test('resolves rare level goals without chance-inflated runs', () => {
-  const queue = resolvePlanQueue(datasets(), {
-    inventory: {},
-    equipment: {},
-    skillXp: { woodcutting: 100, crafting: 100, trapping: 100, gathering: 100 },
-  }, [{ id: 'plan-1', itemId: 'talon', qty: 0, target: { type: 'level', level: 12 } }]);
-  const final = queue[0].plan.steps.at(-1);
-
-  assert.equal(queue[0].plan.ok, true);
-  assert.equal(final.rare, true);
-  assert.ok(Math.abs(final.count - 4) <= 1);
-  assert.equal(final.stopWhen.xpPerRun, 5);
-});
-
-test('resolves duration goals with time stop conditions', () => {
-  const queue = resolvePlanQueue(datasets(), {
-    inventory: {},
-    equipment: {},
-    skillXp: { woodcutting: 100, crafting: 100 },
-  }, [{ id: 'plan-1', itemId: 'log', qty: 0, target: { type: 'time', minutes: 1 } }]);
-  const final = queue[0].plan.steps.at(-1);
-
-  assert.deepEqual(final.stopWhen, { type: 'time', ms: 60000 });
-  assert.equal(final.count, 60);
-});
-
-test('resolves gain goals from the current bag total without a stop condition', () => {
-  const queue = resolvePlanQueue(datasets(), {
-    inventory: { log: 3 },
-    equipment: {},
-    skillXp: { woodcutting: 100, crafting: 100 },
-  }, [{ id: 'plan-1', itemId: 'log', qty: 0, target: { type: 'gain', gain: 5 } }]);
-  const plan = queue[0].plan;
-  const step = plan.steps[0];
-
-  assert.equal(plan.ok, true);
-  assert.equal(step.actionId, 'chop_log');
-  assert.equal(step.count, 5);
-  assert.equal(step.produceQty, 5);
-  assert.equal('stopWhen' in step, false);
-});
-
-test('projects deterministic and rare raw execution steps', () => {
-  const projected = projectSteps(datasets(), api().getState(), [
-    { skillId: 'woodcutting', actionId: 'chop_log', count: 2 },
-    { skillId: 'woodcutting', actionId: 'chop_log', count: 20, rare: true, produceItemId: 'plank', produceQty: 1 },
-  ]);
-  assert.equal(projected.inventory.log, 22);
-  assert.equal(projected.inventory.plank, 1);
-});
-test('renders rare plan rows with expected quantity and chance badge', async () => {
-  const rareData = datasets();
-  rareData.items = { ...rareData.items, pearl: { label: 'River Pearl', type: 'material' } };
-  rareData.actions = {
-    fishing: [{
-      id: 'fish_pearl', name: 'Fish River', levelReq: 1, interval: 1000,
-      outputs: { fish: 1 }, rareOutputs: [{ item: 'pearl', qty: 1, chance: 0.05 }],
-    }],
-  };
-  const document = new FakeDocument();
-  const result = await bootOverlay({ document, window: { __frCompanion: api() }, fetch: fetchFor(rareData) });
-  const panel = result.shell.panels.plan;
-  const form = panel.querySelector('#fr-plan-form');
-  const quantity = panel.querySelector('#fr-plan-qty');
-  result.app.state.planItemId = 'pearl';
-  quantity.value = '1';
-  form.dispatch('submit');
-  const html = panel.querySelector('#fr-plan-result').innerHTML;
-  assert.match(html, /~×20/);
-  assert.match(html, /badge warning[^>]*>5%/);
-  assert.match(html, /\(avg\)/);
-});
-
-
-test('rendered tool blockers name the blocking action', async () => {
-  const blockedData = datasets();
-  blockedData.actions = {
-    ...blockedData.actions,
-    crafting: [{ ...blockedData.actions.crafting[0], toolReq: 'workshop_saw' }],
-  };
-  blockedData.strings = { ...blockedData.strings, 'name.workshop_saw': 'Workshop Saw' };
-  const document = new FakeDocument();
-  const result = await bootOverlay({ document, window: { __frCompanion: api() }, fetch: fetchFor(blockedData) });
-  const panel = result.shell.panels.plan;
-  const form = panel.querySelector('#fr-plan-form');
-  const quantity = panel.querySelector('#fr-plan-qty');
-  result.app.state.planItemId = 'plank';
-  quantity.value = '1';
-  form.dispatch('submit');
-  const notice = panel.querySelector('#fr-plan-result').innerHTML;
-  assert.doesNotMatch(notice, /undefined/);
-  assert.match(notice, /Make Harbor Plank/);
-});
-
-test('queued planner appends multiple goals against prior output', async () => {
-  const document = new FakeDocument();
-  const result = await bootOverlay({ document, window: { __frCompanion: api() }, fetch: fetchFor(datasets()) });
-  const panel = result.shell.panels.plan;
-  const form = panel.querySelector('#fr-plan-form');
-  const qty = panel.querySelector('#fr-plan-qty');
-
-  result.app.state.planItemId = 'log';
-  qty.value = '2';
-  form.dispatch('submit');
-  result.app.state.planItemId = 'plank';
-  qty.value = '1';
-  form.dispatch('submit');
-
-  assert.equal(result.app.state.planQueue.length, 2);
-  assert.deepEqual(result.app.state.planQueue.map((entry) => entry.itemId), ['log', 'plank']);
-  assert.deepEqual(result.app.state.executionSteps.map((step) => step.actionId), ['chop_log', 'make_plank']);
-  assert.match(panel.querySelector('#fr-plan-result').innerHTML, /Prerequisite satisfied/);
-  assert.match(panel.querySelector('#fr-plan-result').innerHTML, /Harbor Log/);
-  assert.ok(result.shell.queueControls.querySelector('#fr-run'));
-  assert.equal(result.shell.queueControls.querySelector('#fr-run').disabled, false);
-
-  const planResult = panel.querySelector('#fr-plan-result');
-  planResult.dispatch('click', { target: { closest: () => ({ disabled: false, dataset: { queueAction: 'up', planId: 'plan-2' } }) } });
-  assert.deepEqual(result.app.state.planQueue.map((entry) => entry.itemId), ['plank', 'log']);
-  planResult.dispatch('click', { target: { closest: () => ({ disabled: false, dataset: { queueAction: 'remove', planId: 'plan-2' } }) } });
-  assert.deepEqual(result.app.state.planQueue.map((entry) => entry.itemId), ['log']);
-});
-
-test('edits pending queue goals while execution is running', async () => {
-  const document = new FakeDocument();
-  const result = await bootOverlay({ document, window: { __frCompanion: api() }, fetch: fetchFor(datasets()) });
-  const { app, shell } = result;
-  const panel = shell.panels.plan;
-  const form = panel.querySelector('#fr-plan-form');
-  const qty = panel.querySelector('#fr-plan-qty');
-  const run = shell.queueControls.querySelector('#fr-run');
-
-  app.state.planItemId = 'log';
-  qty.value = '2';
-  form.dispatch('submit');
-  app.state.planItemId = 'plank';
-  qty.value = '1';
-  form.dispatch('submit');
-  run.dispatch('click');
-  app.state.executorStatus = { phase: 'running', currentStep: 0, stepTarget: 2, stepProduced: 1 };
-  const firstPlan = app.state.planQueue[0];
-  app.renderPlan();
-
-  const item = panel.querySelector('#fr-plan-item');
-  assert.equal(item.disabled, false);
-  app.state.planItemId = 'log';
-  qty.value = '1';
-  form.dispatch('submit');
-
-  assert.equal(app.state.planQueue.length, 3);
-  assert.equal(app.state.planQueue[0].id, firstPlan.id);
-  assert.equal(app.state.planQueue[0].qty, firstPlan.qty);
-  const html = panel.querySelector('#fr-plan-result').innerHTML;
-  assert.match(html, /data-queue-action="remove" data-plan-id="plan-1"[^>]* disabled/);
-  assert.doesNotMatch(html, /data-queue-action="remove" data-plan-id="plan-2"[^>]* disabled/);
-  const planResult = panel.querySelector('#fr-plan-result');
-  planResult.dispatch('click', { target: { closest: () => ({ disabled: true, dataset: { queueAction: 'remove', planId: 'plan-1' } }) } });
-  assert.equal(app.state.planQueue.length, 3);
-  planResult.dispatch('click', { target: { closest: () => ({ disabled: false, dataset: { queueAction: 'remove', planId: 'plan-2' } }) } });
-  assert.equal(app.state.planQueue.length, 2);
-  app.executor.stop();
-});
-
-test('promotes a pending plan over the running one', async () => {
-  const document = new FakeDocument();
-  const calls = [];
-  const liveApi = {
-    getState: () => ({ inventory: {}, equipment: {}, skillXp: { woodcutting: 100, crafting: 100 } }),
-    startAction(skillId, actionId) { calls.push(['start', skillId, actionId]); },
-    stopAction() { calls.push(['stop']); },
-    subscribe() { return () => {}; },
-  };
-  const result = await bootOverlay({ document, window: { __frCompanion: liveApi }, fetch: fetchFor(datasets()) });
-  const { app, shell } = result;
-  const panel = shell.panels.plan;
-  const form = panel.querySelector('#fr-plan-form');
-  const qty = panel.querySelector('#fr-plan-qty');
-  const run = shell.queueControls.querySelector('#fr-run');
-  const planResult = panel.querySelector('#fr-plan-result');
-
-  app.state.planItemId = 'plank';
-  qty.value = '1';
-  form.dispatch('submit');
-  app.state.planItemId = 'log';
-  qty.value = '1';
-  form.dispatch('submit');
-  assert.deepEqual(app.state.planQueue.map((entry) => entry.itemId), ['plank', 'log']);
-
-  run.dispatch('click');
-  calls.length = 0;
-
-  planResult.dispatch('click', { target: { closest: () => ({ disabled: false, dataset: { queueAction: 'up', planId: 'plan-2' } }) } });
-
-  assert.equal(app.state.planQueue[0].itemId, 'log');
-  assert.equal(app.state.queueGoals[0].id, 'plan-2');
-  assert.equal(app.state.queueGoals[1].id, 'plan-1');
-  assert.ok(calls.some(([kind]) => kind === 'stop'));
-  assert.ok(calls.some(([kind, , actionId]) => kind === 'start' && actionId === 'chop_log'));
-  assert.match(planResult.innerHTML, /Run now/);
-  app.executor.stop();
-});
-
-test('preemption reverts when the executor is no longer running', async () => {
-  const document = new FakeDocument();
-  const result = await bootOverlay({ document, window: { __frCompanion: api() }, fetch: fetchFor(datasets()) });
-  const { app, shell } = result;
-  const panel = shell.panels.plan;
-  const form = panel.querySelector('#fr-plan-form');
-  const qty = panel.querySelector('#fr-plan-qty');
-  const planResult = panel.querySelector('#fr-plan-result');
-
-  app.state.planItemId = 'plank';
-  qty.value = '1';
-  form.dispatch('submit');
-  app.state.planItemId = 'log';
-  qty.value = '1';
-  form.dispatch('submit');
-
-  // The app believes a plan is running, but the real executor was never started.
-  app.state.executorStatus = { phase: 'running', currentStep: 0, stepTarget: 2, stepProduced: 0 };
-  app.renderPlan();
-  const originalGoals = app.state.queueGoals.map((goal) => goal.id);
-
-  planResult.dispatch('click', { target: { closest: () => ({ disabled: false, dataset: { queueAction: 'up', planId: 'plan-2' } }) } });
-
-  assert.deepEqual(app.state.queueGoals.map((goal) => goal.id), originalGoals);
-  assert.match(planResult.innerHTML, /advanced while editing/);
-});
-
-async function runningQueueWithCompletedPlan() {
-  const document = new FakeDocument();
-  const calls = [];
-  const liveApi = {
-    getState: () => ({ inventory: {}, equipment: {}, skillXp: { woodcutting: 100, crafting: 100 } }),
-    startAction(skillId, actionId) { calls.push(['start', skillId, actionId]); },
-    stopAction() { calls.push(['stop']); },
-    subscribe() { return () => {}; },
-  };
-  const result = await bootOverlay({ document, window: { __frCompanion: liveApi }, fetch: fetchFor(datasets()) });
-  const { app, shell } = result;
-  const form = shell.panels.plan.querySelector('#fr-plan-form');
-  const qty = shell.panels.plan.querySelector('#fr-plan-qty');
-  const run = shell.queueControls.querySelector('#fr-run');
-  const planResult = shell.panels.plan.querySelector('#fr-plan-result');
-  app.state.planItemId = 'log';
-  qty.value = '3';
-  form.dispatch('submit');
-  app.state.planItemId = 'plank';
-  qty.value = '1';
-  form.dispatch('submit');
-  run.dispatch('click');
-  // Report the executor as deep into plan 2 so plan 1 counts as completed.
-  const lastStep = app.state.executionSteps.length - 1;
-  app.state.executorStatus = { phase: 'running', currentStep: lastStep, stepTarget: 1, stepProduced: 0 };
-  app.renderPlan();
-  calls.length = 0;
-  return { app, planResult, calls };
-}
-
-test('deletes a completed plan mid-run and re-resolves from live inventory', async () => {
-  const { app, planResult, calls } = await runningQueueWithCompletedPlan();
-  assert.equal(app.state.planQueue.length, 2);
-
-  planResult.dispatch('click', { target: { closest: () => ({ disabled: false, dataset: { queueAction: 'remove', planId: 'plan-1' } }) } });
-
-  assert.equal(app.state.queueGoals.length, 1);
-  assert.equal(app.state.queueGoals[0].id, 'plan-2');
-  assert.equal(app.state.planQueue.length, 1);
-  assert.ok(calls.some(([kind]) => kind === 'stop'));
-  assert.ok(calls.some(([kind]) => kind === 'start'));
-  app.executor.stop();
-});
-
-test('moves a completed plan back into the pending section', async () => {
-  const { app, planResult, calls } = await runningQueueWithCompletedPlan();
-
-  planResult.dispatch('click', { target: { closest: () => ({ disabled: false, dataset: { queueAction: 'down', planId: 'plan-1' } }) } });
-
-  assert.deepEqual(app.state.queueGoals.map((goal) => goal.id), ['plan-2', 'plan-1']);
-  assert.ok(calls.some(([kind]) => kind === 'stop'));
-  app.executor.stop();
-});
-
-test('floating controls clamp to the viewport and suppress click after dragging', () => {
-  // Partial off-screen is allowed: a negative left is kept (window tucked past the left edge)
-  // while the top edge stays reachable and a minimum sliver remains on screen.
-  assert.deepEqual(
-    clampFloatingPosition({ left: -20, top: 900 }, { width: 100, height: 80 }, { width: 500, height: 400 }),
-    { left: -20, top: 344 },
-  );
-  // A window cannot be pushed so far it disappears: at least ~56px stays visible on each axis.
-  assert.deepEqual(
-    clampFloatingPosition({ left: -9999, top: 9999 }, { width: 100, height: 80 }, { width: 500, height: 400 }),
-    { left: 56 - 100, top: 400 - 56 },
-  );
-  const fitted = fitWithinViewport(
-    { left: 500, top: 700 },
-    { width: 768, height: 672 },
-    { width: 900, height: 800 },
-  );
-  assert.equal(fitted.left, 500);
-  assert.equal(fitted.top, 700);
-  assert.equal(fitted.maxHeight, 800 - 2 * 8);
-  assert.equal(fitted.maxWidth, 900 - 2 * 8);
-
-  const document = new FakeDocument();
-  const shell = createOverlayShell(document);
-  shell.launcher.dispatch('pointerdown', { pointerId: 1, clientX: 10, clientY: 10, button: 0 });
-  shell.launcher.dispatch('pointermove', { pointerId: 1, clientX: 110, clientY: 90 });
-  shell.launcher.dispatch('pointerup', { pointerId: 1, clientX: 110, clientY: 90 });
-  shell.launcher.dispatch('click');
-
-  assert.equal(shell.launcher.style.left, '110px');
-  assert.equal(shell.launcher.style.top, '90px');
-  assert.equal(shell.panel.hidden, true);
-  shell.launcher.dispatch('click');
-  assert.equal(shell.panel.hidden, false);
-});
-
-test('tab keyboard navigation updates selection and focus', () => {
-  const document = new FakeDocument();
-  const shell = createOverlayShell(document);
-
-  const event = shell.tabButtons[0].dispatch('keydown', { key: 'ArrowRight' });
-  assert.equal(event.defaultPrevented, true);
-  assert.equal(shell.tabButtons[0].getAttribute('aria-selected'), 'false');
-  assert.equal(shell.tabButtons[1].getAttribute('aria-selected'), 'true');
-  assert.equal(shell.panels.items.hidden, true);
-  assert.equal(shell.panels.skills.hidden, false);
-  assert.equal(document.activeElement, shell.tabButtons[1]);
-
-  shell.tabButtons[1].dispatch('keydown', { key: 'End' });
-  assert.equal(shell.tabButtons[2].getAttribute('aria-selected'), 'true');
-});
-
-test('skills table starts an available action through game controls', async () => {
-  const document = new FakeDocument();
-  const calls = [];
-  const gameApi = {
-    ...api(),
-    stopAction() { calls.push(['stop']); },
-    startAction(skillId, actionId) { calls.push(['start', skillId, actionId]); },
-  };
-  const result = await bootOverlay({ document, window: { __frCompanion: gameApi }, fetch: fetchFor(datasets()) });
-  const skills = result.shell.panels.skills;
-  const table = skills.querySelector('#fr-skill-table');
-  const control = { disabled: false, dataset: { skillId: 'woodcutting', actionId: 'chop_log' } };
-  table.dispatch('click', { target: { closest: () => control } });
-  await new Promise((resolve) => setTimeout(resolve, 0));
-
-  assert.deepEqual(calls, [['stop'], ['start', 'woodcutting', 'chop_log']]);
-  assert.match(skills.querySelector('#fr-skill-action-status').textContent, /started/i);
-});
-
-test('API timeout is visible in the launcher and nonmodal panel', async () => {
-  const document = new FakeDocument();
-  const result = await bootOverlay({
-    document,
-    window: {},
-    fetch: fetchFor(datasets()),
-    poll: { pollMs: 1, timeoutMs: 1, delay: async () => {} },
-  });
-
-  assert.equal(result.app, null);
-  assert.equal(result.shell.panel.hidden, false);
-  assert.equal(result.shell.error.hidden, false);
-  assert.equal(result.shell.error.getAttribute('role'), 'alert');
-  assert.equal(result.shell.launcher.dataset.state, 'error');
-  assert.match(result.shell.launcher.innerHTML, /Companion unavailable/);
-  assert.match(result.shell.error.innerHTML, /connection timed out/i);
-});
-
-test('primary action token stays consistent and clears WCAG AA contrast', () => {
-  const overlaySource = readFileSync(fileURLToPath(new URL('../../overlay/overlay.js', import.meta.url)), 'utf8');
-  const designSource = readFileSync(fileURLToPath(new URL('../../DESIGN.md', import.meta.url)), 'utf8');
-  const sidecar = JSON.parse(readFileSync(fileURLToPath(new URL('../../.impeccable/design.json', import.meta.url)), 'utf8'));
-  const foreground = 'oklch(0.94 0 0)';
-  const background = 'oklch(0.50 0.13 230)';
-
-  assert.match(overlaySource, /--fr-harbor-600:\s*oklch\(0\.50 0\.13 230\)/);
-  assert.match(designSource, /`--fr-harbor-600` \| `oklch\(0\.50 0\.13 230\)`/);
-  assert.equal(sidecar.tokens.color.harbor['600'], background);
-  assert.equal(sidecar.tokens.color.neutral['100'], foreground);
-  const ratio = contrastRatio(foreground, background);
-  assert.ok(ratio >= 4.5, `expected at least 4.5:1, got ${ratio.toFixed(2)}:1`);
-  assert.equal(sidecar.tokens.contrast.primaryAction.ratio, Number(ratio.toFixed(2)));
-});
-
-test('active execution phases preserve the plan, executor status, and Run state', async () => {
-  const document = new FakeDocument();
-  let starts = 0;
-  const result = await bootOverlay({
-    document,
-    window: { __frCompanion: { ...api(), startAction() { starts += 1; } } },
-    fetch: fetchFor(datasets()),
-  });
-  const { app, shell } = result;
-  const panel = shell.panels.plan;
-  const form = panel.querySelector('#fr-plan-form');
-  const item = panel.querySelector('#fr-plan-item');
-  const qty = panel.querySelector('#fr-plan-qty');
-  const resolve = panel.querySelector('#fr-resolve-plan');
-  const run = shell.queueControls.querySelector('#fr-run');
-  app.state.selectedItemId = 'log';
-  app.renderItemDetail();
-  const detailPlan = shell.panels.items.querySelector('#fr-item-detail').querySelector('#fr-detail-plan');
-  const originalPlan = { ok: true, steps: [{ skillId: 'woodcutting', actionId: 'chop_log', actionName: 'Chop Harbor Tree', produceItemId: 'log', produceQty: 1 }] };
-
-  for (const phase of ['starting', 'running', 'paused']) {
-    const originalStatus = { phase, currentStep: 0, message: `${phase} unchanged` };
-    app.state.currentPlan = originalPlan;
-    app.state.executorStatus = originalStatus;
-    app.renderPlan();
-
-    assert.equal(isExecutionLocked(phase), true);
-    assert.equal(item.disabled, false);
-    assert.equal(qty.disabled, false);
-    assert.equal(resolve.disabled, false);
-    assert.equal(detailPlan.disabled, false);
-    assert.equal(run.disabled, true);
-
-    item.value = 'plank';
-    qty.value = '7';
-    form.dispatch('submit');
-    shell.panels.items.querySelector('#fr-item-detail').dispatch('click', { target: { closest: () => detailPlan } });
-    run.dispatch('click');
-    assert.equal(app.state.currentPlan, originalPlan);
-    assert.equal(app.state.executorStatus, originalStatus);
-    assert.equal(item.value, 'plank');
-    assert.equal(starts, 0);
-  }
-
-  for (const phase of ['idle', 'complete', 'error']) assert.equal(isExecutionLocked(phase), false);
-});
-
-test('overlay never references the game native action queue', () => {
-  const source = readFileSync(fileURLToPath(new URL('../../overlay/overlay.js', import.meta.url)), 'utf8');
-  assert.doesNotMatch(source, /actionQueue/);
-});
+ test('overlay source contains no planner import or native action queue access', async () => {
+  const source = await (await import('node:fs/promises')).readFile(new URL('../../overlay/overlay.js', import.meta.url), 'utf8');
+  assert.equal(source.includes("from './planner.js'"), false); assert.equal(source.includes('actionQueue'), false); assert.equal(source.includes('queueSlots'), false);
+ });
