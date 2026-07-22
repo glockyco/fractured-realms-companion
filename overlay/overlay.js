@@ -913,7 +913,8 @@ function actionName(action) {
 function factLabel(fact) {
   const value = String(fact || '');
   const [kind, ...parts] = value.split(':');
-  return kind === 'level' ? `${humanizeId(parts[0])} level ${parts[1]}` : `${humanizeId(kind)}: ${humanizeId(parts.join(':'))}`;
+  if (kind === 'level') return `${humanizeId(parts[0])} level ${parts[1]}`;
+  return parts.length ? `${humanizeId(kind)}: ${humanizeId(parts.join(':'))}` : humanizeId(kind);
 }
 
 export function buildIndexes(model) {
@@ -1268,7 +1269,7 @@ function createApplication(shell, modelJson, api) {
   const targetActionLabel = (target) => actionName(actionFor(target.skillId, target.actionId) || (target.skillId === 'agility' ? (model.agilityCourses || []).find((course) => course.id === target.actionId) : target.skillId === 'cartography' ? (model.maps || []).find((map) => map.id === target.actionId) : null));
   const targetLabel = (target) => { if (!target) return 'Target'; if (target.type === 'item' || target.type === 'item-gain') return `${target.type === 'item-gain' ? 'Gain' : 'Reach'} ${target.qty ?? target.gain} ${labelFor(items, target.itemId)}`; if (target.type === 'level') return `${skillNames[target.skillId] || target.skillId} level ${target.level}`; if (target.type === 'xp') return `${skillNames[target.skillId] || target.skillId} XP ${target.xp}`; if (target.type === 'action') return `${targetActionLabel(target)} · ${target.runs ? `${target.runs} runs` : `${target.minutes} minutes`}`; if (target.type === 'unlock') return `Unlock ${factLabel(target.fact)}`; return `${target.amount} gold`; };
 
-  const executor = createDirectExecutor(api, { liveBlocker: (stateSnapshot, step) => liveBlocker(model, stateSnapshot, step), factSatisfied: (stateSnapshot, fact) => factSatisfied(model, stateSnapshot, fact), onUpdate(status) { state.executorStatus = status; renderPlan?.(); } });
+  const executor = createDirectExecutor(api, { liveBlocker: (stateSnapshot, step) => liveBlocker(model, stateSnapshot, step), factSatisfied: (stateSnapshot, fact) => factSatisfied(model, stateSnapshot, fact), formatBlocker: (blocker) => factLabel(blocker), onUpdate(status) { state.executorStatus = status; renderPlan?.(); } });
   const runQueue = () => { if (isExecutionLocked(state.executorStatus?.phase)) return; refreshQueue(); if (state.resolvedQueue.steps.length) { state.queueStartedAt = Date.now(); renderPlan(); executor.run(state.resolvedQueue.steps); } };
   const resumeQueue = () => { if (state.executorStatus?.phase !== 'waiting') return; refreshQueue(); if (state.resolvedQueue.steps.length) { state.queueStartedAt ??= Date.now(); executor.run(state.resolvedQueue.steps); } };
   const stopQueue = () => { state.queueStartedAt = null; executor.stop(); };

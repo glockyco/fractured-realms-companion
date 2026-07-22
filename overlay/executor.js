@@ -58,6 +58,7 @@ export function createDirectExecutor(api, options = {}) {
   const cancel = options.clearTimeout ?? globalThis.clearTimeout;
   const now = options.now ?? (() => Date.now());
   const onUpdate = typeof options.onUpdate === 'function' ? options.onUpdate : () => {};
+  const formatBlocker = typeof options.formatBlocker === 'function' ? options.formatBlocker : (value) => String(value ?? '');
 
   let status = {
     phase: 'idle',
@@ -300,7 +301,7 @@ export function createDirectExecutor(api, options = {}) {
       if (step?.kind === 'manual') blockers.push(actionLabel(step));
       else {
         const blocker = actionBlocker(state, step);
-        if (blocker) blockers.push(`${actionLabel(step)}: ${blocker}`);
+        if (blocker) blockers.push(`${actionLabel(step)}: ${formatBlocker(blocker)}`);
       }
     }
     return blockers.length ? `Waiting: ${blockers.join('; ')}` : 'Waiting for a step';
