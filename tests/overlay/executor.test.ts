@@ -126,6 +126,28 @@ test('manual step does not block an independent later action', async () => {
   assert.deepEqual(executor.getStatus().stepStatuses, { 'buy-tool': 'done', gather: 'done' });
 });
 
+test('running status exposes per-step progress and a remaining-time countdown', () => {
+  const game = fakeGame();
+  const executor = createDirectExecutor(game.api, options(game));
+  const step = action('gather', { type: 'itemQty', itemId: 'ore', qty: 3 }, { expected: { runs: 3, ms: 3000, produces: { ore: 3 }, consumes: {} } });
+  executor.run([step]);
+  let status = executor.getStatus();
+  assert.equal(status.phase, 'running');
+  assert.equal(status.stepProgressMax, 3);
+  assert.equal(status.stepProgress, 0);
+  assert.equal(status.stepRemainingMs, 3000);
+  // A produced output advances run progress; elapsed time shrinks the countdown.
+  game.timers.tick(1000);
+  game.produce('ore');
+  status = executor.getStatus();
+  assert.equal(status.stepProgress, 1);
+  assert.equal(status.stepRemainingMs, 2000);
+  // The one-second ticker keeps the countdown moving with no game-state change.
+  game.timers.tick(1000);
+  status = executor.getStatus();
+  assert.equal(status.stepRemainingMs, 1000);
+});
+
 test('preempts a lower-priority running action when a higher-priority step unblocks', () => {
   const game = fakeGame();
   const blocker = (state, step) => step.id === 'priority' && !state.tool ? 'missing tool' : null;

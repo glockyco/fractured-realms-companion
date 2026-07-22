@@ -80,6 +80,7 @@ export function createDirectExecutor(api, options = {}) {
   let stallTimer;
   let mismatchTimer;
   let timeTimer;
+  let progressTicker;
   let unsubscribe;
   let runToken = 0;
   let transitionBusy = false;
@@ -102,10 +103,12 @@ export function createDirectExecutor(api, options = {}) {
     clearTimer(stallTimer);
     clearTimer(mismatchTimer);
     clearTimer(timeTimer);
+    clearTimer(progressTicker);
     verifyTimer = undefined;
     stallTimer = undefined;
     mismatchTimer = undefined;
     timeTimer = undefined;
+    progressTicker = undefined;
   };
 
   const detach = () => {
@@ -139,9 +142,34 @@ export function createDirectExecutor(api, options = {}) {
     return expected === null ? total : total + expected;
   }, 0);
 
+  const armProgressTicker = () => {
+    clearTimer(progressTicker);
+    progressTicker = undefined;
+    if (runningIndex < 0) return;
+    const token = runToken;
+    // Re-publish once a second so the running step's remaining-time countdown and
+    // elapsed advance smoothly between the game's state-change callbacks.
+    progressTicker = schedule(() => {
+      progressTicker = undefined;
+      if (token !== runToken || status.phase !== 'running' || runningIndex < 0) return;
+      publish('running', status.message, currentState());
+    }, 1000);
+  };
+
   const publish = (phase, message, state = currentState()) => {
     const statuses = statusRecord();
     const completed = [...stepState.values()].filter((value) => value === 'done').length;
+    const runningStep = runningIndex >= 0 ? steps[runningIndex] : null;
+    let stepProgress = null; let stepProgressMax = null; let stepRemainingMs = null;
+    if (phase === 'running' && runningStep) {
+      stepProgressMax = Math.max(1, asNumber(runningStep?.expected?.runs, 1));
+      stepProgress = Math.max(0, Math.min(stepProgressMax, runProgress.get(runningIndex) ?? 0));
+      const expected = expectedMs(runningStep);
+      if (expected !== null) {
+        const elapsed = (runningMs.get(runningIndex) ?? 0) + Math.max(0, asNumber(now(), 0) - runningSince);
+        stepRemainingMs = Math.max(0, expected - elapsed);
+      }
+    }
     status = {
       phase,
       message: message ?? '',
@@ -150,7 +178,12 @@ export function createDirectExecutor(api, options = {}) {
       runningStepId: runningIndex >= 0 ? steps[runningIndex]?.id ?? null : null,
       completedSteps: completed,
       remainingMs: Math.round(remainingMs()),
+      stepProgress,
+      stepProgressMax,
+      stepRemainingMs,
     };
+    if (phase === 'running' && runningStep) armProgressTicker();
+    else { clearTimer(progressTicker); progressTicker = undefined; }
     try { onUpdate({ ...status }); } catch { /* UI observers must not break execution. */ }
     return state;
   };
