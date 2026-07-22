@@ -16,24 +16,24 @@ Runtime npm dependencies are intentionally absent. Bun is required only for the 
 
 - `src/` contains the CLI, extraction, platform discovery, and patch/state orchestration.
 - `runtime/*.cjs` contains the in-game Electron host and adapter.
-- `overlay/*.js` contains the UI, planner, and direct-action executor.
+- `overlay/*.js` contains the UI and direct-action executor; `overlay/engine/*.js` contains model indexing, formulas, planning, simulation, and queue resolution.
 - `tests/` mirrors these areas. `scripts/embed-runtime.mjs` embeds runtime and overlay sources into the ignored `src/generated/embedded.ts`.
 - Edit `runtime/` and `overlay/` source files, never the generated copy. Treat `dist/` and `runtime/fractured-companion-host-*/` as generated or temporary.
-- `package.json` publishes only `dist`, `runtime`, and `overlay`.
+- `package.json` publishes only `dist`, `runtime`, and `overlay`. A refreshed companion pack uses schema version 2 with `pack.json`, `overlay.js`, `executor.js`, `engine/*.js`, and `data/model.json`.
 
 ## Game data inspection
 
 Follow this read-only decision path when answering questions about game data:
 
 1. If the active install, Steam build, archive, or companion-pack status is unknown, run `node dist/cli.js doctor --json`. See [README.md#steam-discovery](README.md#steam-discovery) for supported default roots. `src/platform/steam.ts` and `src/platform/state.ts` are the maintained sources for install and state discovery. Refer to the archive portably as `<installDir>/resources/app.asar`.
-2. Prefer the refreshed datasets in `<stateDir>/pack/data/`: `items.json`, `actions.json`, `skills.json`, `xp.json`, `buildings.json`, `digsites.json`, and `strings-en.json`. If a companion instance is already running, the same files are available without an API token at `http://127.0.0.1:48766/companion/data/<filename>`. Do not launch or refresh the game solely to inspect data.
-3. If the requested fact is absent there, mirror the read-only archive-selection path in `refreshCompanion` from `src/refresh.ts`: use the pristine archive or its verified immutable backup, locate the sole `dist/assets/index-*.js` renderer bundle with `listFiles`, and read it with `extractFile` from `src/lib/asar.ts`. Use the validated extraction anchors in `src/extract/datasets.ts` as examples rather than inferring facts from IDs or tier names.
+2. Prefer the compiled model at `<stateDir>/pack/data/model.json` (schema version 2) and its derived SQLite projection at `<stateDir>/model.db`. If a companion instance is already running, the model is available without an API token at `http://127.0.0.1:48766/companion/data/model.json`. For supported read-only queries, use `node dist/cli.js model info` or `node dist/cli.js model sql "SELECT ..."`; do not launch or refresh the game solely to inspect data.
+3. If the requested fact is absent from the compiled model, mirror the read-only archive-selection path in `refreshCompanion` from `src/refresh.ts`: use the pristine archive or its verified immutable backup, locate the sole `dist/assets/index-*.js` renderer bundle with `listFiles`, and read it with `extractFile` from `src/lib/asar.ts`. Use the validated extraction anchors in `src/extract/registries.ts` and normalization in `src/model/compile.ts` as examples rather than inferring facts from IDs or tier names.
 
-State whether evidence came directly from extracted JSON or was recovered from the renderer bundle. Never infer an unmodeled requirement from a naming convention. The archive rules under **Safety boundaries** govern this workflow: never hand-edit, unpack/repack, or bypass checks.
+State whether evidence came directly from the compiled model or was recovered from the renderer bundle. Never infer an unmodeled requirement from a naming convention. The archive rules under **Safety boundaries** govern this workflow: never hand-edit, unpack/repack, or bypass checks.
 
 ## Tests
 
-- Overlay, planner, and executor changes map to `tests/overlay/*.test.ts`.
+- Overlay engine and executor changes map to `tests/overlay/*.test.ts`.
 - CLI, patch, and platform changes map to the corresponding mirrored test file under `tests/`.
 - For release binary changes, run `node scripts/smoke-binary.mjs PATH_TO_BINARY` after the exact Bun compile performed by `.github/workflows/release.yml`.
 - `npm test` and `npm run build` regenerate ignored embedded output. A local Bun build alone does not reproduce the four-OS release matrix.

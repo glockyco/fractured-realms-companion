@@ -18,41 +18,52 @@
 <table>
   <tr>
     <td><strong>Item wiki</strong><br>Search for sources, uses, stats, requirements, and artwork.</td>
-    <td><strong>Dependency planner</strong><br>Turn a target item into a visible, editable plan from live inventory.</td>
+    <td><strong>Dependency planning</strong><br>Turn a typed target into a visible, prioritized timeline from live inventory.</td>
     <td><strong>Direct actions</strong><br>Run one game action at a time with progress, blockers, and stop controls.</td>
   </tr>
 </table>
 
 ### Companion preview
 
-| Item wiki | Extracted skill actions |
+| Item wiki | Compiled skill actions |
 | --- | --- |
 | Search an item, then inspect its sources, uses, stats, and artwork. | Compare action levels, timings, tools, outputs, and drop rates. |
 | ![Ancient Spore item details with sources and uses](docs/screenshots/item-wiki.webp) | ![Archaeology actions with levels, intervals, outputs, and tools](docs/screenshots/skill-actions.webp) |
 
-### Planner preview
+### Planning preview
 
-![Minor Fire Rune plan with active Earthwort gathering and queued Copper Vein, Practice Inscription, and rune crafting steps](docs/screenshots/action-planner.webp)
+![Minor Fire Rune timeline with active Earthwort gathering and queued Copper Vein, Practice Inscription, and rune crafting steps](docs/screenshots/action-planner.webp)
 
 ## What it does
 
 - **Items:** Search by item name for sources, uses, stats, requirements, and artwork.
 - **Skills:** Compare action levels, timings, tools, inputs, outputs, rare outputs, and locations.
-- **Planner:** Set an item target by inventory, new items, skill level, or time, then see the dependency plan against live state.
-- **Queue:** Edit, reorder, promote, or remove pending goals while the current action stays immutable.
-- **Executor:** Start, resume, or stop one game action at a time, with progress, blockers, refusals, and stalls surfaced.
-- **Local data:** `refresh` extracts the installed game's data before applying the companion patch.
+- **Planning:** Build typed targets for item totals or gains, skill levels or XP, action runs or minutes, unlocks, and gold. The engine resolves prerequisites into a prioritized step timeline against live state.
+- **Queue:** Review one prioritized timeline. Manual instruction cards remain visible with their wall-clock ready-at estimate; independent runnable steps continue while a manual or blocked step waits.
+- **Executor:** Run the highest-priority startable action, preempt it when a higher-priority step becomes startable, and surface running, waiting, blocked, complete, and error states without bypassing game checks.
+- **Local data:** `refresh` compiles the installed game's registries into one `model.json` (pack schema version 2) and writes a derived `model.db` projection in the state directory when a built-in SQLite driver is available.
 
 <details>
 <summary>Feature details</summary>
 
-- **Planner resolution:** Goals use live inventory and deterministic projected outputs from earlier runnable plans. Already-held prerequisites remain visible. Blocked goals stay queued and are retried at plan boundaries.
-- **Rare targets:** The planner estimates attempts from drop chance and provisions inputs for each run. If inputs run out, it replans the live remainder. Estimates are probabilistic, and multi-quantity drops may overshoot by one drop batch. Eight consecutive restocks with no target gain mark a goal `rare drops stalled` so later queued goals can continue.
-- **Direct execution:** The executor verifies starts, reports progress and remaining time, detects game-side action changes, and surfaces refusals and stalls. Required Shop tools are permanent prerequisites and are never auto-crafted.
-- **Live queue:** Choosing `Run now` for the first pending goal stops the current action and starts the promoted goal immediately.
-- **Extracted data:** `refresh` extracts item, action, skill, XP, building, dig-site, string, and item-art data from the installed game.
+- **Planning resolution:** Targets are typed as item, item-gain, level, XP, action, unlock, or gold goals. The engine resolves prerequisites and emits a prioritized timeline; each step reports its purpose, expected duration, and live scheduler status. Manual steps become instruction cards with a wall-clock ready-at estimate, while independent automatable steps continue.
+- **Stochastic sources:** Rare drops and other probabilistic outputs are estimates, not guarantees. Steps that depend on them stop from observed live state rather than predicted counts.
+- **Direct execution:** The executor checks live start requirements, runs the highest-priority action that is currently startable, preempts lower-priority work when needed, and surfaces refusals and stalls. Manual steps never block independent work and are never auto-completed by the companion.
+- **Live scheduler:** The queue preserves target priority while choosing the highest-priority action that is startable in the current live state. A newly available higher-priority action preempts lower-priority work; manual instruction cards do not pause independent actions.
+- **Local data:** `refresh` compiles the installed game's registries into one `model.json` (pack schema version 2) and writes a derived `model.db` projection in the state directory when a built-in SQLite driver is available.
 
 </details>
+
+## Inspecting the compiled game model
+
+After `refresh`, inspect the canonical model JSON and its optional SQLite projection without launching the game:
+
+```sh
+fractured-companion model info
+fractured-companion model sql "SELECT id, level_req FROM actions WHERE skill_id='woodcutting' ORDER BY level_req LIMIT 3"
+```
+
+`model info` reports the build, schema version, registry counts, and paths. `model sql` accepts read-only `SELECT` statements and prints one JSON object per row from `<stateDir>/model.db`. The projection is derived from `<stateDir>/pack/data/model.json`; if the database or a built-in SQLite driver is unavailable, run `refresh` and check the reported error. The overlay serves the same model at `http://127.0.0.1:48766/companion/data/model.json` when the companion host is running.
 
 ## Requirements
 
@@ -198,8 +209,8 @@ Then return to this package and run `fractured-companion refresh`. This package 
 
 - Extraction and patching are build-sensitive. A changed game bundle or entrypoint anchor requires a compatibility update before that build can be patched.
 - Rare-attempt counts and completion times are estimates, not guarantees. A multi-quantity rare drop may exceed the requested inventory target by one drop batch.
-- Required Shop tools are permanent unlocks and must already be purchased. The planner does not auto-purchase them.
-- A new item plan may be blocked when the bag has no free slot. A direct action may also be refused by the game. A persistent outside action pauses execution, and an ordinary action with no progress reports a stall. The companion surfaces these states rather than bypassing game checks.
+- Required Shop tools are permanent unlocks and must already be purchased. The engine represents these as manual unlock steps; it does not auto-purchase them.
+- A new item target may be blocked when the bag has no free slot. A direct action may also be refused by the game. The scheduler waits only when no action is runnable, resumes on live-state changes, and surfaces these states rather than bypassing game checks.
 - Starting a planned action stops active combat.
 - macOS support targets Steam in CrossOver. The standalone macOS binaries are unsigned.
 
