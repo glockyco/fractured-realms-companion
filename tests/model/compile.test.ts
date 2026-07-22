@@ -11,7 +11,7 @@ import { openDatabase, sqliteAvailable } from '../../src/lib/sqlite.ts';
 function rawData(shuffled = false): RawGameData {
   const actions: Record<string, unknown[]> = {};
   const entries: Array<[string, unknown[]]> = [
-    ['woodcutting', [{ id: 'chop', name: 'Chop', levelReq: 1, xp: 10, interval: 1000, inputs: { twig: 1 }, outputs: { log: 2 }, xpOld: 999 }]],
+    ['woodcutting', [{ id: 'chop', name: 'Chop', levelReq: 1, xp: 10, interval: 1000, inputs: { twig: 1 }, outputs: { log: 2 }, xpOld: 999, members: true, spot: { area: 'grove' } }]],
     ['bounty', [{ id: 'hunt', name: 'Hunt', levelReq: 1, xp: 20, interval: 2000, outputs: { gold: 5 }, targetId: 'rat', killCount: 2, combatReq: 1 }]],
   ];
   for (const [key, value] of entries) actions[key] = value;

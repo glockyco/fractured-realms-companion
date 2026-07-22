@@ -1,9 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { extractFile, listFiles } from '../../src/lib/asar.ts';
 import { evalLiteral, sliceEnclosing } from '../../src/extract/scan.ts';
 import { extractRegistries } from '../../src/extract/registries.ts';
+import { compileModel } from '../../src/model/compile.ts';
+import { writeModelDb } from '../../src/model/sqlite.ts';
+import { openDatabase, sqliteAvailable } from '../../src/lib/sqlite.ts';
 
 const ACTION_SKILLS = ['woodcutting', 'mining', 'fishing', 'foraging', 'trapping', 'archaeology', 'smithing', 'crafting', 'cooking', 'brewing', 'glyphweaving', 'prayer', 'bounty'];
 
@@ -106,7 +112,7 @@ test('real v0.3 bundle registries', { skip: !process.env.FR_BUNDLE_ASAR }, () =>
   const bundle = files.find((file) => /^dist\/assets\/index-.*\.js$/.test(file));
   assert.ok(bundle);
   const result = extractRegistries(extractFile(archive, bundle).toString('utf8'), files);
-  const EXPECTED = { skills: 21, items: 548, actionGates: 120, actions: 412, zones: 12, enemies: 48, agilityCourses: 8, mapsRegular: 26, mapsDeep: 20, machines: 10, boons: 4, restorations: 4, recipeMeals: 4, seals: 21, buildings: 24, digsites: 4, tools: { woodcutting: 10, mining: 10, fishing: 7, trapping: 9, archaeology: 7, foraging: 9, smithing: 3, brewing: 3, glyphweaving: 3 } };
+  const EXPECTED = { skills: 21, items: 548, actionGates: 120, actions: 412, zones: 12, enemies: 48, agilityCourses: 8, mapsRegular: 26, mapsDeep: 20, machines: 10, boons: 4, restorations: 4, recipeMeals: 4, seals: 21, buildings: 24, digsites: 4, tools: { woodcutting: 10, mining: 10, fishing: 7, trapping: 9, archaeology: 7, foraging: 9, smithing: 3, brewing: 3, glyphweaving: 3 }, actionsBySkill: { woodcutting: 11, mining: 13, fishing: 13, foraging: 18, trapping: 15, archaeology: 12, cooking: 35, smithing: 79, crafting: 105, brewing: 25, glyphweaving: 44, prayer: 6, bounty: 36 } };
   assert.equal(result.skills.length, EXPECTED.skills);
   assert.equal(Object.keys(result.items).length, EXPECTED.items);
   assert.equal(Object.keys(result.actionGates).length, EXPECTED.actionGates);
@@ -124,4 +130,22 @@ test('real v0.3 bundle registries', { skip: !process.env.FR_BUNDLE_ASAR }, () =>
   assert.equal(result.buildings.length, EXPECTED.buildings);
   assert.equal(result.digsites.length, EXPECTED.digsites);
   for (const [skill, count] of Object.entries(EXPECTED.tools)) assert.equal(result.tools[skill].length, count);
+  for (const [skill, count] of Object.entries(EXPECTED.actionsBySkill)) assert.equal(result.actions[skill].length, count, `actions census for ${skill}`);
+
+  const model = compileModel(result, 'test-build');
+  assert.equal(model.actions.length, EXPECTED.actions);
+  if (sqliteAvailable()) {
+    const dir = mkdtempSync(join(tmpdir(), 'fr-model-'));
+    try {
+      const dbPath = join(dir, 'model.db');
+      assert.equal(writeModelDb(model, dbPath), true);
+      const db = openDatabase(dbPath);
+      assert.ok(db);
+      const rows = db!.all('SELECT COUNT(*) AS n FROM items') as Array<{ n: number }>;
+      assert.equal(Number(rows[0]!.n), EXPECTED.items);
+      db!.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
 });

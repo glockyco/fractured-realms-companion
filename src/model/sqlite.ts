@@ -12,7 +12,10 @@ function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === 'object' && value !== null ? value as Record<string, unknown> : {};
 }
 function scalar(value: unknown): unknown {
-  return value === undefined ? null : value;
+  if (value === undefined || value === null) return null;
+  if (typeof value === 'number' || typeof value === 'string' || typeof value === 'bigint') return value;
+  if (typeof value === 'boolean') return value ? 1 : 0;
+  return JSON.stringify(value);
 }
 function json(value: unknown): string {
   return JSON.stringify(value === undefined ? null : value);
