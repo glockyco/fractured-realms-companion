@@ -1214,6 +1214,12 @@ function createApplication(shell, modelJson, api) {
     if (!entries.length) return '';
     return `needs ${entries.map(([id, qty]) => `<span class="data">${escapeHtml(planQtyText(qty))}</span> ${escapeHtml(labelFor(items, id))}`).join(' \u00b7 ')}`;
   };
+  // Live progress toward an inventory- or gold-denominated goal.
+  const goalProximityHtml = (target, live) => {
+    if (target?.type === 'item') return `<span class="data">${escapeHtml(planQtyText(live.inventory?.[target.itemId]))}</span> / <span class="data">${escapeHtml(planQtyText(target.qty))}</span> ${escapeHtml(labelFor(items, target.itemId))}`;
+    if (target?.type === 'gold') return `<span class="data">${escapeHtml(planQtyText(live.gold))}</span> / <span class="data">${escapeHtml(planQtyText(target.amount))}</span> gold`;
+    return '';
+  };
   renderPlan = () => {
     const result = state.resolvedQueue; const live = liveState(); const status = state.executorStatus || {}; const locked = isExecutionLocked(status.phase); const labels = Object.fromEntries(state.queueGoals.map((entry) => [entry.id, targetLabel(entry.target)]));
     const firstBlocked = result.targets.findIndex((entry) => !entry.ok);
@@ -1223,7 +1229,9 @@ function createApplication(shell, modelJson, api) {
       const statusBadge = queuedBehind ? '<span class="badge warning">queued behind blocked target</span>' : entry?.ok ? '<span class="badge signal">ready</span>' : entry ? '<span class="badge danger">blocked</span>' : '<span class="badge">queued</span>';
       const blocker = blocked ? `<p class="banner warning">Blocked: ${escapeHtml(blocked.fact || '')}${blocked.reason ? ` · ${escapeHtml(blocked.reason)}` : ''}${chain.length ? `<br>Prerequisite chain: ${escapeHtml(chain.map(factLabel).join(' → '))}` : ''}</p>` : queuedBehind ? '<p class="banner warning">Not planned: queued behind the blocked target above.</p>' : '';
       const remove = !locked ? `<button class="icon-button" type="button" data-queue-remove="${escapeHtml(goal.id)}" aria-label="Remove ${escapeHtml(label)}" title="Remove target">${ICONS.remove}</button>` : '';
-      return `<section class="queue-plan" data-target-index="${index}" data-queued-behind-blocked="${queuedBehind}"><div class="queue-plan-top"><h3>${escapeHtml(label)} ${statusBadge}</h3>${remove}</div>${blocker}</section>`;
+      const proximity = entry?.ok ? goalProximityHtml(goal.target, live) : '';
+      const proximityRow = proximity ? `<p class="queue-plan-meta">${proximity}</p>` : '';
+      return `<section class="queue-plan" data-target-index="${index}" data-queued-behind-blocked="${queuedBehind}"><div class="queue-plan-top"><h3>${escapeHtml(label)} ${statusBadge}</h3>${remove}</div>${proximityRow}${blocker}</section>`;
     }).join('');
     const rows = (result.steps || []).map((step) => {
       const current = stepStatus(step, live, status); const per = result.perStep?.find((entry) => entry.id === step.id); const depManual = current !== 'done' && step.kind !== 'manual' ? dependencyManual(step, result.steps, status) : null;
