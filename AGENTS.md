@@ -21,6 +21,16 @@ Runtime npm dependencies are intentionally absent. Bun is required only for the 
 - Edit `runtime/` and `overlay/` source files, never the generated copy. Treat `dist/` and `runtime/fractured-companion-host-*/` as generated or temporary.
 - `package.json` publishes only `dist`, `runtime`, and `overlay`.
 
+## Game data inspection
+
+Follow this read-only decision path when answering questions about game data:
+
+1. If the active install, Steam build, archive, or companion-pack status is unknown, run `node dist/cli.js doctor --json`. See [README.md#steam-discovery](README.md#steam-discovery) for supported default roots. `src/platform/steam.ts` and `src/platform/state.ts` are the maintained sources for install and state discovery. Refer to the archive portably as `<installDir>/resources/app.asar`.
+2. Prefer the refreshed datasets in `<stateDir>/pack/data/`: `items.json`, `actions.json`, `skills.json`, `xp.json`, `buildings.json`, `digsites.json`, and `strings-en.json`. If a companion instance is already running, the same files are available without an API token at `http://127.0.0.1:48766/companion/data/<filename>`. Do not launch or refresh the game solely to inspect data.
+3. If the requested fact is absent there, mirror the read-only archive-selection path in `refreshCompanion` from `src/refresh.ts`: use the pristine archive or its verified immutable backup, locate the sole `dist/assets/index-*.js` renderer bundle with `listFiles`, and read it with `extractFile` from `src/lib/asar.ts`. Use the validated extraction anchors in `src/extract/datasets.ts` as examples rather than inferring facts from IDs or tier names.
+
+State whether evidence came directly from extracted JSON or was recovered from the renderer bundle. Never infer an unmodeled requirement from a naming convention. The archive rules under **Safety boundaries** govern this workflow: never hand-edit, unpack/repack, or bypass checks.
+
 ## Tests
 
 - Overlay, planner, and executor changes map to `tests/overlay/*.test.ts`.
