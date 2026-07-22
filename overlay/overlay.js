@@ -363,7 +363,7 @@ th { position: sticky; top: 0; background: var(--fr-neutral-950); color: var(--f
 tbody tr:last-child td { border-bottom: 0; }
 .cell-title { display: block; color: var(--fr-neutral-100); font-weight: 600; }
 .cell-id { display: block; margin-top: var(--fr-s1); color: var(--fr-neutral-300); font-size: 0.6875rem; }
-.plan-form { display: grid; grid-template-columns: minmax(0, 1fr) auto 6rem auto; align-items: end; gap: var(--fr-s2); padding-bottom: var(--fr-s4); border-bottom: 1px solid var(--fr-neutral-800); }
+.plan-form { display: grid; grid-template-columns: minmax(0, 12rem) minmax(0, 1fr) 6rem auto; align-items: end; gap: var(--fr-s2); padding-bottom: var(--fr-s4); border-bottom: 1px solid var(--fr-neutral-800); }
 .plan-summary { display: flex; align-items: center; justify-content: space-between; gap: var(--fr-s3); margin: var(--fr-s4) 0 var(--fr-s2); }
 .plan-summary p { margin: var(--fr-s1) 0 0; color: var(--fr-neutral-300); }
 .step-index { width: 1.625rem; height: 1.625rem; display: inline-grid; place-items: center; border-radius: 999px; background: var(--fr-neutral-900); color: var(--fr-neutral-300); font-size: 0.6875rem; }
