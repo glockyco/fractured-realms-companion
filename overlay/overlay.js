@@ -1,4 +1,5 @@
 import { indexModel, liveBlocker, factSatisfied } from './engine/model.js';
+import { computeReach } from './engine/closure.js';
 import { resolveQueue, nextUnlocks } from './engine/queue.js';
 import { createDirectExecutor } from './executor.js';
 
@@ -352,6 +353,7 @@ h3 { margin: var(--fr-s5) 0 var(--fr-s2); font-size: 0.875rem; }
 .skills-toolbar { max-width: 24rem; margin-bottom: var(--fr-s2); }
 .skill-action-status { min-height: 1.25rem; margin: 0 0 var(--fr-s3); color: var(--fr-neutral-300); font-size: 0.75rem; }
 .skill-action-status[data-state="error"] { color: var(--fr-brass-400); }
+.form-error { margin: var(--fr-s2) 0 0; color: var(--fr-danger-400); font-size: 0.75rem; }
 .table-wrap { overflow: auto; border: 1px solid var(--fr-neutral-800); border-radius: var(--fr-radius-sm); }
 .table-wrap table { min-width: 44rem; }
 table { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
@@ -899,29 +901,6 @@ function blockedText(blocked) {
   return blocked.message || String(reason || 'This step is blocked.');
 }
 
-function blockedShort(blocked) {
-  if (!blocked) return 'blocked';
-  const reason = typeof blocked === 'string' ? blocked : blocked.reason || blocked.type;
-  const details = typeof blocked === 'string' ? {} : blocked;
-  if (typeof blocked === 'string' && ![
-    'level', 'tool', 'pattern', 'prayer', 'map', 'recipe', 'input', 'bag-full', 'rare-only', 'no-source', 'no-xp', 'cycle', 'rare-stalled',
-  ].includes(reason)) return blocked;
-  if (reason === 'level') return `needs ${humanizeId(details.skillId) || 'level'}${details.minLevel == null ? '' : ` ${details.minLevel}`}`;
-  if (reason === 'tool') return `needs ${details.toolName || humanizeId(details.toolId) || 'tool'}`;
-  if (reason === 'pattern') return `needs ${humanizeId(details.patternId) || 'pattern'} pattern`;
-  if (reason === 'prayer') return `needs Prayer${details.minPrayerLevel == null ? '' : ` ${details.minPrayerLevel}`}`;
-  if (reason === 'map') return `needs ${humanizeId(details.mapId) || 'map'}`;
-  if (reason === 'recipe') return 'needs recipe';
-  if (reason === 'input') return `needs ${details.required == null ? '' : `${details.required} `}${humanizeId(details.itemId) || 'input'}`.trim();
-  if (reason === 'bag-full') return 'bag full';
-  if (reason === 'rare-only') return 'rare drop only';
-  if (reason === 'no-source') return 'no source';
-  if (reason === 'no-xp') return 'no XP';
-  if (reason === 'rare-stalled') return 'rare drops stalled';
-  if (reason === 'cycle') return 'dependency cycle';
-  return 'blocked';
-}
-
 function actionName(action) {
   return action?.name || humanizeId(action?.id);
 }
@@ -990,15 +969,31 @@ function createApplication(shell, modelJson, api) {
   const items = model.items || {};
   const strings = model.stringsEn || {};
   const skillNames = Object.fromEntries((model.skills || []).map((skill) => [skill.id, skill.name || skill.id]));
-  const skills = (model.skills || []).filter((skill) => model._index.actionsBySkill.has(skill.id));
+  const skills = (model.skills || []).filter((skill) => model._index.actionsBySkill.has(skill.id) || (skill.id === 'agility' && (model.agilityCourses || []).length) || (skill.id === 'cartography' && (model.maps || []).length));
   const sortedItems = Object.entries(items).sort(([, a], [, b]) => String(a.label || '').localeCompare(String(b.label || '')));
   const actionFor = (skillId, actionId) => (model._index.actionsBySkill.get(skillId) || []).find((action) => action.id === actionId);
+  const hasSpecialAction = (skillId, actionId) => skillId === 'agility'
+    ? (model.agilityCourses || []).some((course) => course.id === actionId)
+    : skillId === 'cartography' && (model.maps || []).some((map) => map.id === actionId);
+  const hasFinitePositive = (value) => typeof value === 'number' && Number.isFinite(value) && value > 0;
+  const knownSkill = (skillId) => typeof skillId === 'string' && Boolean(skillNames[skillId]);
+  const validTarget = (target) => {
+    if (!target || typeof target !== 'object' || typeof target.type !== 'string') return false;
+    if (target.type === 'item' || target.type === 'item-gain') return typeof target.itemId === 'string' && Boolean(items[target.itemId]) && hasFinitePositive(target[target.type === 'item' ? 'qty' : 'gain']);
+    if (target.type === 'level') return knownSkill(target.skillId) && Number.isInteger(target.level) && target.level >= 1;
+    if (target.type === 'xp') return knownSkill(target.skillId) && hasFinitePositive(target.xp);
+    if (target.type === 'action') return knownSkill(target.skillId) && (Boolean(actionFor(target.skillId, target.actionId)) || hasSpecialAction(target.skillId, target.actionId)) && ((hasFinitePositive(target.runs) && target.minutes == null) || (hasFinitePositive(target.minutes) && target.runs == null));
+    if (target.type === 'unlock') return typeof target.fact === 'string' && model._index.factUniverse.has(target.fact);
+    if (target.type === 'gold') return hasFinitePositive(target.amount);
+    return false;
+  };
   const state = {
     selectedItemId: null,
     selectedPlanItemId: null,
     queueGoals: [],
     resolvedQueue: { steps: [], targets: [] },
     executorStatus: { phase: 'idle', message: 'Add a target to begin.', stepStatuses: {}, runningStepId: null },
+    queueStartedAt: null,
     nextPlanId: 1,
   };
   const storage = documentRef.defaultView?.localStorage;
@@ -1031,6 +1026,8 @@ function createApplication(shell, modelJson, api) {
     const id = state.selectedItemId; const item = id ? items[id] : null;
     if (!item) { detail.innerHTML = '<div class="detail-empty">Select an item to inspect its sources and uses.</div>'; return; }
     const sources = indexes.sourcesOf[id] || []; const uses = indexes.usesOf[id] || [];
+    const meal = (model.recipeMeals || []).find((entry) => entry?.output === id || entry?.output?.item === id || entry?.itemId === id || entry?.item === id || entry?.outputs?.[id] != null);
+    const healAmount = item.healAmount ?? meal?.healAmount;
     const sourceRows = sources.map((source) => {
       const origin = source.kind === 'enemy-drop' ? `${source.enemyName} · ${source.zoneName}` : source.actionName;
       const context = source.kind === 'enemy-drop' ? 'Manual enemy drop' : `${skillNames[source.skillId] || source.skillId} level ${source.levelReq ?? 1} · ${formatInterval(source.interval)}`;
@@ -1039,7 +1036,7 @@ function createApplication(shell, modelJson, api) {
     const useRows = uses.map((use) => use.kind === 'building'
       ? `<li class="record-row"><div class="record-top"><strong>${escapeHtml(use.buildingName)}</strong><span class="badge">Cost ×${escapeHtml(use.qty)}</span></div><p>${escapeHtml(use.upgradeLabel || `Upgrade level ${use.upgradeLevel ?? '—'}`)}</p></li>`
       : `<li class="record-row"><div class="record-top"><strong>${escapeHtml(use.actionName)}</strong><span class="badge">Input ×${escapeHtml(use.qty)}</span></div><p>${escapeHtml(skillNames[use.skillId] || use.skillId)}</p></li>`).join('') || '<li class="record-row"><p>No action or building upgrade consumes this item.</p></li>';
-    detail.innerHTML = `<div class="item-heading${item.art ? ' has-art' : ''}">${item.art ? `<img class="item-art" src="/art/icons/items/${encodeURIComponent(id)}.png" alt="">` : ''}<div><h2>${escapeHtml(item.label || humanizeId(id))}</h2><p class="meta">${escapeHtml(item.type || 'Unknown type')}${item.subtype ? ` / ${escapeHtml(item.subtype)}` : ''}</p></div><button class="button" type="button" data-plan-item="${escapeHtml(id)}">Plan this item</button></div><p class="prose">${escapeHtml(item.desc || strings[`itemdesc.${id}`] || 'No description is available in this build.')}</p><dl class="facts">${item.value != null ? `<div><dt>Value</dt><dd>${escapeHtml(item.value)}</dd></div>` : ''}</dl><h3>Sources</h3><ul class="record-list">${sourceRows}</ul><h3>Uses</h3><ul class="record-list">${useRows}</ul>`;
+    detail.innerHTML = `<div class="item-heading${item.art ? ' has-art' : ''}">${item.art ? `<img class="item-art" src="/art/icons/items/${encodeURIComponent(id)}.png" alt="">` : ''}<div><h2>${escapeHtml(item.label || humanizeId(id))}</h2><p class="meta">${escapeHtml(item.type || 'Unknown type')}${item.subtype ? ` / ${escapeHtml(item.subtype)}` : ''}</p></div><button class="button" type="button" data-plan-item="${escapeHtml(id)}">Plan this item</button></div><p class="prose">${escapeHtml(item.desc || strings[`itemdesc.${id}`] || 'No description is available in this build.')}</p><dl class="facts">${item.value != null ? `<div><dt>Value</dt><dd>${escapeHtml(item.value)}</dd></div>` : ''}${healAmount != null ? `<div><dt>Healing</dt><dd>${escapeHtml(healAmount)}</dd></div>` : ''}</dl><h3>Sources</h3><ul class="record-list">${sourceRows}</ul><h3>Uses</h3><ul class="record-list">${useRows}</ul>`;
   };
   itemSearch.addEventListener('input', renderItemList);
   itemList.addEventListener('click', (event) => { const row = event.target.closest?.('[data-item-id]'); if (!row) return; state.selectedItemId = row.dataset.itemId; renderItemList(); renderItemDetail(); });
@@ -1051,19 +1048,19 @@ function createApplication(shell, modelJson, api) {
   const skillSelect = skillsPanel.querySelector('#fr-skill-select'); const skillTable = skillsPanel.querySelector('#fr-skill-table'); const skillStatus = skillsPanel.querySelector('#fr-skill-action-status');
   skillSelect.innerHTML = skills.map((skill) => `<option value="${escapeHtml(skill.id)}">${escapeHtml(skillNames[skill.id] || skill.id)}</option>`).join('');
   const renderSkillTable = () => {
-    const skillId = skillSelect.value || skills[0]?.id; const actions = model._index.actionsBySkill.get(skillId) || []; const snapshot = liveState();
-    skillTable.innerHTML = actions.length ? `<div class="table-wrap"><table><caption>${escapeHtml(skillNames[skillId] || skillId)} actions · ${actions.length} total</caption><thead><tr><th>Action</th><th>Level</th><th>Interval</th><th>Inputs</th><th>Outputs</th><th></th></tr></thead><tbody>${actions.map((action) => { const blocker = liveBlocker(model, snapshot, { kind: 'action', skillId, actionId: action.id }); const rare = (action.rareOutputs || []).map((entry) => `${escapeHtml(labelFor(items, entry.item))} ×${escapeHtml(entry.qty ?? 1)} <span class="badge warning">${escapeHtml(formatChance(entry.chance))}</span>`).join('<br>'); return `<tr><td><span class="cell-title">${escapeHtml(actionName(action))}</span>${action.spot ? `<span class="cell-id">${escapeHtml(strings[`name.${action.spot}`] || humanizeId(action.spot))}</span>` : ''}</td><td class="data">${escapeHtml(action.levelReq ?? '—')}</td><td class="data">${escapeHtml(formatInterval(action.interval))}</td><td>${quantityEntries(action.inputs, items)}</td><td>${quantityEntries(action.outputs, items)}${rare ? `<br>${rare}` : ''}</td><td><button class="button compact" type="button" data-start-action data-skill-id="${escapeHtml(skillId)}" data-action-id="${escapeHtml(action.id)}" ${blocker ? `aria-label="Blocked: ${escapeHtml(blockedText(blocker))}"` : ''}>Start</button></td></tr>`; }).join('')}</tbody></table></div>` : '<div class="empty">No actions recorded for this skill.</div>';
+    const skillId = skillSelect.value || skills[0]?.id; const actions = model._index.actionsBySkill.get(skillId) || []; const snapshot = liveState(); const locked = isExecutionLocked(state.executorStatus?.phase);
+    skillTable.innerHTML = actions.length ? `<div class="table-wrap"><table><caption>${escapeHtml(skillNames[skillId] || skillId)} actions · ${actions.length} total</caption><thead><tr><th>Action</th><th>Level</th><th>Interval</th><th>Inputs</th><th>Outputs</th><th>Tool</th><th></th></tr></thead><tbody>${actions.map((action) => { const blocker = liveBlocker(model, snapshot, { kind: 'action', skillId, actionId: action.id }); const rare = (action.rareOutputs || []).map((entry) => `${escapeHtml(labelFor(items, entry.item))} ×${escapeHtml(entry.qty ?? 1)} <span class="badge warning">${escapeHtml(formatChance(entry.chance))}</span>`).join('<br>'); const tool = action.toolReq ? (strings[`name.${action.toolReq}`] || labelFor(items, action.toolReq)) : '—'; return `<tr><td><span class="cell-title">${escapeHtml(actionName(action))}</span>${action.spot ? `<span class="cell-id">${escapeHtml(strings[`name.${action.spot}`] || humanizeId(action.spot))}</span>` : ''}</td><td class="data">${escapeHtml(action.levelReq ?? '—')}</td><td class="data">${escapeHtml(formatInterval(action.interval))}</td><td>${quantityEntries(action.inputs, items)}</td><td>${quantityEntries(action.outputs, items)}${rare ? `<br>${rare}` : ''}</td><td>${escapeHtml(tool)}</td><td><button class="button compact" type="button" data-start-action data-skill-id="${escapeHtml(skillId)}" data-action-id="${escapeHtml(action.id)}"${locked ? ' disabled' : ''}${blocker ? ` aria-label="Blocked: ${escapeHtml(blockedText(blocker))}"` : ''}>Start</button></td></tr>`; }).join('')}</tbody></table></div>` : '<div class="empty">No actions recorded for this skill.</div>';
   };
   skillSelect.addEventListener('change', renderSkillTable);
-  skillTable.addEventListener('click', async (event) => { const button = event.target.closest?.('[data-start-action]'); if (!button) return; const skillId = button.dataset.skillId; const action = actionFor(skillId, button.dataset.actionId); const blocker = liveBlocker(model, liveState(), { kind: 'action', skillId, actionId: action?.id }); if (blocker) { skillStatus.textContent = `Blocked: ${factLabel(blocker)}`; skillStatus.dataset.state = 'error'; return; } try { await api.stopAction(); await api.startAction(skillId, action.id); skillStatus.textContent = `${actionName(action)} started.`; skillStatus.dataset.state = 'idle'; } catch (error) { skillStatus.textContent = error instanceof Error ? error.message : String(error); skillStatus.dataset.state = 'error'; } });
+  skillTable.addEventListener('click', async (event) => { const button = event.target.closest?.('[data-start-action]'); if (!button || button.disabled || isExecutionLocked(state.executorStatus?.phase)) return; const skillId = button.dataset.skillId; const action = actionFor(skillId, button.dataset.actionId); if (!action) return; const blocker = liveBlocker(model, liveState(), { kind: 'action', skillId, actionId: action.id }); if (blocker) { skillStatus.textContent = `Blocked: ${factLabel(blocker)}`; skillStatus.dataset.state = 'error'; return; } try { await api.stopAction(); await api.startAction(skillId, action.id); skillStatus.textContent = `${actionName(action)} started.`; skillStatus.dataset.state = 'idle'; } catch (error) { skillStatus.textContent = error instanceof Error ? error.message : String(error); skillStatus.dataset.state = 'error'; } });
 
   const planPanel = shell.panels.plan;
-  planPanel.innerHTML = `<div class="plan-view"><form class="plan-form" id="fr-plan-form"><div class="field"><label for="fr-plan-target">Target type</label><select class="control" id="fr-plan-target"><option value="item">Item total</option><option value="item-gain">Item gain</option><option value="level">Skill level</option><option value="xp">Skill XP</option><option value="action">Action</option><option value="unlock">Unlock</option><option value="gold">Gold</option></select></div><div class="field" id="fr-plan-item-field"><label for="fr-plan-item">Desired item</label><div class="plan-combobox"><input class="control" id="fr-plan-item" type="search" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded="false" autocomplete="off" placeholder="Search item names"><div class="combobox-popover" id="fr-plan-options" role="listbox" hidden></div></div></div><div class="field" id="fr-plan-skill-field" hidden><label for="fr-plan-skill">Skill</label><select class="control" id="fr-plan-skill"></select></div><div class="field" id="fr-plan-action-field" hidden><label for="fr-plan-action">Action</label><select class="control" id="fr-plan-action"></select></div><div class="field" id="fr-plan-unlock-field" hidden><label for="fr-plan-unlock">Unlock</label><select class="control" id="fr-plan-unlock"></select></div><div class="field"><label for="fr-plan-qty" id="fr-plan-qty-label">Quantity</label><input class="control data" id="fr-plan-qty" type="number" min="1" step="1" value="1" inputmode="numeric"></div><div class="field" id="fr-plan-mode-field" hidden><label for="fr-plan-action-mode">Action target</label><select class="control" id="fr-plan-action-mode"><option value="runs">Runs</option><option value="minutes">Minutes</option></select></div><button class="button" id="fr-resolve-plan" type="submit">Add target</button></form><div id="fr-plan-result"><div class="empty">Add a target to begin a queue.</div></div><div class="executor" aria-label="Queue status"><div class="executor-status" role="status" aria-live="polite"><strong id="fr-executor-phase">Ready</strong><p id="fr-executor-message">Add a target to begin a queue.</p><progress class="executor-progress" id="fr-executor-progress" max="1" value="0" aria-label="Queue progress"></progress></div></div></div>`;
-  const planForm = planPanel.querySelector('#fr-plan-form'); const planKind = planPanel.querySelector('#fr-plan-target'); const planItem = planPanel.querySelector('#fr-plan-item'); const planOptions = planPanel.querySelector('#fr-plan-options'); const planSkill = planPanel.querySelector('#fr-plan-skill'); const planAction = planPanel.querySelector('#fr-plan-action'); const planUnlock = planPanel.querySelector('#fr-plan-unlock'); const planQty = planPanel.querySelector('#fr-plan-qty'); const planQtyLabel = planPanel.querySelector('#fr-plan-qty-label'); const planMode = planPanel.querySelector('#fr-plan-action-mode');
+  planPanel.innerHTML = `<div class="plan-view"><form class="plan-form" id="fr-plan-form"><div class="field"><label for="fr-plan-target">Target type</label><select class="control" id="fr-plan-target"><option value="item">Item total</option><option value="item-gain">Item gain</option><option value="level">Skill level</option><option value="xp">Skill XP</option><option value="action">Action</option><option value="unlock">Unlock</option><option value="gold">Gold</option></select></div><div class="field" id="fr-plan-item-field"><label for="fr-plan-item">Desired item</label><div class="plan-combobox"><input class="control" id="fr-plan-item" type="search" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-controls="fr-plan-options" aria-expanded="false" autocomplete="off" placeholder="Search item names"><div class="combobox-popover" id="fr-plan-options" role="listbox" hidden></div></div></div><div class="field" id="fr-plan-skill-field" hidden><label for="fr-plan-skill">Skill</label><select class="control" id="fr-plan-skill"></select></div><div class="field" id="fr-plan-action-field" hidden><label for="fr-plan-action">Action</label><select class="control" id="fr-plan-action"></select></div><div class="field" id="fr-plan-unlock-field" hidden><label for="fr-plan-unlock">Unlock</label><select class="control" id="fr-plan-unlock"></select></div><div class="field"><label for="fr-plan-qty" id="fr-plan-qty-label">Quantity</label><input class="control data" id="fr-plan-qty" type="number" min="1" step="1" value="1" inputmode="numeric"></div><div class="field" id="fr-plan-mode-field" hidden><label for="fr-plan-action-mode">Action target</label><select class="control" id="fr-plan-action-mode"><option value="runs">Runs</option><option value="minutes">Minutes</option></select></div><button class="button" id="fr-resolve-plan" type="submit">Add target</button></form><p class="form-error" id="fr-plan-form-error" role="status" aria-live="polite" hidden></p><div id="fr-plan-result"><div class="empty">Add a target to begin a queue.</div></div><div class="executor" aria-label="Queue status"><div class="executor-status" role="status" aria-live="polite"><strong id="fr-executor-phase">Ready</strong><p id="fr-executor-message">Add a target to begin a queue.</p><progress class="executor-progress" id="fr-executor-progress" max="1" value="0" aria-label="Queue progress"></progress></div></div></div>`;
+  const planForm = planPanel.querySelector('#fr-plan-form'); const planFormError = planPanel.querySelector('#fr-plan-form-error'); const planKind = planPanel.querySelector('#fr-plan-target'); const planItem = planPanel.querySelector('#fr-plan-item'); const planOptions = planPanel.querySelector('#fr-plan-options'); const planSkill = planPanel.querySelector('#fr-plan-skill'); const planAction = planPanel.querySelector('#fr-plan-action'); const planUnlock = planPanel.querySelector('#fr-plan-unlock'); const planQty = planPanel.querySelector('#fr-plan-qty'); const planQtyLabel = planPanel.querySelector('#fr-plan-qty-label'); const planMode = planPanel.querySelector('#fr-plan-action-mode');
   planSkill.innerHTML = skills.map((skill) => `<option value="${escapeHtml(skill.id)}">${escapeHtml(skillNames[skill.id] || skill.id)}</option>`).join('');
   if (!planKind.value) planKind.value = 'item';
   if (!planSkill.value) planSkill.value = skills[0]?.id || '';
-  const renderActionOptions = () => { const actions = model._index.actionsBySkill.get(planSkill.value) || []; planAction.innerHTML = actions.map((action) => `<option value="${escapeHtml(action.id)}">${escapeHtml(actionName(action))}</option>`).join(''); planAction.value = actions[0]?.id || ''; };
+  const renderActionOptions = () => { const actions = model._index.actionsBySkill.get(planSkill.value) || []; const special = planSkill.value === 'agility' ? (model.agilityCourses || []).map((course) => ({ id: course.id, name: course.name })) : planSkill.value === 'cartography' ? (model.maps || []).map((map) => ({ id: map.id, name: map.name })) : []; const options = actions.length ? actions : special; planAction.innerHTML = options.map((action) => `<option value="${escapeHtml(action.id)}">${escapeHtml(actionName(action))}</option>`).join(''); planAction.value = options[0]?.id || ''; };
   const renderUnlockOptions = () => { const entries = nextUnlocks(model, liveState(), 30); planUnlock.innerHTML = entries.map((entry) => `<option value="${escapeHtml(entry.fact)}">${escapeHtml(factLabel(entry.fact))} · ${escapeHtml(formatDuration(entry.costMs))}</option>`).join('') || '<option value="">No outstanding unlocks</option>'; planUnlock.value = entries[0]?.fact || ''; };
   const updateTargetFields = () => {
     const kind = planKind.value; const itemKind = kind === 'item' || kind === 'item-gain'; const skillKind = kind === 'level' || kind === 'xp' || kind === 'action';
@@ -1072,10 +1069,49 @@ function createApplication(shell, modelJson, api) {
     planQty.min = kind === 'level' ? '2' : '1';
     renderActionOptions(); if (kind === 'unlock') renderUnlockOptions();
   };
-  planKind.addEventListener('change', updateTargetFields); planSkill.addEventListener('change', renderActionOptions);
-  const showItemOptions = () => { const query = planItem.value.trim(); const entries = searchPlanTargets(sortedItems, query, [state.selectedItemId, state.selectedPlanItemId].filter(Boolean), 12); planOptions.innerHTML = entries.map((entry) => `<button type="button" role="option" class="item-row" data-plan-option="${escapeHtml(entry.id)}">${escapeHtml(entry.label)}</button>`).join('') || '<span class="empty">No matching items</span>'; planOptions.hidden = false; planItem.setAttribute('aria-expanded', 'true'); };
-  planItem.addEventListener('input', showItemOptions); planItem.addEventListener('focus', showItemOptions); planItem.addEventListener('keydown', (event) => { if (event.key === 'Enter') { const first = planOptions.querySelector?.('[data-plan-option]'); if (first && !planOptions.hidden) { event.preventDefault(); first.click(); } } if (event.key === 'Escape') planOptions.hidden = true; });
-  planOptions.addEventListener('click', (event) => { const button = event.target.closest?.('[data-plan-option]'); if (!button) return; state.selectedPlanItemId = button.dataset.planOption; planItem.value = items[state.selectedPlanItemId]?.label || state.selectedPlanItemId; planOptions.hidden = true; planItem.setAttribute('aria-expanded', 'false'); });
+  const setFormError = (message = '') => { planFormError.textContent = message; planFormError.hidden = !message; planFormError.dataset.state = message ? 'error' : 'idle'; };
+  planKind.addEventListener('change', () => { setFormError(); updateTargetFields(); }); planSkill.addEventListener('change', () => { setFormError(); renderActionOptions(); });
+  planForm.addEventListener('submit', (event) => { event.preventDefault(); try { const target = makeTarget(); setFormError(); state.queueGoals.push({ id: `plan-${state.nextPlanId++}`, target }); persistQueue(); refreshQueue(); renderPlan(); } catch (error) { setFormError(error instanceof Error ? error.message : String(error)); } });  let planTargetResults = [];
+  let activePlanTarget = -1;
+  const positionPlanOptions = () => {
+    const rect = planItem.getBoundingClientRect?.() || { left: 8, bottom: 44, width: 240 };
+    const view = documentRef.defaultView || globalThis;
+    const viewportWidth = Number(view?.innerWidth) || 1024; const viewportHeight = Number(view?.innerHeight) || 768; const gutter = 8;
+    const width = Math.min(Number(rect.width) || 240, Math.max(0, viewportWidth - 2 * gutter));
+    const left = Math.max(gutter, Math.min(Number(rect.left) || gutter, viewportWidth - width - gutter));
+    const top = Math.min((Number(rect.bottom) || 44) + 4, viewportHeight - gutter);
+    planOptions.style.left = `${left}px`; planOptions.style.top = `${top}px`; planOptions.style.width = `${width}px`; planOptions.style.maxHeight = `${Math.max(96, Math.min(280, viewportHeight - top - gutter))}px`;
+  };
+  const renderItemOptions = (query = planItem.value) => {
+    planTargetResults = searchPlanTargets(sortedItems, query, [state.selectedItemId, state.selectedPlanItemId].filter(Boolean), 12);
+    if (activePlanTarget >= planTargetResults.length) activePlanTarget = planTargetResults.length - 1;
+    planOptions.innerHTML = planTargetResults.length
+      ? planTargetResults.map((entry, index) => `<button type="button" role="option" id="fr-plan-option-${index}" class="combobox-option" data-plan-option="${escapeHtml(entry.id)}" aria-selected="${index === activePlanTarget}"><strong>${escapeHtml(entry.label)}</strong><small>${escapeHtml(entry.item?.type || 'Item')}</small></button>`).join('')
+      : '<span class="combobox-empty" role="status">No matching items</span>';
+    planItem.setAttribute('aria-activedescendant', activePlanTarget >= 0 ? `fr-plan-option-${activePlanTarget}` : '');
+  };
+  const closeItemOptions = () => { planOptions.hidden = true; planItem.setAttribute('aria-expanded', 'false'); planItem.setAttribute('aria-activedescendant', ''); activePlanTarget = -1; };
+  const openItemOptions = (query = planItem.value) => { activePlanTarget = -1; renderItemOptions(query); positionPlanOptions(); planOptions.hidden = false; planItem.setAttribute('aria-expanded', 'true'); };
+  const selectPlanItem = (itemId) => { if (!items[itemId]) return false; state.selectedPlanItemId = itemId; planItem.value = items[itemId]?.label || itemId; closeItemOptions(); return true; };
+  const movePlanItem = (delta) => {
+    if (planOptions.hidden) openItemOptions(planItem.value);
+    if (!planTargetResults.length) return;
+    activePlanTarget = activePlanTarget < 0 ? (delta > 0 ? 0 : planTargetResults.length - 1) : (activePlanTarget + delta + planTargetResults.length) % planTargetResults.length;
+    renderItemOptions(planItem.value);
+    planOptions.querySelector?.(`#fr-plan-option-${activePlanTarget}`)?.scrollIntoView?.({ block: 'nearest' });
+  };
+  planItem.addEventListener('input', () => { state.selectedPlanItemId = null; openItemOptions(planItem.value); });
+  planItem.addEventListener('focus', () => openItemOptions(state.selectedPlanItemId ? '' : planItem.value));
+  planItem.addEventListener('keydown', (event) => {
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); movePlanItem(event.key === 'ArrowDown' ? 1 : -1); }
+    else if (event.key === 'Enter' && !planOptions.hidden && activePlanTarget >= 0) { event.preventDefault(); selectPlanItem(planTargetResults[activePlanTarget]?.id); }
+    else if (event.key === 'Escape' && !planOptions.hidden) { event.preventDefault(); closeItemOptions(); }
+    else if (event.key === 'Tab') closeItemOptions();
+  });
+  planOptions.addEventListener('click', (event) => { const button = event.target.closest?.('[data-plan-option]'); if (button) selectPlanItem(button.dataset.planOption); });
+  shell.shadow.addEventListener?.('pointerdown', (event) => { if (event.target !== planItem && !planOptions.contains?.(event.target)) closeItemOptions(); });
+  planPanel.addEventListener('scroll', closeItemOptions, true);
+  shell.close.addEventListener('click', closeItemOptions); documentRef.defaultView?.addEventListener?.('resize', closeItemOptions);
   const makeTarget = () => {
     const kind = planKind.value; const amount = Math.max(1, Math.trunc(Number(planQty.value) || 0));
     if (kind === 'item' || kind === 'item-gain') { const itemId = state.selectedPlanItemId || sortedItems.find(([id, item]) => String(item.label || '').toLocaleLowerCase() === planItem.value.trim().toLocaleLowerCase())?.[0]; if (!itemId || !items[itemId]) throw new Error('Choose an item from the search results.'); return { type: kind, itemId, [kind === 'item' ? 'qty' : 'gain']: amount }; }
@@ -1087,42 +1123,123 @@ function createApplication(shell, modelJson, api) {
   };
 
   let renderPlan;
+  const dependencyManual = (step, allSteps, status) => {
+    const byId = new Map((allSteps || []).map((candidate) => [candidate.id, candidate])); const seen = new Set();
+    const visit = (id) => {
+      if (seen.has(id)) return null; seen.add(id);
+      const dependency = byId.get(id); if (!dependency) return null;
+      if (dependency.kind === 'manual' && status.stepStatuses?.[dependency.id] !== 'done') return dependency;
+      for (const parentId of dependency.deps || []) { const found = visit(parentId); if (found) return found; }
+      return null;
+    };
+    for (const id of step.deps || []) { const found = visit(id); if (found) return found; }
+    return null;
+  };
+  const stepProgress = (step, status) => {
+    if (status.runningStepId !== step.id) return null;
+    const rawValue = typeof status.stepProgress === 'object' && status.stepProgress !== null ? status.stepProgress[step.id] : status.stepProgress ?? status.stepProduced ?? status.progressValue ?? 0;
+    const rawMax = typeof status.stepProgressMax === 'object' && status.stepProgressMax !== null ? status.stepProgressMax[step.id] : status.stepProgressMax ?? status.stepTarget ?? step.expected?.runs;
+    const value = rawValue && typeof rawValue === 'object' ? rawValue.value ?? rawValue.current : rawValue;
+    const max = rawMax && typeof rawMax === 'object' ? rawMax.max ?? rawMax.total : rawMax;
+    if (!Number.isFinite(Number(value)) || !Number.isFinite(Number(max)) || Number(max) <= 0) return null;
+    return { value: Math.max(0, Math.min(Number(max), Number(value))), max: Number(max) };
+  };
+  const blockerChain = (blocked, live) => {
+    const start = blocked?.fact; if (!start) return [];
+    try {
+      const reach = computeReach(model, live); const chain = []; const seen = new Set();
+      const visit = (fact) => {
+        if (!fact || seen.has(fact)) return; seen.add(fact);
+        const entry = reach.get?.(fact); const parents = entry?.parents || reach.parents?.get?.(fact) || [];
+        for (const parent of parents) if (!factSatisfied(model, live, parent)) visit(parent);
+        chain.push(fact);
+      };
+      visit(start); return chain.length > 1 ? chain.slice(-4) : [];
+    } catch { return []; }
+  };
   const renderExecutor = () => {
-    const status = state.executorStatus || {}; const phase = status.phase || 'idle'; const phaseNode = planPanel.querySelector('#fr-executor-phase'); const messageNode = planPanel.querySelector('#fr-executor-message'); const progress = planPanel.querySelector('#fr-executor-progress');
-    phaseNode.textContent = phase[0]?.toUpperCase() + phase.slice(1); messageNode.textContent = status.message || (phase === 'waiting' ? 'Waiting for a runnable step.' : ''); progress.value = status.totalSteps ? status.completedSteps / status.totalSteps : 0;
-    shell.queueControls.querySelector('#fr-run').disabled = !state.resolvedQueue.steps.length || isExecutionLocked(phase); shell.queueControls.querySelector('#fr-stop').disabled = !isExecutionLocked(phase); shell.queueControls.querySelector('#fr-resume').hidden = true;
-    shell.compactStrip.querySelector('#fr-compact-phase').textContent = phase; shell.compactStrip.querySelector('#fr-compact-message').textContent = messageNode.textContent;
+    const status = state.executorStatus || {}; const phase = status.phase || 'idle'; const locked = isExecutionLocked(phase);
+    const phaseNode = planPanel.querySelector('#fr-executor-phase'); const messageNode = planPanel.querySelector('#fr-executor-message'); const progress = planPanel.querySelector('#fr-executor-progress');
+    const totalSteps = Number(status.totalSteps) || state.resolvedQueue.steps.length || 0; const completedSteps = Number(status.completedSteps) || 0;
+    const running = state.resolvedQueue.steps.find((step) => step.id === status.runningStepId);
+    const phaseText = phase[0]?.toUpperCase() + phase.slice(1);
+    phaseNode.textContent = phaseText; messageNode.textContent = status.message || (phase === 'waiting' ? 'Waiting for a runnable step.' : '');
+    progress.max = Math.max(1, totalSteps); progress.value = Math.min(progress.max, completedSteps);
+    const runButton = shell.queueControls.querySelector('#fr-run'); const resumeButton = shell.queueControls.querySelector('#fr-resume'); const stopButton = shell.queueControls.querySelector('#fr-stop'); const clearButton = shell.queueControls.querySelector('#fr-clear');
+    runButton.disabled = !state.resolvedQueue.steps.length || locked;
+    stopButton.disabled = !locked; resumeButton.hidden = phase !== 'waiting';
+    clearButton.disabled = !state.queueGoals.length || locked;
+    clearButton.title = locked ? 'Clear queue when execution stops' : 'Clear queue'; clearButton.setAttribute('aria-label', clearButton.title);
+    for (const button of shell.panels.skills.querySelectorAll?.('[data-start-action]') || []) button.disabled = locked;
+    const launcherLabel = shell.launcher.querySelector?.('#fr-launcher-label');
+    if (launcherLabel) launcherLabel.textContent = phase === 'running'
+      ? `Companion · ${Math.min(totalSteps, completedSteps + (running ? 1 : 0))}/${totalSteps}`
+      : phase === 'waiting' ? 'Companion · waiting' : phase === 'complete' ? 'Companion · queue done' : phase === 'error' ? 'Companion · queue stopped' : 'Companion';
+    shell.launcher.dataset.state = phase === 'error' ? 'error' : 'ready';
+    const compactPhase = shell.compactStrip.querySelector('#fr-compact-phase'); const compactMessage = shell.compactStrip.querySelector('#fr-compact-message'); const compactProgress = shell.compactStrip.querySelector('#fr-compact-progress'); const compactStart = shell.compactStrip.querySelector('#fr-compact-start'); const compactResume = shell.compactStrip.querySelector('#fr-compact-resume'); const compactStop = shell.compactStrip.querySelector('#fr-compact-stop');
+    compactPhase.textContent = phaseText; compactMessage.textContent = messageNode.textContent;
+    compactProgress.max = Math.max(1, totalSteps); compactProgress.value = Math.min(compactProgress.max, completedSteps);
+    compactStart.hidden = !state.queueGoals.length || locked; compactStart.disabled = !state.resolvedQueue.steps.length;
+    compactResume.hidden = phase !== 'waiting'; compactResume.disabled = !state.resolvedQueue.steps.length; compactStop.hidden = !locked; compactStop.disabled = !locked;
   };
   const stepStatus = (step, live, status) => {
     if (status.stepStatuses?.[step.id] === 'done') return 'done';
-    if (step.kind === 'manual') return 'waiting on you';
     if (status.stepStatuses?.[step.id] === 'running') return 'running';
+    if (step.kind === 'manual') return 'waiting on you';
     const blocker = liveBlocker(model, live, step); return blocker ? `blocked: ${factLabel(blocker)}` : 'ready';
   };
   renderPlan = () => {
-    const result = state.resolvedQueue; const live = liveState(); const status = state.executorStatus || {}; const labels = Object.fromEntries(state.queueGoals.map((entry) => [entry.id, targetLabel(entry.target)]));
-    const targetRows = result.targets.map((entry, index) => `<section class="queue-plan" data-target-index="${index}"><h3>${escapeHtml(labels[state.queueGoals[index]?.id] || targetLabel(entry.target))} ${entry.ok ? '<span class="badge signal">ready</span>' : '<span class="badge danger">blocked</span>'}</h3>${entry.blocked ? `<p class="banner warning">Blocked: ${escapeHtml(entry.blocked.fact || '')}${entry.blocked.reason ? ` · ${escapeHtml(entry.blocked.reason)}` : ''}</p>` : ''}</section>`).join('');
-    const rows = (result.steps || []).map((step) => { const current = stepStatus(step, live, status); const per = result.perStep?.find((entry) => entry.id === step.id); const depManual = (step.deps || []).map((dep) => result.steps.find((candidate) => candidate.id === dep)).find((dep) => dep?.kind === 'manual'); const eta = depManual && (per?.endMs == null || step.expected?.ms == null) ? `after ${depManual.label || depManual.id}` : per ? `~${formatDuration(Math.max(0, per.endMs - per.startMs))}` : ''; const readyAt = step.kind === 'manual' ? formatFinishTime(result.readyAt?.[step.id] || 0) : null; return `<li class="record-row plan-step" data-step-id="${escapeHtml(step.id)}"><div class="record-top"><strong>${escapeHtml(step.label || actionName(actionFor(step.skillId, step.actionId)) || step.id)}</strong><div class="badges"><span class="badge">${escapeHtml(step.purpose || 'goal')}</span><span class="badge" data-status="${escapeHtml(current)}">${escapeHtml(current)}</span></div></div><p>${escapeHtml(eta)}${step.kind === 'manual' ? ` · ready for you at ~${escapeHtml(readyAt)}` : ''}</p>${step.kind === 'manual' ? `<div class="instruction-card"><strong>Waiting for you</strong><p>${escapeHtml(step.instruction || step.label || 'Complete this step in the game.')}</p></div>` : ''}</li>`; }).join('');
-    planPanel.querySelector('#fr-plan-result').innerHTML = state.queueGoals.length ? `${targetRows}<h3>Timeline</h3><ol class="record-list">${rows || '<li class="empty">No steps required; targets are already satisfied.</li>'}</ol>` : '<div class="empty">Add a target to begin a queue.</div>';
+    const result = state.resolvedQueue; const live = liveState(); const status = state.executorStatus || {}; const locked = isExecutionLocked(status.phase); const labels = Object.fromEntries(state.queueGoals.map((entry) => [entry.id, targetLabel(entry.target)]));
+    const firstBlocked = result.targets.findIndex((entry) => !entry.ok);
+    const targetRows = state.queueGoals.map((goal, index) => {
+      const entry = result.targets[index]; const queuedBehind = !entry && firstBlocked >= 0 && index > firstBlocked; const blocked = entry?.blocked; const label = labels[goal.id] || targetLabel(goal.target);
+      const chain = blocked ? blockerChain(blocked, live) : [];
+      const statusBadge = queuedBehind ? '<span class="badge warning">queued behind blocked target</span>' : entry?.ok ? '<span class="badge signal">ready</span>' : entry ? '<span class="badge danger">blocked</span>' : '<span class="badge">queued</span>';
+      const blocker = blocked ? `<p class="banner warning">Blocked: ${escapeHtml(blocked.fact || '')}${blocked.reason ? ` · ${escapeHtml(blocked.reason)}` : ''}${chain.length ? `<br>Prerequisite chain: ${escapeHtml(chain.map(factLabel).join(' → '))}` : ''}</p>` : queuedBehind ? '<p class="banner warning">Not planned: queued behind the blocked target above.</p>' : '';
+      const remove = !locked ? `<button class="icon-button" type="button" data-queue-remove="${escapeHtml(goal.id)}" aria-label="Remove ${escapeHtml(label)}" title="Remove target">${ICONS.remove}</button>` : '';
+      return `<section class="queue-plan" data-target-index="${index}" data-queued-behind-blocked="${queuedBehind}"><div class="queue-plan-top"><h3>${escapeHtml(label)} ${statusBadge}</h3>${remove}</div>${blocker}</section>`;
+    }).join('');
+    const rows = (result.steps || []).map((step) => {
+      const current = stepStatus(step, live, status); const per = result.perStep?.find((entry) => entry.id === step.id); const depManual = current !== 'done' && step.kind !== 'manual' ? dependencyManual(step, result.steps, status) : null;
+      const eta = depManual ? `after ${depManual.label || depManual.id}` : current === 'running' && Number(status.stepRemainingMs ?? step.expected?.ms) > 0 ? `about ${formatDuration(status.stepRemainingMs ?? step.expected?.ms)} left` : per ? `~${formatDuration(Math.max(0, Number(per.endMs) - Number(per.startMs)))}` : '';
+      const anchor = locked && Number.isFinite(Number(state.queueStartedAt)) ? Number(state.queueStartedAt) : Date.now(); const readyAt = step.kind === 'manual' ? formatFinishTime(result.readyAt?.[step.id] || 0, anchor) : null; const progressState = stepProgress(step, status); const progressMarkup = progressState ? `<progress class="step-progress" max="${escapeHtml(progressState.max)}" value="${escapeHtml(progressState.value)}" aria-label="${escapeHtml(step.label || step.id)} progress"></progress>` : '';
+      return `<li class="record-row plan-step" data-step-id="${escapeHtml(step.id)}"><div class="record-top"><strong>${escapeHtml(step.label || actionName(actionFor(step.skillId, step.actionId)) || step.id)}</strong><div class="badges"><span class="badge">${escapeHtml(step.purpose || 'goal')}</span><span class="badge" data-status="${escapeHtml(current)}">${escapeHtml(current)}</span></div></div><p>${escapeHtml(eta)}${step.kind === 'manual' ? ` · ready for you at ~${escapeHtml(readyAt)}` : ''}</p>${progressMarkup}${step.kind === 'manual' ? `<div class="instruction-card"><strong>Waiting for you</strong><p>${escapeHtml(step.instruction || step.label || 'Complete this step in the game.')}</p></div>` : ''}</li>`;
+    }).join('');
+    const totals = state.queueGoals.length ? `<p class="queue-total data" id="fr-queue-total">Optimistic: ${escapeHtml(formatDuration(result.optimisticMs || 0))} · Scheduler-faithful: ${escapeHtml(formatDuration(result.schedulerMs || 0))}</p>` : '';
+    const infeasibility = result.infeasibility ? `<p class="banner warning" role="status">${ICONS.warning}<span>Simulation warning: ${escapeHtml(result.steps.find((step) => step.id === result.infeasibility.stepId)?.label || result.infeasibility.stepId || 'unknown step')} · ${escapeHtml(result.infeasibility.reason || 'infeasible')}</span></p>` : '';
+    planPanel.querySelector('#fr-plan-result').innerHTML = state.queueGoals.length ? `${targetRows}${totals}${infeasibility}<h3>Timeline</h3><ol class="record-list">${rows || '<li class="empty">No steps required; targets are already satisfied.</li>'}</ol>` : '<div class="empty">Add a target to begin a queue.</div>';
     renderExecutor();
   };
-  const targetLabel = (target) => { if (!target) return 'Target'; if (target.type === 'item' || target.type === 'item-gain') return `${target.type === 'item-gain' ? 'Gain' : 'Reach'} ${target.qty ?? target.gain} ${labelFor(items, target.itemId)}`; if (target.type === 'level') return `${skillNames[target.skillId] || target.skillId} level ${target.level}`; if (target.type === 'xp') return `${skillNames[target.skillId] || target.skillId} XP ${target.xp}`; if (target.type === 'action') return `${actionName(actionFor(target.skillId, target.actionId))} · ${target.runs ? `${target.runs} runs` : `${target.minutes} minutes`}`; if (target.type === 'unlock') return `Unlock ${factLabel(target.fact)}`; return `${target.amount} gold`; };
-  planForm.addEventListener('submit', (event) => { event.preventDefault(); try { const target = makeTarget(); state.queueGoals.push({ id: `plan-${state.nextPlanId++}`, target }); persistQueue(); refreshQueue(); renderPlan(); } catch (error) { state.executorStatus = { ...state.executorStatus, phase: 'error', message: error instanceof Error ? error.message : String(error) }; renderExecutor(); } });
+  const targetActionLabel = (target) => actionName(actionFor(target.skillId, target.actionId) || (target.skillId === 'agility' ? (model.agilityCourses || []).find((course) => course.id === target.actionId) : target.skillId === 'cartography' ? (model.maps || []).find((map) => map.id === target.actionId) : null));
+  const targetLabel = (target) => { if (!target) return 'Target'; if (target.type === 'item' || target.type === 'item-gain') return `${target.type === 'item-gain' ? 'Gain' : 'Reach'} ${target.qty ?? target.gain} ${labelFor(items, target.itemId)}`; if (target.type === 'level') return `${skillNames[target.skillId] || target.skillId} level ${target.level}`; if (target.type === 'xp') return `${skillNames[target.skillId] || target.skillId} XP ${target.xp}`; if (target.type === 'action') return `${targetActionLabel(target)} · ${target.runs ? `${target.runs} runs` : `${target.minutes} minutes`}`; if (target.type === 'unlock') return `Unlock ${factLabel(target.fact)}`; return `${target.amount} gold`; };
 
   const executor = createDirectExecutor(api, { liveBlocker: (stateSnapshot, step) => liveBlocker(model, stateSnapshot, step), factSatisfied: (stateSnapshot, fact) => factSatisfied(model, stateSnapshot, fact), onUpdate(status) { state.executorStatus = status; renderPlan?.(); } });
-  const runQueue = () => { if (isExecutionLocked(state.executorStatus?.phase)) return; refreshQueue(); if (state.resolvedQueue.steps.length) { renderPlan(); executor.run(state.resolvedQueue.steps); } };
-  const stopQueue = () => executor.stop();
-  shell.queueControls.querySelector('#fr-run').addEventListener('click', runQueue); shell.queueControls.querySelector('#fr-stop').addEventListener('click', stopQueue); shell.queueControls.querySelector('#fr-clear').addEventListener('click', () => { if (isExecutionLocked(state.executorStatus?.phase)) return; state.queueGoals = []; state.resolvedQueue = { steps: [], targets: [] }; persistQueue(); renderPlan(); });
-  shell.compactStrip.querySelector('#fr-compact-start').addEventListener('click', runQueue); shell.compactStrip.querySelector('#fr-compact-stop').addEventListener('click', stopQueue);
+  const runQueue = () => { if (isExecutionLocked(state.executorStatus?.phase)) return; refreshQueue(); if (state.resolvedQueue.steps.length) { state.queueStartedAt = Date.now(); renderPlan(); executor.run(state.resolvedQueue.steps); } };
+  const resumeQueue = () => { if (state.executorStatus?.phase !== 'waiting') return; refreshQueue(); if (state.resolvedQueue.steps.length) { state.queueStartedAt ??= Date.now(); executor.run(state.resolvedQueue.steps); } };
+  const stopQueue = () => { state.queueStartedAt = null; executor.stop(); };
+  shell.queueControls.querySelector('#fr-run').addEventListener('click', runQueue); shell.queueControls.querySelector('#fr-resume').addEventListener('click', resumeQueue); shell.queueControls.querySelector('#fr-stop').addEventListener('click', stopQueue); shell.queueControls.querySelector('#fr-clear').addEventListener('click', () => { if (isExecutionLocked(state.executorStatus?.phase)) return; state.queueGoals = []; state.resolvedQueue = { steps: [], targets: [] }; state.queueStartedAt = null; persistQueue(); renderPlan(); });
+  shell.compactStrip.querySelector('#fr-compact-start').addEventListener('click', runQueue); shell.compactStrip.querySelector('#fr-compact-resume').addEventListener('click', resumeQueue); shell.compactStrip.querySelector('#fr-compact-stop').addEventListener('click', stopQueue);
+  planPanel.addEventListener('click', (event) => { const remove = event.target.closest?.('[data-queue-remove]'); if (!remove || isExecutionLocked(state.executorStatus?.phase)) return; const index = state.queueGoals.findIndex((goal) => goal.id === remove.dataset.queueRemove); if (index < 0) return; state.queueGoals.splice(index, 1); persistQueue(); refreshQueue(); renderPlan(); });
 
-  const restore = () => { try { const parsed = JSON.parse(storage?.getItem(QUEUE_STORAGE_KEY) || 'null'); if (Array.isArray(parsed?.goals)) { state.queueGoals = parsed.goals.filter((entry) => entry?.target).map((entry) => ({ id: entry.id || `plan-${state.nextPlanId++}`, target: entry.target })); state.nextPlanId = Math.max(state.nextPlanId, Number(parsed.nextPlanId) || 1); } } catch { /* optional */ } refreshQueue(); };
+  const restore = () => {
+    try {
+      const parsed = JSON.parse(storage?.getItem(QUEUE_STORAGE_KEY) || 'null');
+      if (Array.isArray(parsed?.goals)) {
+        const seenIds = new Set();
+        for (const entry of parsed.goals) {
+          if (!entry || typeof entry !== 'object' || !validTarget(entry.target)) continue;
+          const proposed = typeof entry.id === 'string' && entry.id.trim() ? entry.id : `plan-${state.nextPlanId++}`;
+          const id = seenIds.has(proposed) ? `plan-${state.nextPlanId++}` : proposed;
+          seenIds.add(id); state.queueGoals.push({ id, target: entry.target });
+        }
+        const next = Number(parsed.nextPlanId); if (Number.isInteger(next) && next > 0) state.nextPlanId = Math.max(state.nextPlanId, next);
+      }
+    } catch { /* optional */ }
+    refreshQueue();
+  };
   const restoreAndRender = () => { restore(); renderItemList(); renderItemDetail(); renderSkillTable(); renderPlan(); };
   updateTargetFields(); restoreAndRender();
   return { model, indexedModel: model, datasets, indexes, state, executor, renderItemList, renderItemDetail, renderSkillTable, renderPlan, refreshQueue };
-}
-
-function targetLabelFallback(target) {
-  return target?.type || 'target';
 }
 
 export async function fetchModel(fetchRef) {
