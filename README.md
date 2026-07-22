@@ -28,11 +28,15 @@
 | Item wiki | Compiled skill actions |
 | --- | --- |
 | Search an item, then inspect its sources, uses, stats, and artwork. | Compare action levels, timings, tools, outputs, and drop rates. |
-| ![Ancient Spore item details with sources and uses](docs/screenshots/item-wiki.webp) | ![Archaeology actions with levels, intervals, outputs, and tools](docs/screenshots/skill-actions.webp) |
+| ![Item wiki detail panel showing an item's sources, value, and uses](docs/screenshots/item-wiki.webp) | ![Archaeology actions with levels, intervals, outputs, and tools](docs/screenshots/skill-actions.webp) |
 
 ### Planning preview
 
-![Minor Fire Rune timeline with active Earthwort gathering and queued Copper Vein, Practice Inscription, and rune crafting steps](docs/screenshots/action-planner.webp)
+![Action planner timeline with a running item target and queued dependency steps](docs/screenshots/action-planner.webp)
+
+Manual steps stay visible in the timeline with a "waiting on you" badge and a wall-clock ready-at estimate, so you know when to come back for a purchase or build.
+
+![Timeline manual instruction cards showing waiting-on-you badges and ready-for-you-at ETA times](docs/screenshots/manual-steps.webp)
 
 ## What it does
 
@@ -226,6 +230,21 @@ npx tsc --noEmit
 ```
 
 `npm test` and `npm run build` run `scripts/embed-runtime.mjs` first, which embeds the runtime and overlay sources. Runtime npm dependencies are intentionally absent. See [AGENTS.md](AGENTS.md) for the scoped coding-agent workflow and repository safety boundaries.
+
+### Live validation and screenshots
+
+These wrappers drive the real game and require an approved live session. Run them in order:
+
+```
+npm run backup-saves
+npm run validate:live
+npm run screenshots
+```
+
+- `npm run backup-saves` copies every existing save location (CrossOver bottle `Fractured Realms`, `Fractured Realms Demo`, `visseron-idle`, Steam `userdata`, and the Arc browser Local Storage that holds the real companion save) into a timestamped directory under `~/.local/state/fractured-realms-companion/backups/saves-<UTC>/` with a `manifest.json`. Quit Arc first, or pass `--allow-running-arc` to accept a possibly torn leveldb copy. To restore, copy each directory back to its `sourcePath` while the game and Arc are closed.
+- `npm run validate:live` refreshes and launches the companion, then drives the overlay through wiki lookup, plan-and-execute, waiting-phase, and persistence checks against an isolated fresh save. It requires a save backup newer than 24 hours and never opens the player's Arc browser. First failure writes a screenshot, storage dump, and console log to `~/.local/state/fractured-realms-companion/validation-artifacts/<ts>/`. Playwright is a devDependency; install its browser once with `npx playwright install chromium`.
+- `npm run screenshots` regenerates `docs/screenshots/*.webp` from the committed `docs/screenshots/fixture-save.json` with a frozen clock, so composition and ready-at times stay stable across runs. It requires an already-refreshed install.
+
 
 The source of truth for releases is [`.github/workflows/release.yml`](.github/workflows/release.yml). `v*` tags build four standalone targets and `SHA256SUMS`. npm publishing is conditional on `NPM_TOKEN` and uses provenance.
 

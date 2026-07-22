@@ -16,14 +16,15 @@ const fixturePath = join(shotsDir, 'fixture-save.json');
 // Frozen wall clock so manual-step ready-at times render identically each run.
 const CLOCK_MS = Date.UTC(2026, 0, 5, 14, 0, 0);
 
-// Staged queue showcasing the rebuild: an item target with a multi-step plan, a
-// skill-level target, and an unlock whose plan contains manual purchase steps.
-// Ids are resolved against the committed fixture save + live model.json.
+// Staged queue showcasing the rebuild: a deep cross-skill item plan (whose
+// shared base materials are provisioned cumulatively), a skill-level target, and
+// a machine unlock whose plan contains manual purchase steps. Ids are resolved
+// against the committed fixture save + live model.json.
 const STAGED_QUEUE = {
   goals: [
-    { id: 'plan-1', target: { type: 'item', itemId: 'rune_bar', qty: 20 } },
+    { id: 'plan-1', target: { type: 'item', itemId: 'mithril_dagger', qty: 1 } },
     { id: 'plan-2', target: { type: 'level', skillId: 'woodcutting', level: 70 } },
-    { id: 'plan-3', target: { type: 'unlock', fact: 'machine:sawmill' } },
+    { id: 'plan-3', target: { type: 'unlock', fact: 'machine:steam_forge' } },
   ],
   nextPlanId: 4,
 };
@@ -71,14 +72,6 @@ async function main() {
   const panel = page.locator('#fr-panel');
 
   try {
-    // Ensure the panel is open (launcher toggles it).
-    await page.evaluate(() => {
-      const host = document.querySelector('#fractured-realms-companion');
-      const launcher = host?.shadowRoot?.querySelector('.launcher');
-      if (launcher && launcher.getAttribute('aria-expanded') !== 'true') launcher.click();
-    });
-    await panel.waitFor({ state: 'visible', timeout: 15_000 });
-
     // 1. Item wiki — first item with >=2 sources and >=1 use.
     await page.click('#fr-tab-items');
     await page.locator('#fr-item-list .item-row').first().waitFor({ timeout: 10_000 });
@@ -126,13 +119,13 @@ async function exportSave() {
   const running = await ensureCompanionRunning({ refresh: false });
   const profileDir = join(stateDir(), 'screenshot-profile');
   const { chromium } = await import('playwright');
-  const context = await chromium.launchPersistentContext(profileDir, { headless: false, viewport: { width: 853, height: 480 }, deviceScaleFactor: 2 });
+  const context = await chromium.launchPersistentContext(profileDir, { headless: false, viewport: { width: 900, height: 960 }, deviceScaleFactor: 2 });
   const page = context.pages()[0] ?? (await context.newPage());
   await page.goto('http://127.0.0.1:48766/');
   console.log('Browser open. Play/curate the slot-1 save, then close the browser to export.');
   await context.waitForEvent('close').catch(() => {});
   // Context closed by operator; read persisted storage from a fresh short-lived context.
-  const probe = await chromium.launchPersistentContext(profileDir, { viewport: { width: 853, height: 480 } });
+  const probe = await chromium.launchPersistentContext(profileDir, { viewport: { width: 900, height: 960 } });
   const probePage = probe.pages()[0] ?? (await probe.newPage());
   await probePage.goto('http://127.0.0.1:48766/', { waitUntil: 'domcontentloaded' });
   const storage = await dumpStorage(probePage);
