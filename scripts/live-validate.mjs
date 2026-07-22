@@ -11,6 +11,8 @@ import {
   ensureCompanionRunning,
   quitCompanion,
   openGame,
+  openPanel,
+  waitForOverlay,
   gameState,
   dumpStorage,
 } from './lib/live-game.mjs';
@@ -31,6 +33,12 @@ let ctx = null;
 
 function pass(name) { results.push({ name, ok: true }); console.log(`PASS ${name}`); }
 function fail(name, detail) { results.push({ name, ok: false, detail }); console.log(`FAIL ${name} — ${detail}`); }
+
+/** Run `doctor --json` and return the parsed rows array, or null on parse failure. */
+function doctorRows() {
+  const out = spawnSync(process.execPath, ['src/cli.ts', 'doctor', '--json'], { encoding: 'utf8' });
+  try { return JSON.parse(out.stdout); } catch { return null; }
+}
 
 async function artifacts(page, guard) {
   const ts = new Date().toISOString().replace(/[:.]/g, '-');
@@ -68,18 +76,19 @@ async function main() {
     pass('backup-gate');
   }
 
-  // 2. Preflight doctor (rows array; exit code 1 when any row FAILs).
-  const doctor = spawnSync(process.execPath, ['src/cli.ts', 'doctor', '--json'], { encoding: 'utf8' });
-  let rows;
-  try { rows = JSON.parse(doctor.stdout); } catch { rows = null; }
-  const blocking = Array.isArray(rows) ? rows.filter((r) => r.status === 'FAIL') : [{ status: 'FAIL', message: 'doctor output not parseable' }];
-  if (!Array.isArray(rows) || blocking.length) {
-    fail('preflight-doctor', `doctor reported blocking issues: ${blocking.map((r) => `${r.check}:${r.message}`).join('; ') || doctor.stdout || doctor.stderr}`);
+  // 2. Preflight: only environment rows must pass pre-refresh. The archive is
+  // pristine and the pack absent/stale until `refresh` runs in step 3, so those
+  // rows are expected to FAIL now and are re-checked strictly afterwards.
+  const ENV_CHECKS = new Set(['platform', 'steam', 'manifest', 'port', 'wine']);
+  const preRows = doctorRows();
+  const envBlocking = Array.isArray(preRows) ? preRows.filter((r) => ENV_CHECKS.has(r.check) && r.status === 'FAIL') : [{ check: 'doctor', message: 'output not parseable' }];
+  if (!Array.isArray(preRows) || envBlocking.length) {
+    fail('preflight-doctor', `environment not ready: ${envBlocking.map((r) => `${r.check}:${r.message}`).join('; ')}`);
     process.exit(1);
   }
   pass('preflight-doctor');
 
-  // 3. Ensure companion running.
+  // 3. Ensure companion running (refresh publishes pack v2 + patches archive).
   let health;
   try {
     const running = await ensureCompanionRunning({ refresh: !noRefresh });
@@ -89,6 +98,18 @@ async function main() {
   } catch (error) {
     fail('companion-running', error instanceof Error ? error.message : String(error));
     process.exit(1);
+  }
+
+  // 3b. Post-refresh doctor must be fully clean: archive patched, pack valid,
+  // port serving our service.
+  if (!noRefresh) {
+    const postRows = doctorRows();
+    const postBlocking = Array.isArray(postRows) ? postRows.filter((r) => r.status === 'FAIL') : [{ check: 'doctor', message: 'output not parseable' }];
+    if (!Array.isArray(postRows) || postBlocking.length) {
+      fail('postrefresh-doctor', `doctor still failing after refresh: ${postBlocking.map((r) => `${r.check}:${r.message}`).join('; ')}`);
+      process.exit(1);
+    }
+    pass('postrefresh-doctor');
   }
 
   // 4. Health / pack coherence.
@@ -107,11 +128,15 @@ async function main() {
     process.exit(1);
   }
 
-  // 5. Open game with an isolated fresh save.
+  // 5. Open game with an isolated QA save. Bronze pick + reed basket are seeded
+  // into equipment (where the game stores owned tools: C_(skill, lvl,
+  // state.equipment) gates on equipment[toolReq]>0) so the glyphweaving
+  // processing chain in step 7 runs end to end without manual tool purchases.
+  // Gold still hydrates to the 250 default, proving a minimal payload is valid.
   if (fresh) { const { rmSync } = await import('node:fs'); rmSync(profileDir, { recursive: true, force: true }); }
   let page, guard;
   try {
-    const opened = await openGame({ profileDir, save: {} });
+    const opened = await openGame({ profileDir, save: { equipment: { bronze_pick: 1, reed_basket: 1 } } });
     ctx = opened.context; page = opened.page; guard = opened.guard;
     page.on('console', (msg) => consoleLines.push(`[${msg.type()}] ${msg.text()}`));
     const version = await page.evaluate(() => window.__frCompanion?.version);
@@ -140,30 +165,55 @@ async function main() {
     await bail(page, guard, 'wiki-witherwood', error instanceof Error ? error.message : String(error));
   }
 
-  // 7. Plan + execute (auto step): reach witherwood_log qty.
+  // 7. Plan + execute (auto step): a glyphweaving processing chain that spans
+  // mining -> foraging -> glyphweaving, proving the executor resolves involved
+  // cross-skill dependencies and runs them to an itemQty stop.
   try {
-    const start = (await gameState(page)).inventory?.witherwood_log ?? 0;
-    const target = start + 5;
+    const itemId = 'fire_rune_minor';
+    const start = (await gameState(page)).inventory?.[itemId] ?? 0;
+    const target = start + 2;
     await page.click('#fr-tab-plan');
+    // A reused live-profile may carry a persisted queue from a prior run; clear it
+    // so the resolved plan below is deterministic.
+    const clearBtn = page.locator('#fr-clear');
+    if (!(await clearBtn.isDisabled())) { await clearBtn.click(); await page.locator('#fr-plan-result .plan-step').first().waitFor({ state: 'detached', timeout: 5_000 }).catch(() => {}); }
     await page.selectOption('#fr-plan-target', 'item');
-    await page.fill('#fr-plan-item', 'Witherwood');
-    const option = page.locator('#fr-plan-options [data-plan-option]', { hasText: 'Witherwood Log' }).first();
+    await page.fill('#fr-plan-item', 'Minor Fire Rune');
+    const option = page.locator('#fr-plan-options [data-plan-option]', { hasText: 'Minor Fire Rune' }).first();
     await option.waitFor({ state: 'visible', timeout: 10_000 });
     await option.click();
     await page.fill('#fr-plan-qty', String(target));
     await page.click('#fr-resolve-plan');
+    // The resolved timeline must be a multi-step, cross-skill, fully-auto chain.
     await page.locator('#fr-plan-result .plan-step').first().waitFor({ timeout: 10_000 });
+    const planSkills = await page.$$eval('#fractured-realms-companion', (hosts) => {
+      const root = hosts[0].shadowRoot;
+      return [...root.querySelectorAll('#fr-plan-result .plan-step strong')].map((n) => n.textContent);
+    });
+    const stepCount = await page.locator('#fr-plan-result .plan-step').count();
+    const manualCount = await page.locator('#fr-plan-result .instruction-card').count();
+    if (stepCount < 3) throw new Error(`expected a multi-step chain, got ${stepCount} steps`);
+    if (manualCount !== 0) throw new Error(`chain should be fully automatable, found ${manualCount} manual steps`);
     await page.click('#fr-run');
-    await page.waitForFunction(() => window.__frCompanion.getState().activeSkill === 'woodcutting', { timeout: 15_000 });
-    const phaseRunning = await page.locator('#fr-executor-phase').innerText();
-    if (!/running/i.test(phaseRunning)) throw new Error(`phase after Run = ${phaseRunning}`);
-    await page.waitForFunction((t) => (window.__frCompanion.getState().inventory?.witherwood_log ?? 0) >= t, target, { timeout: 60_000 });
+    // Record the distinct active skills as the executor advances through the chain.
+    const seenSkills = new Set();
+    const deadline = Date.now() + 120_000;
+    let reached = false;
+    while (Date.now() < deadline) {
+      const s = await gameState(page);
+      if (s.activeSkill) seenSkills.add(s.activeSkill);
+      if ((s.inventory?.[itemId] ?? 0) >= target) { reached = true; break; }
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    if (!reached) throw new Error(`inventory ${itemId} did not reach ${target}; skills seen: ${[...seenSkills].join(',')}`);
+    if (seenSkills.size < 2) throw new Error(`expected a cross-skill chain, only saw: ${[...seenSkills].join(',')}`);
     await page.waitForFunction(() => {
       const s = window.__frCompanion.getState();
       return s.activeAction == null && s.activeSkill == null;
     }, { timeout: 15_000 });
     const finalPhase = await page.locator('#fr-executor-phase').innerText();
     if (!/complete/i.test(finalPhase)) throw new Error(`final phase = ${finalPhase}`);
+    console.log(`  chain skills observed: ${[...seenSkills].join(' -> ')} (${planSkills.length} planned steps)`);
     pass('plan-execute-auto');
   } catch (error) {
     await bail(page, guard, 'plan-execute-auto', error instanceof Error ? error.message : String(error));
@@ -197,8 +247,8 @@ async function main() {
   // 9. Persistence: reload restores queue + overlay.
   try {
     await page.reload({ waitUntil: 'domcontentloaded' });
-    await page.waitForFunction(() => window.__frCompanion?.version === 1, { timeout: 30_000 });
-    await page.waitForSelector('#fractured-realms-companion', { timeout: 30_000 });
+    await waitForOverlay(page);
+    await openPanel(page);
     await page.click('#fr-tab-plan');
     await page.locator('#fr-plan-result .queue-plan').first().waitFor({ timeout: 10_000 });
     pass('persistence-reload');

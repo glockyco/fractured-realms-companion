@@ -89,7 +89,9 @@ export async function quitCompanion() {
 export async function openGame({ profileDir, save, queue, clockMs } = {}) {
   const chromium = await resolveChromium();
   const context = await chromium.launchPersistentContext(profileDir, {
-    viewport: { width: 853, height: 480 },
+    // Tall enough that the panel reaches its full 42rem height (its cap is
+    // calc(100dvh - 5rem)); a short viewport clips the timeline and tables.
+    viewport: { width: 900, height: 960 },
     deviceScaleFactor: 2,
   });
 
@@ -120,7 +122,18 @@ export async function openGame({ profileDir, save, queue, clockMs } = {}) {
   if (typeof clockMs === 'number') await page.clock.install({ time: clockMs });
   await page.goto(ORIGIN, { waitUntil: 'domcontentloaded' });
   await waitForOverlay(page);
+  await openPanel(page);
   return { context, page, guard };
+}
+
+/** Open the overlay panel (it starts hidden until the launcher is clicked). */
+export async function openPanel(page) {
+  await page.evaluate((hostId) => {
+    const host = document.querySelector(`#${hostId}`);
+    const launcher = host?.shadowRoot?.querySelector('.launcher');
+    if (launcher && launcher.getAttribute('aria-expanded') !== 'true') launcher.click();
+  }, HOST_ID);
+  await page.locator('#fr-panel').waitFor({ state: 'visible', timeout: 15_000 });
 }
 
 /** Wait for the game API and the overlay host; recover from a title/continue menu. */
@@ -132,7 +145,7 @@ export async function waitForOverlay(page) {
     if (await button.count()) await button.click().catch(() => {});
     await page.waitForFunction(() => window.__frCompanion?.version === 1, { timeout: 30_000 });
   });
-  await page.waitForSelector(`#${HOST_ID}`, { timeout: 30_000 });
+  await page.waitForSelector(`#${HOST_ID}`, { state: 'attached', timeout: 30_000 });
 }
 
 /** Read the game's live state snapshot. */
