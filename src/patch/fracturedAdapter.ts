@@ -143,7 +143,7 @@ function transformedBundle(source: string, filename: string): string {
   const start = declaration[1];
   const body = source.slice(declaration.index!, bodyEnd);
   const update = new RegExp(
-    `\\b([A-Za-z_$][\\w$]*)\\s*\\(\\s*\\)\\s*,\\s*([A-Za-z_$][\\w$]*)\\s*\\.\\s*update\\s*\\(\\s*[A-Za-z_$][\\w$]*\\s*=>\\s*\\(\\s*\\{\\s*\\.\\.\\.[A-Za-z_$][\\w$]*\\s*,\\s*activeSkill\\s*:\\s*a\\s*,\\s*activeAction\\s*:\\s*t\\s*\\?\\?\\s*null\\s*\\}\\s*\\)`,
+    `\\b([A-Za-z_$][\\w$]*)\\s*\\(\\s*\\)\\s*,\\s*([A-Za-z_$][\\w$]*)\\s*\\.\\s*update\\s*\\(\\s*[A-Za-z_$][\\w$]*\\s*=>\\s*\\(\\s*\\{\\s*\\.\\.\\.[A-Za-z_$][\\w$]*\\s*,\\s*activeSkill\\s*:\\s*[A-Za-z_$][\\w$]*\\s*,\\s*activeAction\\s*:\\s*[A-Za-z_$][\\w$]*\\s*\\?\\?\\s*null\\s*\\}\\s*\\)`,
     'g',
   );
   const updates = [...body.matchAll(update)];
