@@ -1,124 +1,113 @@
-/** Direct action executor. It intentionally never reads or writes actionQueue. */
+/** Direct priority-scheduler executor. It intentionally never reads or writes actionQueue. */
 
 const TERMINAL = new Set(['idle', 'complete', 'error']);
 const MISMATCH_GRACE_MS = 1200;
+const START_VERIFY_MS = 1500;
 
 function asNumber(value, fallback = 0) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
 }
 
 function inventoryValue(state, itemId) {
-  const value = state?.inventory?.[itemId];
-  return Math.max(0, asNumber(value, 0));
+  return Math.max(0, asNumber(state?.inventory?.[itemId], 0));
 }
 
 function thenable(value) {
-  return value && typeof value.then === 'function';
+  return value !== null && value !== undefined && typeof value.then === 'function';
+}
+
+function actionLabel(step) {
+  return step?.label || step?.actionName || step?.actionId || step?.id || 'action';
+}
+
+function stepInterval(step) {
+  const explicit = asNumber(step?.interval, 0);
+  if (explicit > 0) return explicit;
+  const expected = step?.expected;
+  const duration = asNumber(expected?.ms, 0);
+  const runs = asNumber(expected?.runs, 0);
+  return duration > 0 && runs > 0 ? duration / runs : 0;
+}
+
+function expectedMs(step) {
+  const value = step?.expected?.ms;
+  return value === null || value === undefined ? null : Math.max(0, asNumber(value, 0));
+}
+
+function cloneState(state) {
+  return state && typeof state === 'object' ? state : {};
 }
 
 /**
- * Build an executor over the narrow bundle API. Timers and clock are injectable
- * so callers can make progression deterministic without touching game state.
+ * Build a scheduler over the exposed game API. Timers, clock, and engine
+ * predicates are injectable so this module remains independent of the engine.
+ * @param {{startAction: Function, stopAction: Function, getState: Function, subscribe: Function}} api
+ * @param {{setTimeout?: Function, clearTimeout?: Function, now?: Function, onUpdate?: Function, liveBlocker: Function, factSatisfied: Function}} options
  */
 export function createDirectExecutor(api, options = {}) {
   if (!api || typeof api.startAction !== 'function' || typeof api.stopAction !== 'function'
     || typeof api.getState !== 'function' || typeof api.subscribe !== 'function') {
     throw new TypeError('executor API requires startAction, stopAction, getState, and subscribe');
   }
+  if (typeof options.liveBlocker !== 'function' || typeof options.factSatisfied !== 'function') {
+    throw new TypeError('executor options require liveBlocker and factSatisfied');
+  }
+
   const schedule = options.setTimeout ?? globalThis.setTimeout;
   const cancel = options.clearTimeout ?? globalThis.clearTimeout;
   const now = options.now ?? (() => Date.now());
   const onUpdate = typeof options.onUpdate === 'function' ? options.onUpdate : () => {};
 
-  let status = { phase: 'idle', currentStep: null, totalSteps: 0, message: '' };
+  let status = {
+    phase: 'idle',
+    message: '',
+    totalSteps: 0,
+    stepStatuses: {},
+    runningStepId: null,
+    completedSteps: 0,
+    remainingMs: 0,
+  };
   let steps = [];
-  let index = -1;
-  let target = 0;
-  let stepStart = 0;
-  let lastProduced = 0;
-  let lastProgress = 0;
+  let stepState = new Map();
+  let runningIndex = -1;
+  let runningSince = 0;
+  let runningMs = new Map();
+  let runProgress = new Map();
+  let progressSnapshot = null;
   let lastProgressAt = 0;
   let verifyTimer;
   let stallTimer;
   let mismatchTimer;
-  let stopTimer;
-  let stopDeadline = 0;
-  let stopRemainingMs = 0;
-  let stopXpStart = 0;
-  let pausedReason = null;
+  let timeTimer;
   let unsubscribe;
   let runToken = 0;
   let transitionBusy = false;
+  let startPending = false;
   let terminalResolve;
   let terminalPromise = Promise.resolve();
 
-  const stepDuration = (step) => Math.max(0, asNumber(step?.interval, 0)) * Math.max(0, asNumber(step?.count, 0));
-  const progress = (current = state()) => {
-    const step = steps[index];
-    if (!step) {
-      return {
-        completedSteps: status.phase === 'complete' ? steps.length : 0,
-        stepProduced: 0,
-        stepTarget: 0,
-        stepInventoryTarget: 0,
-        stepRemainingMs: 0,
-        remainingMs: status.phase === 'complete' ? 0 : steps.reduce((sum, candidate) => sum + stepDuration(candidate), 0),
-      };
-    }
-    const inventory = inventoryValue(current, step.produceItemId);
-    const futureMs = steps.slice(index + 1).reduce((sum, candidate) => sum + stepDuration(candidate), 0);
-    if (step.stopWhen) {
-      const sp = stopProgress(step, current);
-      return {
-        completedSteps: Math.max(0, index),
-        stepProduced: sp.produced,
-        stepTarget: sp.target,
-        stepInventoryTarget: 0,
-        stepRemainingMs: sp.remainingMs,
-        remainingMs: sp.remainingMs + futureMs,
-      };
-    }
-    const stepTarget = Math.max(0, target - stepStart);
-    const stepProduced = Math.min(stepTarget, Math.max(0, inventory - stepStart));
-    const outputPerRun = Math.max(1, asNumber(step.produceQty, 0) / Math.max(1, asNumber(step.count, 1)));
-    const remainingRuns = Math.ceil(Math.max(0, target - inventory) / outputPerRun);
-    const stepRemainingMs = remainingRuns * Math.max(0, asNumber(step.interval, 0));
-    return {
-      completedSteps: Math.max(0, index),
-      stepProduced,
-      stepTarget,
-      stepInventoryTarget: target,
-      stepRemainingMs,
-      remainingMs: stepRemainingMs + futureMs,
-    };
-  };
-
-  const update = (phase, message, currentStep = index, current = state()) => {
-    status = {
-      phase,
-      currentStep: currentStep == null ? null : currentStep,
-      totalSteps: steps.length,
-      message: message ?? '',
-      pausedReason,
-      ...progress(current),
-    };
-    try { onUpdate({ ...status }); } catch { /* UI observers must not break execution. */ }
+  const currentState = () => {
+    try { return cloneState(api.getState() ?? {}); } catch { return {}; }
   };
 
   const clearTimer = (timer) => {
-    if (timer !== undefined) cancel(timer);
+    if (timer !== undefined) {
+      try { cancel(timer); } catch { /* best effort */ }
+    }
   };
+
   const clearStepTimers = () => {
     clearTimer(verifyTimer);
     clearTimer(stallTimer);
     clearTimer(mismatchTimer);
-    clearTimer(stopTimer);
+    clearTimer(timeTimer);
     verifyTimer = undefined;
     stallTimer = undefined;
     mismatchTimer = undefined;
-    stopTimer = undefined;
+    timeTimer = undefined;
   };
+
   const detach = () => {
     if (typeof unsubscribe === 'function') {
       try { unsubscribe(); } catch { /* stale subscriptions are harmless */ }
@@ -127,6 +116,7 @@ export function createDirectExecutor(api, options = {}) {
     }
     unsubscribe = undefined;
   };
+
   const resolveTerminal = () => {
     if (terminalResolve) {
       const resolve = terminalResolve;
@@ -135,271 +125,441 @@ export function createDirectExecutor(api, options = {}) {
     }
   };
 
-  const state = () => {
-    try { return api.getState() ?? {}; } catch { return {}; }
-  };
-  const matching = (current, step) => current?.activeSkill === step?.skillId
-    && current?.activeAction === step?.actionId;
+  const matching = (state, step) => state?.activeSkill === step?.skillId
+    && state?.activeAction === step?.actionId;
 
-  const stopSatisfied = (step, current) => {
-    const stop = step?.stopWhen;
+  const statusRecord = () => Object.fromEntries(steps.map((step, index) => [
+    step.id,
+    stepState.get(index) ?? 'pending',
+  ]));
+
+  const remainingMs = () => steps.reduce((total, step, index) => {
+    if (stepState.get(index) === 'done') return total;
+    const expected = expectedMs(step);
+    return expected === null ? total : total + expected;
+  }, 0);
+
+  const publish = (phase, message, state = currentState()) => {
+    const statuses = statusRecord();
+    const completed = [...stepState.values()].filter((value) => value === 'done').length;
+    status = {
+      phase,
+      message: message ?? '',
+      totalSteps: steps.length,
+      stepStatuses: statuses,
+      runningStepId: runningIndex >= 0 ? steps[runningIndex]?.id ?? null : null,
+      completedSteps: completed,
+      remainingMs: Math.round(remainingMs()),
+    };
+    try { onUpdate({ ...status }); } catch { /* UI observers must not break execution. */ }
+    return state;
+  };
+
+  const isStopSatisfied = (step, index, state) => {
+    const stop = step?.stop;
     if (!stop) return false;
-    if (stop.type === 'time') return asNumber(now(), 0) >= stopDeadline;
+    if (stop.type === 'itemQty') {
+      return inventoryValue(state, stop.itemId) >= Math.max(0, asNumber(stop.qty, 0));
+    }
     if (stop.type === 'xp') {
-      const xp = current?.skillXp?.[stop.skillId] ?? state()?.skillXp?.[stop.skillId];
-      return asNumber(xp, 0) >= asNumber(stop.xpAtLeast, 0);
+      return asNumber(state?.skillXp?.[stop.skillId], 0) >= asNumber(stop.xpAtLeast, 0);
+    }
+    if (stop.type === 'fact') {
+      try { return options.factSatisfied(state, stop.fact) === true; } catch { return false; }
+    }
+    if (stop.type === 'runs') {
+      return stepState.get(index) === 'running'
+        && (runProgress.get(index) ?? 0) >= Math.max(0, asNumber(stop.runs, 0));
+    }
+    if (stop.type === 'time') {
+      if (stepState.get(index) !== 'running') return false;
+      const elapsed = (runningMs.get(index) ?? 0) + Math.max(0, asNumber(now(), 0) - runningSince);
+      return elapsed >= Math.max(0, asNumber(stop.ms, 0));
     }
     return false;
   };
 
-  const stopProgress = (step, current) => {
-    const stop = step.stopWhen;
-    if (stop.type === 'time') {
-      const total = Math.max(0, asNumber(stop.ms, 0));
-      const remaining = stopTimer !== undefined
-        ? Math.max(0, stopDeadline - asNumber(now(), 0))
-        : Math.min(total, Math.max(0, stopRemainingMs));
-      return { produced: Math.max(0, total - remaining), target: total, remainingMs: remaining };
+  const outputValue = (state, itemId) => itemId === 'gold'
+    ? Math.max(0, asNumber(state?.gold, 0))
+    : inventoryValue(state, itemId);
+
+  const snapshotOutputs = (step, state) => {
+    const ids = Object.keys(step?.expected?.produces ?? {});
+    const result = {};
+    for (const id of ids) result[id] = outputValue(state, id);
+    return result;
+  };
+
+  const snapshotXp = (step, state) => asNumber(state?.skillXp?.[step?.stop?.skillId ?? step?.skillId], 0);
+
+  const updateProgress = (state) => {
+    if (runningIndex < 0 || !progressSnapshot) return false;
+    const step = steps[runningIndex];
+    const previousOutputs = progressSnapshot.outputs;
+    const currentOutputs = snapshotOutputs(step, state);
+    const progress = runProgress.get(runningIndex) ?? 0;
+    const accumulator = progressSnapshot.accumulator;
+    let advanced = false;
+    for (const id of Object.keys(currentOutputs)) {
+      const delta = currentOutputs[id] - (previousOutputs[id] ?? 0);
+      if (delta > 0) {
+        accumulator.outputs[id] = (accumulator.outputs[id] ?? 0) + delta;
+        advanced = true;
+      }
     }
-    const xpNow = asNumber(current?.skillXp?.[stop.skillId], stopXpStart);
-    const goal = asNumber(stop.xpAtLeast, 0);
-    const target = Math.max(0, goal - stopXpStart);
-    const produced = Math.min(target, Math.max(0, xpNow - stopXpStart));
-    const perRun = asNumber(stop.xpPerRun, 0);
-    const remainingRuns = perRun > 0 ? Math.ceil(Math.max(0, goal - xpNow) / perRun) : 0;
-    return { produced, target, remainingMs: remainingRuns * Math.max(0, asNumber(step.interval, 0)) };
+    const currentXp = snapshotXp(step, state);
+    const xpDelta = currentXp - progressSnapshot.xp;
+    if (xpDelta > 0) {
+      accumulator.xp += xpDelta;
+      advanced = true;
+    }
+    progressSnapshot = { outputs: currentOutputs, xp: currentXp, accumulator };
+
+    const expectedRuns = Math.max(1, asNumber(step?.expected?.runs, 1));
+    const expectedOutputs = step?.expected?.produces ?? {};
+    const outputIds = Object.keys(expectedOutputs).filter((id) => asNumber(expectedOutputs[id], 0) > 0
+      && asNumber(expectedOutputs[id], 0) / expectedRuns > 0);
+    let inferred = 0;
+    const xpPerRun = asNumber(step?.xpPerRun ?? step?.xpGain
+      ?? step?.expected?.xpPerRun ?? step?.expected?.xpGain, 0);
+    if (xpPerRun > 0) {
+      inferred = Math.floor(accumulator.xp / xpPerRun);
+    } else if (outputIds.length) {
+      // The bundle's expected output map contains deterministic outputs first
+      // and rare-output EVs after them. A deterministic output is enough to
+      // count completed game runs; requiring rare EV quantities would make a
+      // run stop wait for luck that the action does not need.
+      const id = step?.progressItemId && outputIds.includes(step.progressItemId)
+        ? step.progressItemId : outputIds[0];
+      inferred = Math.floor(
+        (accumulator.outputs[id] ?? 0) / (asNumber(expectedOutputs[id], 0) / expectedRuns),
+      );
+    }
+    if (inferred > progress) runProgress.set(runningIndex, inferred);
+    if (advanced) lastProgressAt = asNumber(now(), 0);
+    return advanced;
   };
 
-  const error = (message) => {
-    const current = state();
-    clearStepTimers();
-    detach();
-    transitionBusy = false;
-    update('error', message, index, current);
-    resolveTerminal();
+  const actionBlocker = (state, step) => {
+    try {
+      const blocker = options.liveBlocker(state, step);
+      return blocker == null ? null : String(blocker);
+    } catch (cause) {
+      return cause instanceof Error ? cause.message : 'action unavailable';
+    }
   };
 
-  const complete = () => {
-    const final = steps.at(-1);
-    const finalStopTarget = final?.stopWhen?.type === 'time'
-      ? Math.max(0, asNumber(final.stopWhen.ms, 0))
-      : final?.stopWhen?.type === 'xp'
-        ? Math.max(0, asNumber(final.stopWhen.xpAtLeast, 0) - stopXpStart)
-        : 0;
-    const finalTarget = final?.stopWhen ? finalStopTarget : Math.max(0, target - stepStart);
-    clearStepTimers();
-    detach();
-    transitionBusy = false;
-    status = {
-      phase: 'complete',
-      currentStep: steps.length ? steps.length - 1 : null,
-      totalSteps: steps.length,
-      completedSteps: steps.length,
-      stepProduced: steps.length ? finalTarget : 0,
-      stepTarget: steps.length ? finalTarget : 0,
-      stepRemainingMs: 0,
-      remainingMs: 0,
-      message: 'Queue complete',
-    };
-    try { onUpdate({ ...status }); } catch { /* UI observers must not break execution. */ }
-    resolveTerminal();
+  const pickRunnable = (state) => {
+    for (let index = 0; index < steps.length; index += 1) {
+      if (stepState.get(index) !== 'pending') continue;
+      const step = steps[index];
+      if (step?.kind !== 'action') continue;
+      if (actionBlocker(state, step) === null) return index;
+    }
+    return -1;
+  };
+
+  const blockingMessage = (state) => {
+    const blockers = [];
+    for (let index = 0; index < steps.length && blockers.length < 4; index += 1) {
+      if (stepState.get(index) !== 'pending') continue;
+      const step = steps[index];
+      if (step?.kind === 'manual') blockers.push(actionLabel(step));
+      else {
+        const blocker = actionBlocker(state, step);
+        if (blocker) blockers.push(`${actionLabel(step)}: ${blocker}`);
+      }
+    }
+    return blockers.length ? `Waiting: ${blockers.join('; ')}` : 'Waiting for a step';
   };
 
   const stopGameAction = () => {
     try {
       const result = api.stopAction();
-      if (thenable(result)) result.catch(() => {});
-    } catch { /* stopping is best effort during terminal cleanup */ }
+      if (thenable(result)) result.then(undefined, () => {});
+    } catch { /* stopping is best effort during transitions and terminal cleanup */ }
+  };
+
+  const addRunningTime = () => {
+    if (runningIndex < 0) return;
+    const elapsed = Math.max(0, asNumber(now(), 0) - runningSince);
+    runningMs.set(runningIndex, (runningMs.get(runningIndex) ?? 0) + elapsed);
+    runningSince = asNumber(now(), 0);
+  };
+
+  const error = (message, token = runToken) => {
+    if (token !== runToken) return;
+    clearStepTimers();
+    detach();
+    if (runningIndex >= 0) addRunningTime();
+    transitionBusy = false;
+    publish('error', message, currentState());
+    resolveTerminal();
+  };
+
+  const complete = (token = runToken) => {
+    if (token !== runToken) return;
+    clearStepTimers();
+    detach();
+    if (runningIndex >= 0) addRunningTime();
+    runningIndex = -1;
+    startPending = false;
+    transitionBusy = false;
+    publish('complete', 'Queue complete', currentState());
+    resolveTerminal();
   };
 
   const armStallTimer = (token) => {
     clearTimer(stallTimer);
     stallTimer = undefined;
-    const perRun = Math.max(0, asNumber(steps[index]?.interval, 0));
-    const limit = steps[index]?.rare && !steps[index]?.progressItemId ? 0 : perRun * 3;
+    if (runningIndex < 0) return;
+    const limit = stepInterval(steps[runningIndex]) * 3;
     if (!Number.isFinite(limit) || limit <= 0) return;
     stallTimer = schedule(() => {
-      if (token !== runToken || status.phase !== 'running') return;
-      if (!matching(state(), steps[index])) {
-        stallTimer = undefined;
+      stallTimer = undefined;
+      if (token !== runToken || status.phase !== 'running' || runningIndex < 0) return;
+      const state = currentState();
+      if (!matching(state, steps[runningIndex])) {
+        armStallTimer(token);
         return;
       }
       if (asNumber(now(), 0) - lastProgressAt >= limit) {
         stopGameAction();
-        error('stalled — check bag space');
+        error('stalled — check bag space', token);
       } else {
         armStallTimer(token);
       }
-    }, limit);
+    }, Math.max(1, limit - Math.max(0, asNumber(now(), 0) - lastProgressAt)));
   };
 
-  const finishStep = (token) => {
-    if (token !== runToken || transitionBusy || status.phase !== 'running') return;
+  const armTimeTimer = (token) => {
+    clearTimer(timeTimer);
+    timeTimer = undefined;
+    if (runningIndex < 0) return;
+    const stop = steps[runningIndex]?.stop;
+    if (stop?.type !== 'time') return;
+    const total = Math.max(0, asNumber(stop.ms, 0));
+    const remaining = Math.max(0, total - (runningMs.get(runningIndex) ?? 0));
+    timeTimer = schedule(() => {
+      timeTimer = undefined;
+      if (token !== runToken || status.phase !== 'running' || runningIndex < 0) return;
+      const latest = currentState();
+      process(latest, token);
+    }, remaining);
+  };
+
+  const armMismatchTimer = (token) => {
+    if (mismatchTimer !== undefined) return;
+    mismatchTimer = schedule(() => {
+      mismatchTimer = undefined;
+      if (token !== runToken || status.phase !== 'running' || runningIndex < 0) return;
+      const latest = currentState();
+      const index = runningIndex;
+      if (matching(latest, steps[index])) return;
+      // The player changed actions. Return this unfinished step to the ready
+      // set; it will restart immediately when startable, or remain waiting.
+      transitionBusy = true;
+      clearStepTimers();
+      addRunningTime();
+      stopGameAction();
+      stepState.set(index, 'pending');
+      runningIndex = -1;
+      startPending = false;
+      transitionBusy = false;
+      process(currentState(), token);
+    }, MISMATCH_GRACE_MS);
+  };
+
+  const finishRunning = (token) => {
+    if (token !== runToken || runningIndex < 0 || transitionBusy) return;
+    const index = runningIndex;
     transitionBusy = true;
     clearStepTimers();
+    addRunningTime();
+    stepState.set(index, 'done');
     stopGameAction();
-    const next = index + 1;
-    const advance = (allowed) => {
-      if (token !== runToken) return;
-      if (allowed === false) {
-        error('Next action is no longer available');
-        return;
-      }
-      transitionBusy = false;
-      if (next >= steps.length) complete();
-      else beginStep(next, token);
-    };
-    if (next < steps.length && typeof options.canRun === 'function') {
-      let result;
-      try { result = options.canRun(steps[next], state()); } catch { result = false; }
-      if (thenable(result)) result.then(advance, () => advance(false));
-      else advance(result);
-    } else {
-      advance(true);
-    }
+    runningIndex = -1;
+    startPending = false;
+    transitionBusy = false;
+    process(currentState(), token);
   };
 
-  const observe = (current) => {
-    if (status.phase !== 'starting' && status.phase !== 'running') return;
+  const preempt = (nextIndex, token) => {
+    if (token !== runToken || transitionBusy || runningIndex < 0 || nextIndex === runningIndex) return;
+    const previous = runningIndex;
+    transitionBusy = true;
+    clearStepTimers();
+    addRunningTime();
+    stopGameAction();
+    stepState.set(previous, 'pending');
+    runningIndex = -1;
+    startPending = false;
+    transitionBusy = false;
+    process(currentState(), token, nextIndex);
+  };
+
+  const beginAction = (index, token) => {
+    if (token !== runToken || transitionBusy || index < 0 || index >= steps.length) return;
     const step = steps[index];
-    if (!step) return;
-    const inventory = inventoryValue(current, step.produceItemId);
-    const done = step.stopWhen ? stopSatisfied(step, current) : inventory >= target;
-    if (done) {
-      if (status.phase === 'running') finishStep(runToken);
+    transitionBusy = true;
+    runningIndex = index;
+    stepState.set(index, 'running');
+    startPending = true;
+    runningSince = asNumber(now(), 0);
+    runningMs.set(index, runningMs.get(index) ?? 0);
+    runProgress.set(index, runProgress.get(index) ?? 0);
+    progressSnapshot = {
+      outputs: snapshotOutputs(step, currentState()),
+      xp: snapshotXp(step, currentState()),
+      accumulator: { outputs: {}, xp: 0 },
+    };
+    lastProgressAt = asNumber(now(), 0);
+    clearStepTimers();
+    publish('running', `Starting ${actionLabel(step)}`, currentState());
+
+    let result;
+    try { result = api.startAction(step.skillId, step.actionId); }
+    catch (cause) {
+      transitionBusy = false;
+      error(cause instanceof Error ? cause.message : `Unable to start ${actionLabel(step)}`, token);
       return;
     }
-    if (status.phase === 'starting') {
-      if (matching(current, step)) {
+    if (thenable(result)) {
+      result.then(undefined, (cause) => error(cause instanceof Error ? cause.message : `Unable to start ${actionLabel(step)}`, token));
+    }
+    verifyTimer = schedule(() => {
+      if (token !== runToken || runningIndex !== index || status.phase !== 'running') return;
+      const latest = currentState();
+      if (!matching(latest, step)) error(`Unable to start ${actionLabel(step)}`, token);
+      else {
         clearTimer(verifyTimer);
         verifyTimer = undefined;
-        lastProduced = inventory;
-        lastProgress = typeof step.progressItemId === 'string' && step.progressItemId
-          ? inventoryValue(current, step.progressItemId) : 0;
-        lastProgressAt = asNumber(now(), 0);
-        update('running', `Running ${step.actionName}`, index, current);
-        armStallTimer(runToken);
+        startPending = false;
+        armTimeTimer(token);
+        armStallTimer(token);
+        process(latest, token);
       }
-      return;
+    }, START_VERIFY_MS);
+    const latest = currentState();
+    if (matching(latest, step)) {
+      clearTimer(verifyTimer);
+      verifyTimer = undefined;
+      startPending = false;
+      transitionBusy = false;
+      publish('running', `Running ${actionLabel(step)}`, latest);
+      armTimeTimer(token);
+      armStallTimer(token);
+      process(latest, token);
+    } else {
+      transitionBusy = false;
+      armTimeTimer(token);
+      armStallTimer(token);
+      process(latest, token);
     }
-    const progressItemId = typeof step.progressItemId === 'string' && step.progressItemId ? step.progressItemId : null;
-    const progressInventory = progressItemId ? inventoryValue(current, progressItemId) : lastProgress;
-    if (inventory > lastProduced || progressInventory > lastProgress) {
-      lastProduced = inventory;
-      lastProgress = progressInventory;
-      lastProgressAt = asNumber(now(), 0);
-      update('running', `Running ${step.actionName}`, index, current);
-      armStallTimer(runToken);
-    }
-    if (!matching(current, step)) {
-      if (mismatchTimer === undefined) {
-        const token = runToken;
-        mismatchTimer = schedule(() => {
-          mismatchTimer = undefined;
-          if (token !== runToken || status.phase !== 'running') return;
-          const latest = state();
-          const active = steps[index];
-          if (!active || matching(latest, active)) return;
-          const stepDone = active.stopWhen ? stopSatisfied(active, latest) : inventoryValue(latest, active.produceItemId) >= target;
-          if (stepDone) { finishStep(token); return; }
-          if (active.stopWhen?.type === 'time') stopRemainingMs = Math.max(0, stopDeadline - asNumber(now(), 0));
-          const missingInput = active.rare && active.inputs
-            ? Object.entries(active.inputs).find(([id, perRun]) => asNumber(perRun, 0) > 0 && inventoryValue(latest, id) < asNumber(perRun, 0))
-            : undefined;
-          pausedReason = missingInput ? 'inputs' : null;
-          clearStepTimers();
-          update('paused', missingInput ? `out of ${missingInput[0]}` : 'action changed in game', index, latest);
-        }, MISMATCH_GRACE_MS);
-      }
-      return;
-    }
-    const hadMismatch = mismatchTimer !== undefined;
-    clearTimer(mismatchTimer);
-    mismatchTimer = undefined;
-    if (hadMismatch) armStallTimer(runToken);
-    if (step.stopWhen) update('running', `Running ${step.actionName}`, index, current);
   };
 
-  const beginStep = (stepIndex, token) => {
-    if (token !== runToken || stepIndex >= steps.length) {
-      if (token === runToken) complete();
+  function process(state, token, preferredIndex = -1) {
+    if (token !== runToken || transitionBusy || TERMINAL.has(status.phase)) return;
+    const latest = cloneState(state);
+    updateProgress(latest);
+
+    for (let index = 0; index < steps.length; index += 1) {
+      if (stepState.get(index) === 'done') continue;
+      if (isStopSatisfied(steps[index], index, latest)) {
+        if (index === runningIndex) finishRunning(token);
+        else stepState.set(index, 'done');
+      }
+    }
+    if (transitionBusy || token !== runToken || TERMINAL.has(status.phase)) return;
+    if ([...stepState.values()].every((value) => value === 'done')) {
+      complete(token);
       return;
     }
-    index = stepIndex;
-    pausedReason = null;
-    const step = steps[index];
-    const current = state();
-    stepStart = inventoryValue(current, step.produceItemId);
-    target = stepStart + Math.max(0, asNumber(step.produceQty, 0));
-    // A malformed/legacy step can still be executed using count and one output.
-    if (target === stepStart && asNumber(step.count, 0) > 0) {
-      target += asNumber(step.count, 0);
-    }
-    if (step.stopWhen?.type === 'xp') {
-      stopXpStart = asNumber(current?.skillXp?.[step.stopWhen.skillId], 0);
-    }
-    if (step.stopWhen?.type === 'time') {
-      stopRemainingMs = Math.max(0, asNumber(step.stopWhen.ms, 0));
-      stopDeadline = asNumber(now(), 0) + stopRemainingMs;
-      stopTimer = schedule(() => {
-        if (token === runToken && status.phase === 'running') finishStep(token);
-      }, stopRemainingMs);
-    }
-    lastProduced = stepStart;
-    lastProgress = typeof step.progressItemId === 'string' && step.progressItemId
-      ? inventoryValue(current, step.progressItemId) : 0;
-    lastProgressAt = asNumber(now(), 0);
-    update('starting', `Starting ${step.actionName}`, index, current);
 
-    const invokeStart = () => {
-      if (token !== runToken) return;
-      let result;
-      try { result = api.startAction(step.skillId, step.actionId); }
-      catch (cause) {
-        error(cause instanceof Error ? cause.message : `Unable to start ${step.actionName}`);
+    if (runningIndex >= 0) {
+      if (startPending) {
+        if (matching(latest, steps[runningIndex])) {
+          clearTimer(verifyTimer);
+          verifyTimer = undefined;
+          startPending = false;
+          armTimeTimer(token);
+          armStallTimer(token);
+        }
+        publish('running', `Starting ${actionLabel(steps[runningIndex])}`, latest);
         return;
       }
-      if (thenable(result)) result.catch((cause) => error(cause instanceof Error ? cause.message : `Unable to start ${step.actionName}`));
-      const timeout = 1500;
-      verifyTimer = schedule(() => {
-        if (token === runToken && status.phase === 'starting') {
-          error(`Unable to start ${step.actionName}`);
-        }
-      }, timeout);
-      observe(state());
-    };
-    if (typeof options.canRun === 'function') {
-      let allowed;
-      try { allowed = options.canRun(step, current); } catch { allowed = false; }
-      if (thenable(allowed)) allowed.then((value) => value === false ? error('Action is no longer available') : invokeStart(), () => error('Action is no longer available'));
-      else if (allowed === false) error('Action is no longer available');
-      else invokeStart();
-    } else invokeStart();
+      const candidate = preferredIndex >= 0 ? preferredIndex : pickRunnable(latest);
+      if (candidate >= 0 && candidate < runningIndex) {
+        preempt(candidate, token);
+        return;
+      }
+      if (!matching(latest, steps[runningIndex])) armMismatchTimer(token);
+      else {
+        clearTimer(mismatchTimer);
+        mismatchTimer = undefined;
+        armTimeTimer(token);
+        armStallTimer(token);
+      }
+      publish('running', `Running ${actionLabel(steps[runningIndex])}`, latest);
+      return;
+    }
+
+    const candidate = preferredIndex >= 0 && stepState.get(preferredIndex) === 'pending'
+      && steps[preferredIndex]?.kind === 'action' && actionBlocker(latest, steps[preferredIndex]) === null
+      ? preferredIndex : pickRunnable(latest);
+    if (candidate >= 0) {
+      beginAction(candidate, token);
+      return;
+    }
+    publish('waiting', blockingMessage(latest), latest);
+  }
+
+  const observe = (state) => {
+    if (TERMINAL.has(status.phase)) return;
+    if (transitionBusy) {
+      return;
+    }
+    process(state ?? currentState(), runToken);
   };
 
-  const subscribe = () => {
+  const subscribe = (token) => {
     try {
-      unsubscribe = api.subscribe((current) => observe(current ?? state()));
+      unsubscribe = api.subscribe((state) => {
+        if (token !== runToken) return;
+        observe(state ?? currentState());
+      });
     } catch (cause) {
-      error(cause instanceof Error ? cause.message : 'Unable to subscribe to game state');
+      error(cause instanceof Error ? cause.message : 'Unable to subscribe to game state', token);
     }
   };
 
   const run = (requestedSteps) => {
-    stopGameAction();
-    clearStepTimers();
-    detach();
+    // A new run supersedes the previous token and resolves its waiters. No
+    // stale timer, promise, or subscription may mutate the new run.
     runToken += 1;
     const token = runToken;
-    steps = Array.isArray(requestedSteps) ? requestedSteps.map((step) => ({ ...step })) : [];
-    index = -1;
+    clearStepTimers();
+    detach();
+    stopGameAction();
+    resolveTerminal();
+    transitionBusy = false;
+    steps = Array.isArray(requestedSteps) ? requestedSteps.map((step, index) => ({
+      ...step,
+      id: step?.id ?? `step-${index}`,
+    })) : [];
+    stepState = new Map(steps.map((_, index) => [index, 'pending']));
+    runningMs = new Map(steps.map((_, index) => [index, 0]));
+    runProgress = new Map(steps.map((_, index) => [index, 0]));
+    runningIndex = -1;
+    startPending = false;
     terminalPromise = new Promise((resolve) => { terminalResolve = resolve; });
     if (!steps.length) {
-      complete();
+      complete(token);
       return terminalPromise;
     }
-    subscribe();
-    beginStep(0, token);
+    publish('waiting', 'Waiting for a runnable step', currentState());
+    subscribe(token);
+    process(currentState(), token);
     return terminalPromise;
   };
 
@@ -409,84 +569,19 @@ export function createDirectExecutor(api, options = {}) {
     detach();
     stopGameAction();
     steps = [];
-    index = -1;
+    stepState = new Map();
+    runningMs = new Map();
+    runProgress = new Map();
+    runningIndex = -1;
+    startPending = false;
     transitionBusy = false;
-    pausedReason = null;
-    update('idle', 'Stopped', null, {});
+    publish('idle', 'Stopped', {});
     resolveTerminal();
-  };
-
-  const resume = () => {
-    if (status.phase !== 'paused' || index < 0 || index >= steps.length) return;
-    pausedReason = null;
-    const token = runToken;
-    const current = state();
-    const step = steps[index];
-    const currentInventory = inventoryValue(current, step.produceItemId);
-    if (!step.stopWhen) {
-      const remaining = Math.max(0, target - currentInventory);
-      if (remaining <= 0) {
-        update('running', `Finishing ${step.actionName}`, index, current);
-        finishStep(token);
-        return;
-      }
-      // Preserve target while recording remaining output for diagnostics. The
-      // live game starts the same action again; no queue is involved.
-      step.produceQty = remaining;
-    }
-    lastProduced = currentInventory;
-    lastProgress = typeof step.progressItemId === 'string' && step.progressItemId
-      ? inventoryValue(current, step.progressItemId) : 0;
-    lastProgressAt = asNumber(now(), 0);
-    update('starting', `Resuming ${step.actionName}`, index, current);
-    let result;
-    try { result = api.startAction(step.skillId, step.actionId); }
-    catch (cause) { error(cause instanceof Error ? cause.message : `Unable to resume ${step.actionName}`); return; }
-    if (thenable(result)) result.catch((cause) => error(cause instanceof Error ? cause.message : `Unable to resume ${step.actionName}`));
-    if (step.stopWhen?.type === 'time') {
-      stopDeadline = asNumber(now(), 0) + stopRemainingMs;
-      clearTimer(stopTimer);
-      stopTimer = schedule(() => {
-        if (token === runToken && status.phase === 'running') finishStep(token);
-      }, stopRemainingMs);
-    }
-    verifyTimer = schedule(() => {
-      if (runToken === token && status.phase === 'starting') error(`Unable to start ${step.actionName}`);
-    }, 1500);
-    observe(state());
-  };
-
-  const splice = (fromIndex, replacementSteps) => {
-    if (TERMINAL.has(status.phase)) return false;
-    if (!Number.isInteger(fromIndex) || fromIndex <= index) return false;
-    steps = [
-      ...steps.slice(0, Math.min(fromIndex, steps.length)),
-      ...(Array.isArray(replacementSteps) ? replacementSteps.map((step) => ({ ...step })) : []),
-    ];
-    update(status.phase, status.message, index);
-    return true;
-  };
-
-  const jump = (allSteps, startIndex) => {
-    if (TERMINAL.has(status.phase)) return false;
-    if (!Number.isInteger(startIndex) || startIndex < 0) return false;
-    if (!Array.isArray(allSteps) || startIndex >= allSteps.length) return false;
-    clearStepTimers();
-    stopGameAction();
-    transitionBusy = false;
-    steps = allSteps.map((step) => ({ ...step }));
-    beginStep(startIndex, runToken);
-    return true;
   };
 
   return {
     run,
     stop,
-    resume,
-    splice,
-    jump,
-    getStatus: () => (status.phase === 'starting' || status.phase === 'running' || status.phase === 'paused'
-      ? { ...status, ...progress() }
-      : { ...status }),
+    getStatus: () => ({ ...status, stepStatuses: { ...status.stepStatuses } }),
   };
 }
