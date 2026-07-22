@@ -30,20 +30,31 @@ function levelCost(model, snapshot, skillId, targetLevel, memo) {
   if (target <= start) return 0;
   const key = `${skillId}:${target}:${start}`;
   if (memo.has(key)) return memo.get(key);
+  // The snapshot is fixed for one computeReach, so a skill's per-level segment cost is
+  // deterministic and shared across every target level. Memoize it (and the fact set)
+  // to avoid re-walking the skill's actions for each of the up-to-99 level targets.
+  const seg = memo._seg ?? (memo._seg = new Map());
+  const facts = memo._facts ?? (memo._facts = stateFacts(model, snapshot));
   let total = 0;
   for (let level = start; level < target; level += 1) {
-    const segmentXp = Math.max(startXp, xpForLevel(model.xpTable, level));
-    const gap = Math.max(0, xpForLevel(model.xpTable, level + 1) - segmentXp);
-    const segmentState = { ...snapshot, skillXp: { ...(snapshot?.skillXp ?? {}), [skillId]: segmentXp } };
-    let rate = 0;
-    for (const action of model._index.actionsBySkill.get(skillId) ?? []) {
-      if (num(action.levelReq) > level || (action.gate?.mapId && !stateFacts(model, snapshot).has(`map:${action.gate.mapId}`))) continue;
-      const xp = xpPerRun(model, segmentState, skillId, action);
-      const interval = effectiveInterval(model, segmentState, skillId, action);
-      if (xp > 0 && interval > 0) rate = Math.max(rate, xp / interval);
+    const segKey = `${skillId}:${level}`;
+    let segmentCost = seg.get(segKey);
+    if (segmentCost === undefined) {
+      const segmentXp = Math.max(startXp, xpForLevel(model.xpTable, level));
+      const gap = Math.max(0, xpForLevel(model.xpTable, level + 1) - segmentXp);
+      const segmentState = { ...snapshot, skillXp: { ...(snapshot?.skillXp ?? {}), [skillId]: segmentXp } };
+      let rate = 0;
+      for (const action of model._index.actionsBySkill.get(skillId) ?? []) {
+        if (num(action.levelReq) > level || (action.gate?.mapId && !facts.has(`map:${action.gate.mapId}`))) continue;
+        const xp = xpPerRun(model, segmentState, skillId, action);
+        const interval = effectiveInterval(model, segmentState, skillId, action);
+        if (xp > 0 && interval > 0) rate = Math.max(rate, xp / interval);
+      }
+      segmentCost = rate <= 0 ? Number.POSITIVE_INFINITY : gap / rate;
+      seg.set(segKey, segmentCost);
     }
-    if (rate <= 0) { total = Number.POSITIVE_INFINITY; break; }
-    total += gap / rate;
+    if (!finite(segmentCost)) { total = Number.POSITIVE_INFINITY; break; }
+    total += segmentCost;
   }
   memo.set(key, total); return total;
 }
@@ -84,6 +95,10 @@ export function computeReach(model, snapshotOrFacts = {}) {
   }
   // Iterative relaxation is label-setting for monotone hyperedges and also handles
   // simple production chains without introducing a second graph representation.
+  // Run costs depend only on the model and snapshot, both fixed for this call, so
+  // precompute them once instead of recomputing effectiveInterval on every pass.
+  const runCosts = new Map();
+  for (const provider of model._index.providers) runCosts.set(provider, providerInterval(model, snapshot, provider));
   for (let pass = 0; pass < Math.max(8, model._index.providers.length * 2 + 8); pass += 1) {
     let changed = false;
     for (const provider of model._index.providers) {
@@ -114,7 +129,7 @@ export function computeReach(model, snapshotOrFacts = {}) {
           requirementCost += neededGold / rateGold;
         }
       }
-      const runCost = providerInterval(model, snapshot, provider);
+      const runCost = runCosts.get(provider);
       const totalCost = requirementCost + runCost;
       for (const [itemId, outputValue] of Object.entries(provider.producesItems ?? {})) {
         const output = num(outputValue);
