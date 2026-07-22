@@ -42,7 +42,7 @@ export function plan(model, snapshot = {}, target = {}) {
     if (value === undefined) { value = effectiveInterval(model, snapshot, provider.skillId, provider.action); snapshotIntervalMemo.set(provider, value); }
     return value;
   };
-  const steps = []; const notes = []; const plannedFacts = new Set(); const itemStack = new Set(); const acquiredBy = new Map();
+  const steps = []; const notes = []; const plannedFacts = new Set(); const itemStack = new Set(); const levelStack = new Set(); const acquiredBy = new Map();
   let serial = 0; let failure = null;
   const stepIds = () => steps.map((step) => step.id);
   const quantity = (id) => Math.max(0, num(state.inventory[id]));
@@ -82,13 +82,19 @@ export function plan(model, snapshot = {}, target = {}) {
   const expectedDuration = (provider, runs) => {
     if (provider.automation !== 'auto' || (provider.kind !== 'action' && provider.kind !== 'chart')) return null;
     if (provider.kind === 'chart') return cartographyInterval(model, state, provider.map) * Math.max(0, runs);
+    const total = Math.max(0, runs);
     const local = { ...state, skillXp: { ...state.skillXp } };
-    let total = 0;
-    for (let run = 0; run < Math.max(0, runs); run += 1) {
-      total += effectiveInterval(model, local, provider.skillId, provider.action);
+    let ms = 0; let interval = 0;
+    // The tick interval only shrinks as XP raises the level, and it stabilizes well
+    // before large batches finish, so cap the per-run walk and extrapolate the rest.
+    const walked = Math.min(total, 4096);
+    for (let run = 0; run < walked; run += 1) {
+      interval = effectiveInterval(model, local, provider.skillId, provider.action);
+      ms += interval;
       local.skillXp[provider.skillId] = num(local.skillXp[provider.skillId]) + xpPerRun(model, local, provider.skillId, provider.action);
     }
-    return total;
+    if (total > walked) ms += interval * (total - walked);
+    return ms;
   };
   const applyExpected = (step, provider, runs) => {
     // Item consumption is NOT applied here: inputs are reserved out of the pool in
@@ -146,6 +152,12 @@ export function plan(model, snapshot = {}, target = {}) {
 
   function ensureLevel(skillId, level) {
     const goal = Math.max(1, Math.floor(num(level)));
+    if (levelForXp(model.xpTable, state.skillXp[skillId]) >= goal) return true;
+    // ensureItem-style cycle guard: a skill trained by consuming items whose supply
+    // needs the same skill's level would otherwise recurse without bound.
+    if (levelStack.has(skillId)) return markFailure(`cyclic level requirement for ${skillId}`, `level:${skillId}:${goal}`);
+    levelStack.add(skillId);
+    try {
     while (levelForXp(model.xpTable, state.skillXp[skillId]) < goal) {
       let simulatedXp = num(state.skillXp[skillId]);
       let selected = null; let selectedRuns = 0; let selectedStop = 0;
@@ -176,6 +188,7 @@ export function plan(model, snapshot = {}, target = {}) {
       addStep(provider, selectedRuns, 'train', { type: 'xp', skillId, xpAtLeast: selectedStop }, [...deps, ...inputDeps], { actionId: selected.id });
     }
     return true;
+    } finally { levelStack.delete(skillId); }
   }
   function ensureFactImpl(fact) {
     if (factNow(fact)) return [];
@@ -254,6 +267,10 @@ export function plan(model, snapshot = {}, target = {}) {
     if (!provider) { itemStack.delete(itemId); markFailure(`no finite source for ${itemId}`, itemId); return null; }
     const output = outputFor(provider, itemId);
     const runs = ceilRuns(deficit, output);
+    // A source whose per-run yield is a rare expected value (e.g. a byproduct at a
+    // fraction per run) makes runs explode into the millions. That is not a plannable
+    // way to reach a fixed quantity, so treat it as unreachable instead of grinding.
+    if (!Number.isFinite(runs) || runs > 1_000_000) { itemStack.delete(itemId); markFailure(`no reliable source for ${itemId}`, itemId); return null; }
     const existing = acquiredBy.get(itemId);
     if (existing && existing.provider.id === provider.id && existing.step.stop?.type === 'itemQty') {
       const inputDeps = ensureProviderInputs(provider, runs, itemId); if (failure) { itemStack.delete(itemId); return null; }

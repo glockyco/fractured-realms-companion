@@ -34,6 +34,25 @@ test('time-to-level uses the best action independently in each level segment', (
   assert.deepEqual(result.steps.map((step) => step.stop.xpAtLeast), [400, 900]);
 });
 
+test('an item sourced only as a rare byproduct is unreachable rather than an endless grind', () => {
+  const base = baseModel();
+  const model = indexed({ ...base, items: { ...base.items, dust: { label: 'Dust', type: 'Resource', value: 0, art: false } }, actions: [...base.actions, { id: 'sift', name: 'Sift', skillId: 'woodcutting', levelReq: 1, xp: 1, interval: 1000, inputs: {}, outputs: {}, rareOutputs: [{ item: 'dust', qty: 1, chance: 0.0000001 }], automation: 'auto', gate: null }] });
+  const result = plan(model, snapshot(), { type: 'item', itemId: 'dust', qty: 1 });
+  assert.equal(result.ok, false); assert.equal(result.blocked?.reason, 'no reliable source for dust');
+});
+
+test('a self-referential training input fails cleanly instead of recursing', () => {
+  const base = baseModel();
+  const model = indexed({ ...base, skills: [...base.skills, { id: 'brewing', name: 'Brewing', category: 'action' }],
+    items: { ...base.items, potion: { label: 'Potion', type: 'Resource', value: 0, art: false }, tonic: { label: 'Tonic', type: 'Resource', value: 0, art: false } },
+    actions: [...base.actions,
+      { id: 'brew', name: 'Brew', skillId: 'brewing', levelReq: 1, xp: 10, interval: 1000, inputs: { potion: 1 }, outputs: { tonic: 1 }, automation: 'auto', gate: null },
+      { id: 'distill', name: 'Distill', skillId: 'brewing', levelReq: 50, xp: 10, interval: 1000, inputs: {}, outputs: { potion: 1 }, automation: 'auto', gate: null },
+    ] });
+  const result = plan(model, snapshot(), { type: 'level', skillId: 'brewing', level: 10 });
+  assert.equal(result.ok, false); assert.equal(result.blocked?.reason, 'cyclic level requirement for brewing');
+});
+
 test('gate routing emits chart before gated production', () => {
   const base = baseModel();
   const model = indexed({ ...base, maps: [{ id: 'map1', name: 'Map', group: 'regular', tier: 'local', levelReq: 1, xp: 1, interval: 1000, actionsToChart: 1 }], chartSupplyTiers: { local: { supplies: { parchment: 1, ink: 1 } } }, actions: [...base.actions, { id: 'gatedAction', name: 'Gated', skillId: 'woodcutting', levelReq: 1, xp: 1, interval: 1000, inputs: {}, outputs: { gated: 1 }, automation: 'auto', gate: { mapId: 'map1', skillLevel: 1 } }] });
