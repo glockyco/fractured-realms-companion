@@ -1,6 +1,6 @@
 // @ts-nocheck
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import test, { mock } from 'node:test';
 import { baseModel, snapshot } from './engine/fixture.js';
 import {
   DATA_FILES, bootOverlay, buildIndexes, formatFinishTime, isExecutionLocked,
@@ -262,6 +262,27 @@ test('a step blocked only by an unfinished dependency reads "waiting for" that d
   result.app.state.executorStatus = { phase: 'idle', stepStatuses: {} };
   result.app.renderPlan();
   assert.match(result.shell.panels.plan.querySelector('#fr-plan-result').innerHTML, /waiting for Alpha/);
+});
+
+test('a slow plan shows a busy spinner in the tab bar until the worker replies', async () => {
+  const document = installWorker(new FakeDocument());
+  const result = await bootOverlay({ document, window: { __frCompanion: fakeApi() }, fetch: fetchFor(model()) });
+  const worker = FakeWorker.last;
+  const plan = result.shell.panels.plan;
+  const spinner = result.shell.queueControls.querySelector('#fr-queue-spinner');
+  assert.equal(spinner.hidden, true, 'spinner hidden at rest');
+  mock.timers.enable({ apis: ['setTimeout'] });
+  try {
+    plan.querySelector('#fr-plan-item').value = 'Log'; plan.querySelector('#fr-plan-qty').value = '1'; plan.querySelector('#fr-plan-form').dispatch('submit');
+    const settled = result.app.planSettled();
+    assert.equal(spinner.hidden, true, 'spinner stays hidden before the delay elapses');
+    mock.timers.tick(250);
+    assert.equal(spinner.hidden, false, 'spinner appears once the plan outlasts the delay');
+    const planMsg = worker.posted.find((message) => message.type === 'plan');
+    worker.reply({ type: 'result', id: planMsg.id, result: fabricatedPlan(result.app.state.queueGoals[0].target) });
+    await settled;
+    assert.equal(spinner.hidden, true, 'spinner clears when the plan resolves');
+  } finally { mock.timers.reset(); }
 });
 
 test('overlay source contains no legacy planner import or native action queue access', async () => {
