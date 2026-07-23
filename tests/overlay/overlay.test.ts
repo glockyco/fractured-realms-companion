@@ -117,6 +117,19 @@ test('clear queue is enabled for stored targets and removes them', async () => {
   assert.equal(result.app.state.queueGoals.length, 0); assert.equal(result.app.state.resolvedQueue.steps.length, 0); assert.equal(clear.disabled, true);
 });
 
+test('queue targets can be reordered to the top', async () => {
+  const document = new FakeDocument();
+  const result = await bootOverlay({ document, window: { __frCompanion: fakeApi() }, fetch: fetchFor(model()) });
+  const plan = result.shell.panels.plan;
+  plan.querySelector('#fr-plan-item').value = 'Log'; plan.querySelector('#fr-plan-form').dispatch('submit');
+  plan.querySelector('#fr-plan-item').value = 'Ore'; plan.querySelector('#fr-plan-form').dispatch('submit');
+  assert.equal(result.app.state.queueGoals.length, 2);
+  const last = result.app.state.queueGoals[1].id;
+  const button = new FakeElement('button', document); button.dataset.queueMove = 'top'; button.dataset.queueGoal = last;
+  plan.dispatch('click', { target: button });
+  assert.equal(result.app.state.queueGoals[0].id, last);
+});
+
 test('compact strip mirrors queue controls and progress', async () => {
   const result = await bootOverlay({ document: new FakeDocument(), window: { __frCompanion: fakeApi() }, fetch: fetchFor(model()) }); const plan = result.shell.panels.plan; plan.querySelector('#fr-plan-item').value = 'Log'; plan.querySelector('#fr-plan-form').dispatch('submit');
   const compact = result.shell.compactStrip; const start = compact.querySelector('#fr-compact-start'); const progress = compact.querySelector('#fr-compact-progress'); assert.equal(start.hidden, false); assert.equal(progress.max, 1);
