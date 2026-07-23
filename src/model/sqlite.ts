@@ -69,7 +69,6 @@ function schema(db: NonNullable<ReturnType<typeof openDatabase>>): void {
     CREATE TABLE prestige_titles (skill_id TEXT PRIMARY KEY, title TEXT);
     CREATE TABLE strings (key TEXT PRIMARY KEY, value TEXT);
     CREATE TABLE xp_table (level INTEGER PRIMARY KEY, xp REAL);
-    CREATE TABLE meta (key TEXT PRIMARY KEY, json TEXT NOT NULL);
   `);
 }
 
@@ -166,12 +165,6 @@ function writeRows(db: NonNullable<ReturnType<typeof openDatabase>>, model: Game
   if (model.prestigeTitles) for (const [skillId, title] of Object.entries(model.prestigeTitles)) insert(db, 'prestige_titles', ['skill_id', 'title'], [skillId, title]);
   for (const [key, value] of Object.entries(model.stringsEn)) insert(db, 'strings', ['key', 'value'], [key, value]);
   model.xpTable.forEach((xp, level) => insert(db, 'xp_table', ['level', 'xp'], [level, xp]));
-
-  insert(db, 'meta', ['key', 'json'], ['chartSupplyTiers', json(model.chartSupplyTiers)]);
-  insert(db, 'meta', ['key', 'json'], ['patterns', json(model.patterns)]);
-  insert(db, 'meta', ['key', 'json'], ['grandReward', json(model.grandReward)]);
-  insert(db, 'meta', ['key', 'json'], ['offlineGold', json(model.offlineGold)]);
-  insert(db, 'meta', ['key', 'json'], ['prestigeTitles', json(model.prestigeTitles)]);
 }
 
 /** Write a derived SQLite projection, returning false when SQLite is unavailable or the write fails. */
