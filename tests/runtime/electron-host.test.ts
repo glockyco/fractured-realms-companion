@@ -29,6 +29,7 @@ type HostHandle = {
 type Response = {
   statusCode: number;
   body: string;
+  headers: Record<string, string | string[] | undefined>;
 };
 
 async function availablePort(): Promise<number> {
@@ -50,7 +51,7 @@ function get(url: string): Promise<Response> {
       let body = '';
       response.setEncoding('utf8');
       response.on('data', (chunk: string) => { body += chunk; });
-      response.once('end', () => resolve({ statusCode: response.statusCode ?? 0, body }));
+      response.once('end', () => resolve({ statusCode: response.statusCode ?? 0, body, headers: response.headers as Record<string, string | string[] | undefined> }));
       response.once('error', reject);
     });
     client.once('error', reject);
@@ -123,6 +124,26 @@ function createAssets(): string {
   );
   return root;
 }
+
+test('serves companion assets uncached and other assets cached', async () => {
+  const root = createAssets();
+  fs.mkdirSync(path.join(root, 'companion'), { recursive: true });
+  writeFileSync(path.join(root, 'companion', 'overlay.js'), 'export const x = 1;');
+  writeFileSync(path.join(root, 'app.js'), 'export const y = 2;');
+  const config = createConfig(root, await availablePort(), true);
+  const handle = await start(config);
+  try {
+    const overlay = await get(`${handle.url}companion/overlay.js`);
+    assert.equal(overlay.statusCode, 200);
+    assert.equal(overlay.headers['cache-control'], 'no-store');
+    const app = await get(`${handle.url}app.js`);
+    assert.equal(app.statusCode, 200);
+    assert.match(String(app.headers['cache-control']), /max-age/);
+  } finally {
+    await handle.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test('injects the bridge and companion overlay before the first module script', async () => {
   const root = createAssets();

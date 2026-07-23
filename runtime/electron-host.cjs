@@ -409,7 +409,7 @@ async function start(config) {
           body = Buffer.from(injected);
         }
         const headers = {
-          'Cache-Control': extension === '.html' ? 'no-store' : 'public, max-age=3600',
+          'Cache-Control': extension === '.html' || pathname.startsWith('/companion/') ? 'no-store' : 'public, max-age=3600',
           'Content-Length': body.length,
           'Content-Type': MIME_TYPES[extension] || 'application/octet-stream',
         };
