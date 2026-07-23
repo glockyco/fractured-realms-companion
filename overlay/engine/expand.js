@@ -320,8 +320,6 @@ export function plan(model, snapshot = {}, target = {}) {
     addStep(provider, runs, purpose, stop, [...deps, ...inputDeps]);
   }
 
-  // Keep the dependency order helper as a declaration so ensureFact can call it above.
-  function ensureFact(fact) { return ensureFactImpl(fact); }
   const type = target?.type ?? 'item';
   if (type === 'item' || type === 'item-gain') {
     const amount = type === 'item' ? num(target.qty) : quantity(target.itemId) + num(target.gain);
@@ -349,19 +347,6 @@ export function plan(model, snapshot = {}, target = {}) {
       const runs = target.runs != null ? Math.max(0, Math.ceil(num(target.runs))) : target.minutes != null ? Math.max(1, Math.ceil(num(target.minutes, 0) * 60000 / Math.max(1, interval))) : defaultRuns;
       const stop = provider.kind === 'chart' ? { type: 'fact', fact: `map:${provider.mapId}` } : { type: target.runs != null ? 'runs' : 'time', ...(target.runs != null ? { runs } : { ms: num(target.minutes) * 60000 }) };
       addActionTarget(provider, runs, 'goal', stop);
-    }
-  } else if (type === 'unlock') ensureFact(target.fact);
-  else if (type === 'gold') {
-    if (num(state.gold) < num(target.amount)) {
-      const candidates = model._index.providers.filter((provider) => provider.kind === 'action' && provider.automation === 'auto' && (provider.outputGold > 0 || Object.keys(provider.producesItems).some((id) => model.items?.[id]?.value > 0)));
-      candidates.sort((a, b) => String(a.id).localeCompare(String(b.id)));
-      const provider = candidates[0];
-      if (!provider) markFailure('no finite gold source');
-      else {
-        const perRun = provider.outputGold + Object.entries(provider.producesItems).reduce((sum, [id, amount]) => sum + num(model.items?.[id]?.value) * num(amount), 0);
-        const runs = ceilRuns(num(target.amount) - num(state.gold), perRun);
-        addActionTarget(provider, runs, 'goal', { type: 'runs', runs });
-      }
     }
   } else markFailure(`unknown target type ${type}`);
 

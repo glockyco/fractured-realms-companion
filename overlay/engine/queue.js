@@ -1,6 +1,4 @@
-/** Queue composition and unlock-query helpers. */
-import { computeReach, timeToLevel } from './closure.js';
-import { factSatisfied, snapshotFacts } from './model.js';
+/** Queue composition: plan a list of targets against carried-forward state. */
 import { plan } from './expand.js';
 import { simulate } from './simulate.js';
 
@@ -30,15 +28,3 @@ export function resolveQueue(model, snapshot = {}, targets = []) {
     infeasibility: optimistic.infeasibility,
   };
 }
-
-/** Cheapest currently unavailable provider facts, for the unlock picker. */
-export function nextUnlocks(model, snapshot = {}, limit = 10) {
-  const reach = computeReach(model, snapshot);
-  const initial = snapshotFacts(model, snapshot);
-  const facts = new Set();
-  for (const provider of model._index.providers) for (const fact of provider.grantsFacts ?? []) if (!initial.has(fact)) facts.add(fact);
-  return [...facts].map((fact) => ({ fact, costMs: reach.get(fact)?.cost ?? Number.POSITIVE_INFINITY }))
-    .filter((entry) => Number.isFinite(entry.costMs)).sort((a, b) => a.costMs - b.costMs || String(a.fact).localeCompare(String(b.fact))).slice(0, Math.max(0, limit));
-}
-
-export { snapshotFacts, timeToLevel };

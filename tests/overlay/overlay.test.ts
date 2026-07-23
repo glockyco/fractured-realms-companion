@@ -61,7 +61,7 @@ function model(overrides = {}) {
     },
     actions: [
       { id: 'chop', name: 'Chop Log', skillId: 'woodcutting', levelReq: 1, xp: 10, interval: 1000, inputs: {}, outputs: { log: 1 }, automation: 'auto', gate: null },
-      { id: 'smelt', name: 'Smelt Ore', skillId: 'woodcutting', levelReq: 1, xp: 10, interval: 1000, inputs: { log: 1 }, outputs: { ore: 1 }, automation: 'auto', gate: null },
+      { id: 'smelt', name: 'Smelt Ore', skillId: 'woodcutting', levelReq: 1, xp: 10, interval: 1000, inputs: { log: 1 }, outputs: { ore: 1 }, toolReq: 'tool', automation: 'auto', gate: null },
     ],
     tools: { woodcutting: [{ id: 'tool', name: 'Tool', levelReq: 1, xpBonus: 0, speedBonus: 0, cost: 5 }] },
     stringsEn: { 'itemdesc.log': 'A useful log.' },
@@ -93,21 +93,21 @@ test('buildIndexes includes deterministic action sources, enemy drops, and actio
   const indexed = buildIndexes(model()); assert.equal(indexed.sourcesOf.log[0].kind, 'action'); assert.equal(indexed.usesOf.log[0].actionId, 'smelt');
 });
 
-test('plan target builder exposes item, level, and unlock target kinds', async () => {
+test('plan target builder exposes item, level, and action target kinds', async () => {
   const result = await bootOverlay({ document: new FakeDocument(), window: { __frCompanion: fakeApi() }, fetch: fetchFor(model()) });
   const form = result.shell.panels.plan.querySelector('#fr-plan-form'); const kind = result.shell.panels.plan.querySelector('#fr-plan-target');
   kind.value = 'item'; kind.dispatch('change'); assert.equal(result.shell.panels.plan.querySelector('#fr-plan-item-field').hidden, false);
   kind.value = 'level'; kind.dispatch('change'); assert.equal(result.shell.panels.plan.querySelector('#fr-plan-skill-field').hidden, false);
-  kind.value = 'unlock'; kind.dispatch('change'); assert.equal(result.shell.panels.plan.querySelector('#fr-plan-unlock-field').hidden, false); assert.ok(result.shell.panels.plan.querySelector('#fr-plan-unlock').innerHTML.includes('tool:tool'));
+  kind.value = 'action'; kind.dispatch('change'); assert.equal(result.shell.panels.plan.querySelector('#fr-plan-action-field').hidden, false);
   kind.value = 'item'; result.shell.panels.plan.querySelector('#fr-plan-item').value = 'Log'; result.shell.panels.plan.querySelector('#fr-plan-qty').value = '2'; form.dispatch('submit');
   assert.equal(result.app.state.queueGoals[0].target.type, 'item'); assert.equal(result.app.state.queueGoals[0].target.qty, 2);
 });
 
 test('resolveQueue timeline renders manual instruction cards and readyAt wall-clock', async () => {
   const result = await bootOverlay({ document: new FakeDocument(), window: { __frCompanion: fakeApi() }, fetch: fetchFor(model()) });
-  const kind = result.shell.panels.plan.querySelector('#fr-plan-target'); kind.value = 'unlock'; kind.dispatch('change'); result.shell.panels.plan.querySelector('#fr-plan-form').dispatch('submit');
-  const html = result.shell.panels.plan.querySelector('#fr-plan-result').innerHTML;
-  assert.match(html, /Waiting for you/); assert.match(html, /ready for you at/); assert.match(html, /Buy Tool/); assert.equal(result.app.state.resolvedQueue.steps[0].kind, 'manual'); assert.equal(formatFinishTime(0).length > 0, true);
+  const plan = result.shell.panels.plan; plan.querySelector('#fr-plan-item').value = 'Ore'; plan.querySelector('#fr-plan-form').dispatch('submit');
+  const html = plan.querySelector('#fr-plan-result').innerHTML;
+  assert.match(html, /Waiting for you/); assert.match(html, /ready for you at/); assert.match(html, /Buy Tool/); assert.ok(result.app.state.resolvedQueue.steps.some((step) => step.kind === 'manual')); assert.equal(formatFinishTime(0).length > 0, true);
 });
 
 test('clear queue is enabled for stored targets and removes them', async () => {
