@@ -169,7 +169,13 @@ export function plan(model, snapshot = {}, target = {}) {
         // would pick such an action early and then recurse to level the same skill to
         // the gate level, which the cycle guard rejects as a false cyclic requirement.
         const candidates = (model._index.actionsBySkill.get(skillId) ?? []).filter((action) => Math.max(num(action.levelReq), num(action.gate?.skillLevel)) <= currentLevel);
+        const autoItem = (itemId) => (model._index.producersByItem.get(itemId) ?? []).some((p) => p.automation === 'auto' && outputFor(p, itemId) > 0);
+        const autoInputs = (action) => Object.keys(action.inputs ?? {}).every((id) => autoItem(id));
         candidates.sort((a, b) => {
+          // Prefer actions the companion can feed itself over ones that demand ongoing
+          // manual gathering (e.g. combat drops) for their inputs on every run.
+          const autoDelta = (autoInputs(a) ? 0 : 1) - (autoInputs(b) ? 0 : 1);
+          if (autoDelta) return autoDelta;
           const ar = xpPerRun(model, { ...state, skillXp: { ...state.skillXp, [skillId]: simulatedXp } }, skillId, a) / Math.max(1, effectiveInterval(model, { ...state, skillXp: { ...state.skillXp, [skillId]: simulatedXp } }, skillId, a));
           const br = xpPerRun(model, { ...state, skillXp: { ...state.skillXp, [skillId]: simulatedXp } }, skillId, b) / Math.max(1, effectiveInterval(model, { ...state, skillXp: { ...state.skillXp, [skillId]: simulatedXp } }, skillId, b));
           return br - ar || String(a.id).localeCompare(String(b.id));

@@ -113,6 +113,26 @@ test('simulate extrapolates high run counts instead of walking every run', () =>
   assert.ok(Date.now() - started < 5000, 'simulate must stay bounded for large run counts');
 });
 
+test('training prefers actions with automatable inputs over manual-gathered ones', () => {
+  const base = baseModel();
+  const model = indexed({ ...base,
+    skills: [...base.skills, { id: 'cooking', name: 'Cooking', category: 'action' }],
+    items: { ...base.items, auto_fish: { label: 'Auto Fish', type: 'Resource', value: 1, art: false }, manual_meat: { label: 'Manual Meat', type: 'Resource', value: 1, art: false }, cooked_fish: { label: 'Cooked Fish', type: 'Resource', value: 1, art: false }, cooked_meat: { label: 'Cooked Meat', type: 'Resource', value: 1, art: false } },
+    actions: [...base.actions,
+      { id: 'catch_fish', name: 'Catch Fish', skillId: 'woodcutting', levelReq: 1, xp: 1, interval: 1000, inputs: {}, outputs: { auto_fish: 1 }, automation: 'auto', gate: null },
+      { id: 'cook_aaa_meat', name: 'Cook Meat', skillId: 'cooking', levelReq: 1, xp: 10, interval: 1000, inputs: { manual_meat: 1 }, outputs: { cooked_meat: 1 }, automation: 'auto', gate: null },
+      { id: 'cook_fish', name: 'Cook Fish', skillId: 'cooking', levelReq: 1, xp: 10, interval: 1000, inputs: { auto_fish: 1 }, outputs: { cooked_fish: 1 }, automation: 'auto', gate: null },
+    ],
+    zones: [{ id: 'z', name: 'Z', enemies: [{ id: 'e', name: 'E', drops: [{ id: 'manual_meat', qty: 1, chance: 1 }] }] }],
+  });
+  // Both dishes have the same xp rate and cook_aaa_meat wins the id tiebreak, but its
+  // meat is only a manual combat drop while the fish is automatable, so fish must win.
+  const result = plan(model, snapshot({ gold: 0 }), { type: 'level', skillId: 'cooking', level: 3 });
+  assert.equal(result.ok, true);
+  const cooked = result.steps.filter((step) => step.skillId === 'cooking').map((step) => step.actionId);
+  assert.ok(cooked.includes('cook_fish')); assert.ok(!cooked.includes('cook_aaa_meat'));
+});
+
 test('queue carries XP and inventory and computes manual ready times', () => {
   const base = baseModel(); const model = indexed({ ...base, actions: [...base.actions, { id: 'manualSource', name: 'Manual source', skillId: 'bounty', levelReq: 1, xp: 0, interval: 0, inputs: {}, outputs: { ore: 1 }, automation: 'manual', gate: null }], skills: [...base.skills, { id: 'bounty', name: 'Bounty', category: 'manual' }] });
   const state = snapshot({ inventory: { parchment: 2, ink: 2 } }); const independent = resolveQueue(model, state, [{ type: 'item', itemId: 'log', qty: 1 }, { type: 'item', itemId: 'log', qty: 2 }]);
