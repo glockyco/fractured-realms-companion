@@ -97,7 +97,7 @@ test('CLI --dry-run prints an offline summary from the state model.db', { skip: 
     fixtureDb(join(stateHome, 'fractured-realms-companion', 'model.db'));
     const result = spawnSync(process.execPath, ['scripts/export-sheets.mjs', '--dry-run'], {
       encoding: 'utf8',
-      env: { ...process.env, XDG_STATE_HOME: stateHome },
+      env: { ...process.env, XDG_STATE_HOME: stateHome, LOCALAPPDATA: stateHome },
     });
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /skills: 2 rows/);
