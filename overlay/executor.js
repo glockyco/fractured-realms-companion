@@ -256,9 +256,22 @@ export function createDirectExecutor(api, options = {}) {
     const outputIds = Object.keys(expectedOutputs).filter((id) => asNumber(expectedOutputs[id], 0) > 0
       && asNumber(expectedOutputs[id], 0) / expectedRuns > 0);
     let inferred = 0;
+    const stop = step?.stop;
     const xpPerRun = asNumber(step?.xpPerRun ?? step?.xpGain
       ?? step?.expected?.xpPerRun ?? step?.expected?.xpGain, 0);
-    if (xpPerRun > 0) {
+    if (stop?.type === 'xp' && Number.isFinite(asNumber(stop.xpAtLeast, NaN))) {
+      // A training step finishes on accumulated XP, not output. XP per run is
+      // burn-independent, so inferring runs from XP keeps the bar consistent with
+      // both the xp stop and the time countdown. Inferring from output would
+      // overshoot: cooking's per-run yield climbs as the burn chance falls with
+      // level, so produced items outrun the planned EV and saturate the bar early.
+      const targetDelta = asNumber(stop.xpAtLeast, 0) - asNumber(accumulator.baseXp, 0);
+      if (targetDelta > 0) inferred = Math.floor(accumulator.xp / (targetDelta / expectedRuns));
+    } else if ((stop?.type === 'runs' || stop?.type === 'time') && xpPerRun > 0) {
+      // Runs and time stops need a true count of completed game runs. Per-run XP is
+      // constant regardless of stochastic output, so it counts runs faithfully where
+      // output would over- or under-report (cooking's burn chance falls with level,
+      // so produced items outrun the planned per-run EV).
       inferred = Math.floor(accumulator.xp / xpPerRun);
     } else if (outputIds.length) {
       // The bundle's expected output map contains deterministic outputs first
@@ -447,7 +460,7 @@ export function createDirectExecutor(api, options = {}) {
     progressSnapshot = {
       outputs: snapshotOutputs(step, currentState()),
       xp: snapshotXp(step, currentState()),
-      accumulator: { outputs: {}, xp: 0 },
+      accumulator: { outputs: {}, xp: 0, baseXp: snapshotXp(step, currentState()) },
     };
     lastProgressAt = asNumber(now(), 0);
     clearStepTimers();

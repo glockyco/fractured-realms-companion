@@ -34,6 +34,16 @@ test('time-to-level uses the best action independently in each level segment', (
   assert.deepEqual(result.steps.map((step) => step.stop.xpAtLeast), [400, 900]);
 });
 
+test('planned auto action steps carry per-run XP for reliable run counting', () => {
+  const model = indexed(); const state = snapshot();
+  const result = plan(model, state, { type: 'action', skillId: 'woodcutting', actionId: 'A', runs: 5 });
+  assert.equal(result.ok, true);
+  const step = result.steps.find((entry) => entry.actionId === 'A');
+  assert.equal(step.stop.type, 'runs');
+  // Per-run XP lets the executor count runs by XP instead of stochastic output.
+  assert.equal(step.expected.xpPerRun, xpPerRun(model, state, 'woodcutting', model.actions[0]));
+});
+
 test('an action gated above its level requirement trains through a lower action, not a false cycle', () => {
   const base = baseModel();
   const model = indexed({ ...base, actions: [...base.actions,

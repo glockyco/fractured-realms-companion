@@ -148,6 +148,87 @@ test('running status exposes per-step progress and a remaining-time countdown', 
   assert.equal(status.stepRemainingMs, 1000);
 });
 
+test('xp-goal progress tracks accumulated XP, not output that outruns its estimate', () => {
+  const game = fakeGame();
+  const executor = createDirectExecutor(game.api, options(game));
+  // A cooking training step: the plan expects an EV of 5 cooked from 10 runs
+  // (burn drops half the output) and reaches the xp target in 10 runs.
+  const step = {
+    id: 'cook', kind: 'action', label: 'Cook', skillId: 'cooking', actionId: 'cook',
+    deps: [], stop: { type: 'xp', skillId: 'cooking', xpAtLeast: 100 },
+    expected: { runs: 10, ms: 10000, produces: { cooked: 5 }, consumes: {} },
+  };
+  executor.run([step]);
+  assert.equal(executor.getStatus().phase, 'running');
+  assert.equal(executor.getStatus().stepProgressMax, 10);
+  // Five real runs in: burn fell, so all 5 expected cooked are already produced,
+  // yet only half the XP is earned. Output inference would saturate the bar at
+  // 10/10; XP inference correctly reports 5/10 while the step keeps running.
+  game.set({ inventory: { cooked: 5 }, skillXp: { cooking: 50 } });
+  const status = executor.getStatus();
+  assert.equal(status.phase, 'running');
+  assert.equal(status.stepProgress, 5);
+  // The step finishes when the XP stop is satisfied, not when output arrives.
+  game.set({ skillXp: { cooking: 100 } });
+  assert.equal(executor.getStatus().phase, 'complete');
+});
+
+test('runs-goal counts runs by XP, not stochastic output that finishes early', () => {
+  const game = fakeGame();
+  const executor = createDirectExecutor(game.api, options(game));
+  const step = {
+    id: 'cook', kind: 'action', label: 'Cook', skillId: 'cooking', actionId: 'cook',
+    deps: [], stop: { type: 'runs', runs: 10 },
+    expected: { runs: 10, ms: 10000, produces: { cooked: 5 }, consumes: {}, xpPerRun: 10 },
+  };
+  executor.run([step]);
+  assert.equal(executor.getStatus().phase, 'running');
+  // Full expected output already produced after 5 real runs (burn fell). Counting
+  // by output would satisfy runs:10 and stop early; XP keeps it running at 5/10.
+  game.set({ inventory: { cooked: 5 }, skillXp: { cooking: 50 } });
+  assert.equal(executor.getStatus().phase, 'running');
+  assert.equal(executor.getStatus().stepProgress, 5);
+  // Ten runs' worth of XP satisfies the runs stop.
+  game.set({ skillXp: { cooking: 100 } });
+  assert.equal(executor.getStatus().phase, 'complete');
+});
+
+test('time-goal progress tracks XP so the bar never saturates before the clock', () => {
+  const game = fakeGame();
+  const executor = createDirectExecutor(game.api, options(game));
+  const step = {
+    id: 'cook', kind: 'action', label: 'Cook', skillId: 'cooking', actionId: 'cook',
+    deps: [], stop: { type: 'time', ms: 10000 },
+    expected: { runs: 10, ms: 10000, produces: { cooked: 5 }, consumes: {}, xpPerRun: 10 },
+  };
+  const runPromise = executor.run([step]);
+  assert.equal(executor.getStatus().phase, 'running');
+  // Output already at its full estimate, but only half the time elapsed: the bar
+  // must read 5/10 (XP-derived), not saturate at 10/10.
+  game.set({ inventory: { cooked: 5 }, skillXp: { cooking: 50 } });
+  assert.equal(executor.getStatus().phase, 'running');
+  assert.equal(executor.getStatus().stepProgress, 5);
+  // The time stop, not output, completes the step.
+  game.timers.tick(10000);
+  return runPromise.then(() => assert.equal(executor.getStatus().phase, 'complete'));
+});
+
+test('itemQty progress ignores per-run XP and tracks produced output', () => {
+  const game = fakeGame();
+  const executor = createDirectExecutor(game.api, options(game));
+  // An item goal is measured in produced items, not runs: even when a step
+  // carries per-run XP, its bar must follow output so it stays consistent with
+  // the itemQty completion check.
+  const step = action('gather', { type: 'itemQty', itemId: 'ore', qty: 4 }, {
+    expected: { runs: 4, ms: 4000, produces: { ore: 4 }, consumes: {}, xpPerRun: 10 },
+  });
+  executor.run([step]);
+  assert.equal(executor.getStatus().stepProgressMax, 4);
+  // XP races ahead of output; the bar must report one produced ore, not three.
+  game.set({ inventory: { ore: 1 }, skillXp: { gathering: 30 } });
+  assert.equal(executor.getStatus().stepProgress, 1);
+});
+
 test('a waiting manual step completes when the game state changes without a notification', () => {
   const game = fakeGame();
   const executor = createDirectExecutor(game.api, options(game));

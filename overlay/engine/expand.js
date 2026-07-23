@@ -109,12 +109,17 @@ export function plan(model, snapshot = {}, target = {}) {
     const consumes = {};
     for (const [itemId, value] of Object.entries(provider.consumesItems ?? {})) consumes[itemId] = num(value) * runs;
     const expectedMs = expectedDuration(provider, runs);
+    // Per-run XP is burn-independent, so the executor uses it as a reliable run
+    // counter for runs/time stops where output (e.g. cooking's burnt fraction)
+    // would otherwise misreport progress. Computed at this step's starting state.
+    const perRunXp = isAction && provider.kind === 'action'
+      ? xpPerRun(model, state, provider.skillId, provider.action) : 0;
     const step = {
       id, kind: isAction ? 'action' : 'manual', label: provider.label ?? provider.id,
       ...(provider.skillId ? { skillId: provider.skillId } : {}), ...(provider.actionId != null ? { actionId: provider.actionId } : {}),
       providerId: provider.id,
       ...(isAction ? {} : { instruction: provider.label ?? provider.id }), deps: [...new Set(deps)].sort(), stop,
-      expected: { runs, ms: expectedMs, produces, consumes },
+      expected: { runs, ms: expectedMs, produces, consumes, ...(perRunXp > 0 ? { xpPerRun: perRunXp } : {}) },
       purpose, ...extra,
     };
     steps.push(step); applyExpected(step, provider, runs); return step;
