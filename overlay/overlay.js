@@ -486,7 +486,7 @@ tbody tr:last-child td { border-bottom: 0; }
 .panel[data-compact="true"] .compact-strip > #fr-compact-message { grid-column: 1; grid-row: 2; min-width: 0; }
 .panel[data-compact="true"] .compact-strip > #fr-compact-progress { grid-column: 1 / -1; grid-row: 3; }
 .panel[data-compact="true"] .compact-strip > .compact-actions { grid-column: 2; grid-row: 1 / 3; display: flex; gap: var(--fr-s1); align-items: center; }
-.panel[data-compact="true"] .compact-strip p { display: flex; align-items: baseline; min-width: 0; gap: 0.35ch; margin: 0; overflow: hidden; color: var(--fr-neutral-300); font-size: 0.75rem; text-overflow: ellipsis; white-space: nowrap; }
+.panel[data-compact="true"] .compact-strip p { display: block; min-width: 0; margin: 0; overflow: hidden; color: var(--fr-neutral-300); font-size: 0.75rem; text-overflow: ellipsis; white-space: nowrap; }
 .loading-line::after { content: ""; display: block; width: 35%; height: 100%; background: var(--fr-harbor-400); animation: loading 1.2s linear infinite; }
 @keyframes loading { from { transform: translateX(-100%); } to { transform: translateX(300%); } }
 @media (prefers-reduced-motion: reduce) {
