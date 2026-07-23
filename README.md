@@ -69,6 +69,33 @@ fractured-companion model sql "SELECT id, level_req FROM actions WHERE skill_id=
 
 `model info` reports the build, schema version, registry counts, and paths. `model sql` accepts read-only `SELECT` statements and prints one JSON object per row from `<stateDir>/model.db`. The projection is derived from `<stateDir>/pack/data/model.json`; if the database or a built-in SQLite driver is unavailable, run `refresh` and check the reported error. The overlay serves the same model at `http://127.0.0.1:48766/companion/data/model.json` when the companion host is running.
 
+## Publishing the data spreadsheet
+
+Maintainers can publish the compiled model to a Google Spreadsheet (one tab per model table, lossless) so others can theorycraft and build on the data. The `scripts/export-sheets.mjs` publisher reads `<stateDir>/model.db` (populated by `refresh`), signs a Google service-account JWT with `node:crypto`, and writes each table through the Google Sheets REST API. It adds no runtime dependency.
+
+Preview offline without any Google setup:
+
+```sh
+npm run export-sheets -- --dry-run
+```
+
+This lists every tab with its row and cell counts and writes nothing.
+
+To publish, do the one-time Google setup:
+
+1. In the [Google Cloud Console](https://console.cloud.google.com), create or select a project and enable the **Google Sheets API**.
+2. Create a **service account**, add a **JSON key**, and download it.
+3. Save the key at `~/.config/fractured-realms-companion/google-credentials.json` (or point `FRACTURED_SHEETS_CREDENTIALS` at another path).
+4. Create a spreadsheet and **share it (Editor) with the service-account email**.
+
+Then publish, passing the spreadsheet id from its URL:
+
+```sh
+FRACTURED_SHEETS_SPREADSHEET_ID=<spreadsheet-id> npm run export-sheets
+```
+
+Each run creates any missing tabs, clears and rewrites every model table, and freezes plus bolds the header row. Tabs are only added or updated, never deleted, so your own analysis tabs survive a republish. Per-tab failures are reported without aborting the batch.
+
 ## Requirements
 
 - Fractured Realms Steam app `3789070` must be installed in a Steam library the companion can discover.
