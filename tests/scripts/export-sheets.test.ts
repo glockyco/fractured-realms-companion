@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import { openDatabase, sqliteAvailable } from '../../src/lib/sqlite.ts';
-import { listTables, buildSheet, toCell, buildAllSheets, buildServiceAccountJwt } from '../../scripts/export-sheets.mjs';
+import { listTables, buildSheet, toCell, buildAllSheets, buildServiceAccountJwt, sheetsFetch, resolveSpreadsheetId, readPersistedSpreadsheetId, persistSpreadsheetId } from '../../scripts/export-sheets.mjs';
 
 const HAS_SQLITE = sqliteAvailable();
 
@@ -133,4 +133,55 @@ test('buildServiceAccountJwt signs verifiable claims for the Sheets scope', () =
   assert.equal(claims.aud, 'https://oauth2.googleapis.com/token');
   assert.equal(claims.iat, now);
   assert.equal(claims.exp, now + 3600);
+});
+
+test('sheetsFetch retries on 429 with backoff then returns the parsed body', async () => {
+  let calls = 0;
+  const fetchImpl = async () => {
+    calls += 1;
+    if (calls <= 2) return { ok: false, status: 429, text: async () => 'rate limited' };
+    return { ok: true, status: 200, text: async () => JSON.stringify({ done: true }) };
+  };
+  const slept: number[] = [];
+  const result = await sheetsFetch('https://sheets/x', 'tok', {}, { fetchImpl, sleepImpl: async (ms: number) => { slept.push(ms); }, maxRetries: 6 });
+  assert.deepEqual(result, { done: true });
+  assert.equal(calls, 3, 'retried until success');
+  assert.deepEqual(slept, [1000, 2000], 'exponential backoff between retries');
+});
+
+test('sheetsFetch throws immediately on a non-retryable status', async () => {
+  let calls = 0;
+  const fetchImpl = async () => { calls += 1; return { ok: false, status: 403, text: async () => 'forbidden' }; };
+  await assert.rejects(
+    () => sheetsFetch('https://sheets/x', 'tok', {}, { fetchImpl, sleepImpl: async () => {}, maxRetries: 6 }),
+    /Sheets API 403/,
+  );
+  assert.equal(calls, 1, 'no retry on 403');
+});
+
+test('sheetsFetch gives up after maxRetries of persistent rate limiting', async () => {
+  let calls = 0;
+  const fetchImpl = async () => { calls += 1; return { ok: false, status: 429, text: async () => 'rate limited' }; };
+  await assert.rejects(
+    () => sheetsFetch('https://sheets/x', 'tok', {}, { fetchImpl, sleepImpl: async () => {}, maxRetries: 2 }),
+    /Sheets API 429/,
+  );
+  assert.equal(calls, 3, 'initial attempt plus two retries');
+});
+
+test('resolveSpreadsheetId prefers env, then the remembered id, then errors', () => {
+  assert.deepEqual(resolveSpreadsheetId({ envId: ' abc ', persistedId: 'xyz' }), { id: 'abc', source: 'env' });
+  assert.deepEqual(resolveSpreadsheetId({ envId: '  ', persistedId: ' xyz ' }), { id: 'xyz', source: 'file' });
+  assert.throws(() => resolveSpreadsheetId({ envId: '', persistedId: '' }), /remembered/);
+});
+
+test('persistSpreadsheetId round-trips through the config dir', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'frc-id-'));
+  try {
+    assert.equal(readPersistedSpreadsheetId(dir), null);
+    persistSpreadsheetId('sheet-123', dir);
+    assert.equal(readPersistedSpreadsheetId(dir), 'sheet-123');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

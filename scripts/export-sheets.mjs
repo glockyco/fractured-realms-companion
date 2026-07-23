@@ -9,7 +9,7 @@
 //   FRACTURED_SHEETS_SPREADSHEET_ID  target spreadsheet id (required to publish)
 //   FRACTURED_SHEETS_CREDENTIALS     service-account JSON path, else the default
 //                                    ~/.config/fractured-realms-companion/google-credentials.json
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -102,20 +102,32 @@ async function getAccessToken(credsPath) {
   return JSON.parse(text).access_token;
 }
 
-/** Authorized JSON fetch against the Sheets API; throws with status + body on failure. */
-async function sheetsFetch(url, token, init = {}) {
-  const response = await fetch(url, {
-    ...init,
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...(init.headers ?? {}) },
-  });
-  const text = await response.text();
-  if (!response.ok) {
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Authorized JSON fetch against the Sheets API. Retries with exponential backoff on
+ * 429/503: a full publish issues more write requests than Google's ~60/min/user quota
+ * allows, so without backoff the final tabs fail with RATE_LIMIT_EXCEEDED. `deps` is
+ * injectable for tests.
+ */
+export async function sheetsFetch(url, token, init = {}, deps = {}) {
+  const { fetchImpl = fetch, sleepImpl = sleep, maxRetries = 6 } = deps;
+  for (let attempt = 0; ; attempt += 1) {
+    const response = await fetchImpl(url, {
+      ...init,
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...(init.headers ?? {}) },
+    });
+    const text = await response.text();
+    if (response.ok) return text ? JSON.parse(text) : {};
+    if ((response.status === 429 || response.status === 503) && attempt < maxRetries) {
+      await sleepImpl(Math.min(64_000, 1_000 * 2 ** attempt));
+      continue;
+    }
     const hint = response.status === 403 || response.status === 404
       ? ' (check FRACTURED_SHEETS_SPREADSHEET_ID and that the sheet is shared with the service-account email)'
       : '';
     throw new Error(`Sheets API ${response.status}${hint}: ${text}`);
   }
-  return text ? JSON.parse(text) : {};
 }
 
 /**
@@ -171,7 +183,8 @@ const USAGE = [
   'Usage: export-sheets [--dry-run]',
   '',
   'Env:',
-  '  FRACTURED_SHEETS_SPREADSHEET_ID  target spreadsheet id (required to publish)',
+  '  FRACTURED_SHEETS_SPREADSHEET_ID  target spreadsheet id (required only on the first',
+  '                                   publish; remembered in the config dir afterward)',
   '  FRACTURED_SHEETS_CREDENTIALS     service-account JSON path',
   '                                   (default: ~/.config/fractured-realms-companion/google-credentials.json)',
   '',
@@ -184,16 +197,48 @@ function openModelDb() {
   return db;
 }
 
-function resolveSpreadsheetId() {
-  const id = process.env.FRACTURED_SHEETS_SPREADSHEET_ID;
-  if (!id || id.trim().length === 0) throw new Error('FRACTURED_SHEETS_SPREADSHEET_ID is required to publish (or pass --dry-run)');
-  return id.trim();
+/** Machine-local config directory, shared with the service-account credentials. */
+export function configDir() {
+  return join(homedir(), '.config', 'fractured-realms-companion');
+}
+
+/** Path of the remembered spreadsheet id. */
+export function spreadsheetIdPath(dir = configDir()) {
+  return join(dir, 'spreadsheet-id');
+}
+
+/** Read the remembered spreadsheet id, or null when none has been saved. */
+export function readPersistedSpreadsheetId(dir = configDir()) {
+  try {
+    const value = readFileSync(spreadsheetIdPath(dir), 'utf8').trim();
+    return value.length > 0 ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Remember a spreadsheet id so future runs need no env var. */
+export function persistSpreadsheetId(id, dir = configDir()) {
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(spreadsheetIdPath(dir), `${id}\n`);
+}
+
+/**
+ * Resolve the target spreadsheet: an explicit env var wins, else the remembered id.
+ * Pure so callers own the IO; `source` lets the caller persist a freshly supplied id.
+ */
+export function resolveSpreadsheetId({ envId, persistedId } = {}) {
+  const env = typeof envId === 'string' ? envId.trim() : '';
+  if (env.length > 0) return { id: env, source: 'env' };
+  const persisted = typeof persistedId === 'string' ? persistedId.trim() : '';
+  if (persisted.length > 0) return { id: persisted, source: 'file' };
+  throw new Error('Set FRACTURED_SHEETS_SPREADSHEET_ID once (it is remembered afterward), or pass --dry-run');
 }
 
 function resolveCredentialsPath() {
   const override = process.env.FRACTURED_SHEETS_CREDENTIALS;
   if (override && override.trim().length > 0) return override.trim();
-  return join(homedir(), '.config', 'fractured-realms-companion', 'google-credentials.json');
+  return join(configDir(), 'google-credentials.json');
 }
 
 /** Print a per-tab row/cell summary of what would be exported. */
@@ -233,10 +278,17 @@ async function main(argv = process.argv.slice(2)) {
     return 0;
   }
 
-  const spreadsheetId = resolveSpreadsheetId();
+  const { id: spreadsheetId, source } = resolveSpreadsheetId({
+    envId: process.env.FRACTURED_SHEETS_SPREADSHEET_ID,
+    persistedId: readPersistedSpreadsheetId(),
+  });
   const credsPath = resolveCredentialsPath();
   const failures = await publishSheets(spreadsheetId, credsPath, sheets);
   process.stdout.write(`Published ${sheets.length - failures.length}/${sheets.length} tabs to ${spreadsheetId}.\n`);
+  if (source === 'env') {
+    try { persistSpreadsheetId(spreadsheetId); process.stdout.write(`Remembered spreadsheet id (${spreadsheetIdPath()}); future runs need no env var.\n`); }
+    catch { /* persistence is a convenience, not required for the publish */ }
+  }
   if (failures.length > 0) {
     process.stderr.write(`Failed tabs: ${failures.join(', ')}\n`);
     return 1;

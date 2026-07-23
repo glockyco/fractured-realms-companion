@@ -88,13 +88,15 @@ To publish, do the one-time Google setup:
 3. Save the key at `~/.config/fractured-realms-companion/google-credentials.json` (or point `FRACTURED_SHEETS_CREDENTIALS` at another path).
 4. Create a spreadsheet and **share it (Editor) with the service-account email**.
 
-Then publish, passing the spreadsheet id from its URL:
+Then publish, passing the spreadsheet id from its URL the first time only:
 
 ```sh
 FRACTURED_SHEETS_SPREADSHEET_ID=<spreadsheet-id> npm run export-sheets
 ```
 
-Each run creates any missing tabs, clears and rewrites every model table, and freezes plus bolds the header row. Tabs are only added or updated, never deleted, so your own analysis tabs survive a republish. Per-tab failures are reported without aborting the batch.
+The id is remembered in the config dir (`~/.config/fractured-realms-companion/spreadsheet-id`), so subsequent publishes need only `npm run export-sheets`. Pass the env var again any time to target a different sheet.
+
+Each run creates any missing tabs, clears and rewrites every model table, and freezes plus bolds the header row. Tabs are only added or updated, never deleted, so your own analysis tabs survive a republish. Writes that hit Google's per-minute quota are retried with exponential backoff so every tab lands; any remaining per-tab failures are reported without aborting the batch.
 
 ## Requirements
 
