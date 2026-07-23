@@ -37,6 +37,7 @@ export interface GameModel {
   prestigeTitles: Record<string, string> | null;
   stringsEn: Record<string, string>;
   shop: Record<string, number>;
+  equipment: Record<string, JsonRecord>;
 }
 
 function record(value: unknown): JsonRecord {
@@ -116,6 +117,7 @@ export function compileModel(raw: RawGameData, buildId: string): GameModel {
     prestigeTitles: raw.prestigeTitles,
     stringsEn: raw.stringsEn,
     shop,
+    equipment: raw.equipment,
   };
 }
 

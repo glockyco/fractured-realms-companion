@@ -31,6 +31,7 @@ export interface RawGameData {
   stringsEn: Record<string, string>;
   shopItems: string[];
   shopPriceMultiplier: number;
+  equipment: Record<string, Record<string, unknown>>;
 }
 
 const ACTION_SKILLS = [
@@ -246,6 +247,21 @@ function extractPrestigeTitles(source: string): Record<string, string> | null {
   return candidates.every((candidate) => JSON.stringify(candidate) === canonical) ? candidates[0] : null;
 }
 
+function extractEquipment(source: string): Record<string, Record<string, unknown>> {
+  const at = anchor(source, 'bronze_helm:{slot:"helm",def:5}', 'equipment');
+  const raw = object(evalLiteral(sliceEnclosing(source, at, '{'), 'equipment'), 'equipment');
+  const ids = Object.keys(raw);
+  if (ids.length < 100) fail('equipment', `expected at least 100 entries, got ${ids.length}`);
+  const output: Record<string, Record<string, unknown>> = Object.create(null) as Record<string, Record<string, unknown>>;
+  for (const id of ids) {
+    const entry = object(raw[id], 'equipment');
+    string(entry.slot, 'equipment');
+    number(entry.def, 'equipment');
+    output[id] = entry;
+  }
+  return output;
+}
+
 function extractShop(source: string): { items: string[]; multiplier: number } {
   // Raw ingredient ids sold in the shop (Nz), spread into the buyable set.
   const raw = array(extract(source, '["wild_berries","venison","woodland_seed"', 'shop'), 'shop').map((entry) => string(entry, 'shop'));
@@ -365,11 +381,13 @@ export function extractRegistries(source: string, archiveFiles: readonly string[
   if (!names || !descriptions) fail('stringsEn', 'catalog lacks name.* or itemdesc.* keys');
 
   const shop = extractShop(source);
+  const equipment = extractEquipment(source);
   return {
     items, actions, actionGates: rawGates, skills, xp: extractXp(source), tools,
     mapsRegular, mapsDeep, chartSupplyTiers, agilityCourses, bags, machines, boons,
     restorations, recipeMeals, seals, patterns, grandReward, buildings, buildingXp,
     zones, digsites, achievements, offlineGold, prestigeTitles: extractPrestigeTitles(source), stringsEn,
     shopItems: shop.items, shopPriceMultiplier: shop.multiplier,
+    equipment,
   };
 }

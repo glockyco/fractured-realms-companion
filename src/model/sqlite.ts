@@ -32,6 +32,7 @@ function schema(db: NonNullable<ReturnType<typeof openDatabase>>): void {
   db.exec(`
     CREATE TABLE skills (id TEXT PRIMARY KEY, name TEXT, category TEXT, data_json TEXT NOT NULL);
     CREATE TABLE items (id TEXT PRIMARY KEY, label TEXT, icon TEXT, type TEXT, subtype TEXT, desc TEXT, value REAL, art INTEGER, data_json TEXT NOT NULL);
+    CREATE TABLE equipment (item_id TEXT PRIMARY KEY, slot TEXT, def REAL, data_json TEXT NOT NULL);
     CREATE TABLE shop (item_id TEXT PRIMARY KEY, price REAL);
     CREATE TABLE actions (id TEXT PRIMARY KEY, skill_id TEXT NOT NULL, name TEXT, level_req INTEGER, xp REAL, interval INTEGER, tool_req TEXT, pattern_req TEXT, prayer_req INTEGER, recipe_scroll TEXT, category TEXT, spot TEXT, metal TEXT, hide TEXT, rune_type TEXT, tier TEXT, target_id TEXT, kill_count INTEGER, combat_req INTEGER, gate_map_id TEXT, gate_skill_level INTEGER, automation TEXT NOT NULL, data_json TEXT NOT NULL);
     CREATE TABLE action_inputs (action_id TEXT, item_id TEXT, qty REAL);
@@ -75,6 +76,10 @@ function writeRows(db: NonNullable<ReturnType<typeof openDatabase>>, model: Game
     insert(db, 'items', ['id', 'label', 'icon', 'type', 'subtype', 'desc', 'value', 'art', 'data_json'], [id, scalar(item.label), scalar(item.icon), scalar(item.type), scalar(item.subtype), scalar(item.desc), scalar(item.value), item.art ? 1 : 0, json(item)]);
   }
   for (const [itemId, price] of Object.entries(model.shop)) insert(db, 'shop', ['item_id', 'price'], [itemId, price]);
+  for (const [itemId, value] of Object.entries(model.equipment)) {
+    const row = asRecord(value);
+    insert(db, 'equipment', ['item_id', 'slot', 'def', 'data_json'], [itemId, scalar(row.slot), scalar(row.def), json(row)]);
+  }
   for (const skill of model.skills) {
     const row = asRecord(skill);
     insert(db, 'skills', ['id', 'name', 'category', 'data_json'], [scalar(row.id), scalar(row.name), scalar(row.category), json(row)]);
