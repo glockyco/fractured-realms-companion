@@ -32,6 +32,7 @@ export interface RawGameData {
   shopItems: string[];
   shopPriceMultiplier: number;
   equipment: Record<string, Record<string, unknown>>;
+  enemyAttacks: Record<string, unknown[]>;
 }
 
 const ACTION_SKILLS = [
@@ -262,6 +263,27 @@ function extractEquipment(source: string): Record<string, Record<string, unknown
   return output;
 }
 
+function extractEnemyAttacks(source: string): Record<string, unknown[]> {
+  const at = anchor(source, '{giant_rat:[{name:"Gnaw",weight:60', 'enemyAttacks');
+  const raw = object(evalLiteral(sliceEnclosing(source, at, '{'), 'enemyAttacks'), 'enemyAttacks');
+  const ids = Object.keys(raw);
+  if (ids.length < 40) fail('enemyAttacks', `expected at least 40 enemies, got ${ids.length}`);
+  const output: Record<string, unknown[]> = Object.create(null) as Record<string, unknown[]>;
+  for (const id of ids) {
+    const moves = array(raw[id], 'enemyAttacks');
+    for (const move of moves) {
+      const entry = object(move, 'enemyAttacks');
+      string(entry.name, 'enemyAttacks');
+      number(entry.weight, 'enemyAttacks');
+      number(entry.mult, 'enemyAttacks');
+      if (entry.msg !== undefined) string(entry.msg, 'enemyAttacks');
+      if (entry.icon !== undefined) string(entry.icon, 'enemyAttacks');
+    }
+    output[id] = moves;
+  }
+  return output;
+}
+
 function extractShop(source: string): { items: string[]; multiplier: number } {
   // Raw ingredient ids sold in the shop (Nz), spread into the buyable set.
   const raw = array(extract(source, '["wild_berries","venison","woodland_seed"', 'shop'), 'shop').map((entry) => string(entry, 'shop'));
@@ -382,6 +404,7 @@ export function extractRegistries(source: string, archiveFiles: readonly string[
 
   const shop = extractShop(source);
   const equipment = extractEquipment(source);
+  const enemyAttacks = extractEnemyAttacks(source);
   return {
     items, actions, actionGates: rawGates, skills, xp: extractXp(source), tools,
     mapsRegular, mapsDeep, chartSupplyTiers, agilityCourses, bags, machines, boons,
@@ -389,5 +412,6 @@ export function extractRegistries(source: string, archiveFiles: readonly string[
     zones, digsites, achievements, offlineGold, prestigeTitles: extractPrestigeTitles(source), stringsEn,
     shopItems: shop.items, shopPriceMultiplier: shop.multiplier,
     equipment,
+    enemyAttacks,
   };
 }

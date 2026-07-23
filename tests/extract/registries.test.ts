@@ -43,6 +43,7 @@ function fixture(): string {
   const zones = '[{id:"thornwood",name:"Thornwood Outskirts",levelReq:1,enemies:[{id:"cow",hp:3,drops:[{id:"bones",chance:1,qty:1}],tags:[Xy]}]}]';
   const achievements = '[{id:"secret_millionaire",name:"Millionaire",icon:"coin",category:"Secrets",secret:true,desc:"Have gold",check:()=>true}]';
   const equipment = Array.from({ length: 100 }, (_, i) => `${i === 0 ? 'bronze_helm' : `helm_${i}`}:{slot:"helm",def:${i === 0 ? 5 : i + 1}}`).join(',');
+  const enemyAttacks = Array.from({ length: 40 }, (_, i) => `${i === 0 ? 'giant_rat' : `enemy_${i}`}:[{name:"Gnaw",weight:60,mult:1,msg:"gnaws",icon:"🦷"}]`).join(',');
   return [
     `const ITEMS={${items}};`,
     `const ACTIONS={${actions}};`,
@@ -66,6 +67,7 @@ function fixture(): string {
     'const Xy="undead"; const ZONES=' + zones + ';',
     `const ACHIEVEMENTS=${achievements};`,
     `const EQUIPMENT={${equipment}};`,
+    `const ENEMY_ATTACKS={${enemyAttacks}};`,
     'const DIGS=[{id:"millhaven_ruins",name:"Ruins",levelReq:1}];',
     'const OFFLINE={1:10,2:30,3:100};',
     'const K8=new Set(["vial","bow_string"]);const Nz=["wild_berries","venison","woodland_seed","bog_mushroom","plains_seed","ember_spore","ancient_spore"],eM=2,kU=new Set(["vial","bow_string",...Nz]);',
@@ -105,6 +107,8 @@ test('extracts every raw registry from a synthetic bundle', () => {
   assert.equal(result.shopPriceMultiplier, 2);
   assert.equal(Object.keys(result.equipment).length, 100);
   assert.equal(result.equipment.bronze_helm.def, 5);
+  assert.equal(Object.keys(result.enemyAttacks).length, 40);
+  assert.equal(result.enemyAttacks.giant_rat[0] && (result.enemyAttacks.giant_rat[0] as Record<string, unknown>).name, 'Gnaw');
 });
 
 test('fails closed for missing, duplicate, and malformed registry anchors', () => {

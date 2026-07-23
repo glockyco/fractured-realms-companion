@@ -49,6 +49,7 @@ function rawData(shuffled = false): RawGameData {
     shopItems: ['twig', 'log'],
     shopPriceMultiplier: 2,
     equipment: { bronze_helm: { slot: 'helm', def: 5 }, iron_helm: { slot: 'helm', def: 2 } },
+    enemyAttacks: { rat: [{ name: 'Gnaw', weight: 60, mult: 1, msg: 'gnaws', icon: '🐀' }] },
   };
 }
 
@@ -85,6 +86,7 @@ test('writeModelDb creates the derived projection', () => {
     assert.equal((db.all('SELECT COUNT(*) AS count FROM items')[0] as { count: number }).count, 2);
     assert.equal((db.all('SELECT item_id, price FROM shop WHERE item_id=?', 'log')[0] as { item_id: string; price: number }).price, 4);
     assert.equal((db.all('SELECT def FROM equipment WHERE item_id=?', 'bronze_helm')[0] as { def: number }).def, 5);
+    assert.equal((db.all('SELECT name FROM enemy_attacks WHERE enemy_id=?', 'rat')[0] as { name: string }).name, 'Gnaw');
     assert.equal((db.all('SELECT skill_id, automation FROM actions WHERE id=?', 'chop')[0] as { skill_id: string; automation: string }).skill_id, 'woodcutting');
     assert.equal((db.all('SELECT COUNT(*) AS count FROM action_inputs WHERE action_id=? AND item_id=?', 'chop', 'twig')[0] as { count: number }).count, 1);
     assert.equal((db.all('SELECT qty FROM action_outputs WHERE action_id=? AND item_id=?', 'chop', 'log')[0] as { qty: number }).qty, 2);

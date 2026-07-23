@@ -38,6 +38,7 @@ export interface GameModel {
   stringsEn: Record<string, string>;
   shop: Record<string, number>;
   equipment: Record<string, JsonRecord>;
+  enemyAttacks: Record<string, unknown[]>;
 }
 
 function record(value: unknown): JsonRecord {
@@ -118,6 +119,7 @@ export function compileModel(raw: RawGameData, buildId: string): GameModel {
     stringsEn: raw.stringsEn,
     shop,
     equipment: raw.equipment,
+    enemyAttacks: raw.enemyAttacks,
   };
 }
 
