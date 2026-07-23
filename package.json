@@ -20,6 +20,7 @@
     "backup-saves": "node scripts/backup-saves.mjs",
     "validate:live": "node scripts/live-validate.mjs",
     "screenshots": "node scripts/capture-screenshots.mjs",
+    "export-sheets": "node scripts/export-sheets.mjs",
     "prepack": "npm run build"
   },
   "devDependencies": {
