@@ -28,7 +28,6 @@ const ICONS = Object.freeze({
   down: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 10 6 6 6-6"/></svg>',
   remove: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>',
   edit: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19.5 8.5a2.1 2.1 0 0 0-3-3L5 17Z"/><path d="m13.5 6.5 3 3"/></svg>',
-  chevron: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg>',
   clear: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"/><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/><path d="m6 7 1 13h10l1-13"/></svg>',
 });
 
@@ -322,6 +321,7 @@ h3 { margin: var(--fr-s5) 0 var(--fr-s2); font-size: 0.875rem; }
 .badge.signal { border-color: var(--fr-harbor-800); background: var(--fr-harbor-950); color: var(--fr-harbor-400); }
 .badge.warning { border-color: var(--fr-brass-700); background: var(--fr-brass-950); color: var(--fr-brass-400); }
 .badge.danger { border-color: var(--fr-danger-400); background: var(--fr-danger-950); color: var(--fr-danger-400); }
+.badge.success { border-color: var(--fr-success-400); background: var(--fr-success-950); color: var(--fr-success-400); }
 .mono, code, .data { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-variant-numeric: tabular-nums; }
 .button {
   min-height: var(--fr-control);
@@ -358,12 +358,14 @@ h3 { margin: var(--fr-s5) 0 var(--fr-s2); font-size: 0.875rem; }
 .table-wrap table { min-width: 44rem; }
 table { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
 caption { padding: var(--fr-s3); color: var(--fr-neutral-300); text-align: left; }
-th, td { padding: var(--fr-s2) var(--fr-s3); border-bottom: 1px solid var(--fr-neutral-800); text-align: left; vertical-align: top; }
+th, td { padding: var(--fr-s2) var(--fr-s3); border-bottom: 1px solid var(--fr-neutral-800); text-align: left; vertical-align: middle; }
 th { position: sticky; top: 0; background: var(--fr-neutral-950); color: var(--fr-neutral-300); font-size: 0.75rem; font-weight: 650; }
 tbody tr:last-child td { border-bottom: 0; }
 .cell-title { display: block; color: var(--fr-neutral-100); font-weight: 600; }
 .cell-id { display: block; margin-top: var(--fr-s1); color: var(--fr-neutral-300); font-size: 0.6875rem; }
-.plan-form { display: grid; grid-template-columns: minmax(0, 12rem) minmax(0, 1fr) 6rem auto; align-items: end; gap: var(--fr-s2); padding-bottom: var(--fr-s4); border-bottom: 1px solid var(--fr-neutral-800); }
+.plan-form { display: flex; flex-wrap: wrap; align-items: end; gap: var(--fr-s2); padding-bottom: var(--fr-s4); border-bottom: 1px solid var(--fr-neutral-800); }
+.plan-form .field { flex: 1 1 8rem; }
+.plan-form .button { flex: 0 0 auto; }
 .plan-summary { display: flex; align-items: center; justify-content: space-between; gap: var(--fr-s3); margin: var(--fr-s4) 0 var(--fr-s2); }
 .plan-summary p { margin: var(--fr-s1) 0 0; color: var(--fr-neutral-300); }
 .step-index { width: 1.625rem; height: 1.625rem; display: inline-grid; place-items: center; border-radius: 999px; background: var(--fr-neutral-900); color: var(--fr-neutral-300); font-size: 0.6875rem; }
@@ -388,16 +390,6 @@ tbody tr:last-child td { border-bottom: 0; }
 .your-part-item .yp-meta { flex: 0 0 auto; color: var(--fr-neutral-300); font-size: 0.75rem; white-space: nowrap; }
 .your-part-item[data-state="now"] .yp-name, .your-part-item[data-state="now"] .yp-meta { color: var(--fr-harbor-400); }
 .your-part-item[data-state="done"] .yp-name { color: var(--fr-success-400); }
-.plan-group { padding: 0; border-bottom: 1px solid var(--fr-neutral-800); }
-.plan-group-toggle { width: 100%; display: flex; align-items: baseline; gap: var(--fr-s2); padding: var(--fr-s3) 0; border: 0; background: transparent; color: var(--fr-neutral-300); font: inherit; text-align: left; cursor: pointer; }
-.plan-group-toggle:hover .plan-group-title { color: var(--fr-neutral-100); }
-.plan-group-title { flex: 0 0 auto; font-weight: 650; color: var(--fr-neutral-100); }
-.plan-group-meta { min-width: 0; overflow: hidden; color: var(--fr-neutral-300); font-size: 0.75rem; text-overflow: ellipsis; white-space: nowrap; }
-.plan-group-caret { display: inline-flex; flex: 0 0 auto; color: var(--fr-neutral-300); transition: transform 180ms cubic-bezier(0.16, 1, 0.3, 1); }
-.plan-group-caret svg { width: var(--fr-icon); height: var(--fr-icon); }
-.plan-group-toggle[aria-expanded="true"] .plan-group-caret { transform: rotate(90deg); }
-.plan-group-steps { margin: 0 0 var(--fr-s2) var(--fr-s5); padding: 0; list-style: none; }
-.plan-group-steps .plan-step:last-child { border-bottom: 0; }
 .queue-list { margin: var(--fr-s2) 0 0; padding: 0; list-style: none; border-top: 1px solid var(--fr-neutral-700); }
 .queue-plan { padding: var(--fr-s3) 0; border-bottom: 1px solid var(--fr-neutral-700); }
 .queue-plan[data-state="active"] { background: var(--fr-harbor-950); margin-inline: calc(-1 * var(--fr-s2)); padding-inline: var(--fr-s2); }
@@ -471,8 +463,7 @@ tbody tr:last-child td { border-bottom: 0; }
   .items-layout { display: block; }
   .item-browser { height: 48%; border-right: 0; border-bottom: 1px solid var(--fr-neutral-800); }
   .detail { height: 52%; }
-  .plan-form { grid-template-columns: minmax(0, 1fr) auto 5rem; }
-  .plan-form .button { grid-column: 1 / -1; }
+  .plan-form .field, .plan-form .button { flex-basis: 100%; }
   .skills-view, .plan-view, .detail { padding: var(--fr-s3); }
 }
 @media (max-width: 22rem) {
@@ -1016,7 +1007,6 @@ function createApplication(shell, modelJson, api) {
     selectedPlanItemId: null,
     queueGoals: [],
     resolvedQueue: { steps: [], targets: [] },
-    expandedGroups: new Set(),
     executorStatus: { phase: 'idle', message: 'Add a target to begin.', stepStatuses: {}, runningStepId: null },
     queueStartedAt: null,
     nextPlanId: 1,
@@ -1135,7 +1125,7 @@ function createApplication(shell, modelJson, api) {
   });
   planOptions.addEventListener('click', (event) => { const button = event.target.closest?.('[data-plan-option]'); if (button) selectPlanItem(button.dataset.planOption); });
   shell.shadow.addEventListener?.('pointerdown', (event) => { if (event.target !== planItem && !planOptions.contains?.(event.target)) closeItemOptions(); });
-  planPanel.addEventListener('scroll', closeItemOptions, true);
+  planPanel.addEventListener('scroll', (event) => { if (planOptions.contains?.(event.target)) return; closeItemOptions(); }, true);
   shell.close.addEventListener('click', closeItemOptions); documentRef.defaultView?.addEventListener?.('resize', closeItemOptions);
   const makeTarget = () => {
     const kind = planKind.value; const amount = Math.max(1, Math.trunc(Number(planQty.value) || 0));
@@ -1254,50 +1244,38 @@ function createApplication(shell, modelJson, api) {
     const targetRows = state.queueGoals.map((goal, index) => {
       const entry = result.targets[index]; const queuedBehind = !entry && firstBlocked >= 0 && index > firstBlocked; const blocked = entry?.blocked; const label = labels[goal.id] || targetLabel(goal.target);
       const chain = blocked ? blockerChain(blocked, live) : [];
-      const statusBadge = queuedBehind ? '<span class="badge warning">queued behind blocked target</span>' : entry?.ok ? '<span class="badge signal">ready</span>' : entry ? '<span class="badge danger">blocked</span>' : '<span class="badge">queued</span>';
+      const satisfied = entry?.ok && (entry.steps?.length ?? 0) === 0;
+      const statusBadge = queuedBehind ? '<span class="badge warning">queued behind blocked target</span>' : satisfied ? '<span class="badge success">done</span>' : entry?.ok ? '<span class="badge signal">ready</span>' : entry ? '<span class="badge danger">blocked</span>' : '<span class="badge">queued</span>';
       const blocker = blocked ? `<p class="banner warning">Blocked: ${escapeHtml(blocked.fact || '')}${blocked.reason ? ` · ${escapeHtml(blocked.reason)}` : ''}${chain.length ? `<br>Prerequisite chain: ${escapeHtml(chain.map(factLabel).join(' → '))}` : ''}</p>` : queuedBehind ? '<p class="banner warning">Not planned: queued behind the blocked target above.</p>' : '';
-      const remove = !locked ? `<button class="icon-button" type="button" data-queue-remove="${escapeHtml(goal.id)}" aria-label="Remove ${escapeHtml(label)}" title="Remove target">${ICONS.remove}</button>` : '';
+      const controls = !locked ? `<div class="queue-plan-actions"><button class="icon-button" type="button" data-queue-move="up" data-queue-goal="${escapeHtml(goal.id)}"${index === 0 ? ' disabled' : ''} aria-label="Move ${escapeHtml(label)} up" title="Move up">${ICONS.up}</button><button class="icon-button" type="button" data-queue-move="down" data-queue-goal="${escapeHtml(goal.id)}"${index === state.queueGoals.length - 1 ? ' disabled' : ''} aria-label="Move ${escapeHtml(label)} down" title="Move down">${ICONS.down}</button><button class="icon-button" type="button" data-queue-remove="${escapeHtml(goal.id)}" aria-label="Remove ${escapeHtml(label)}" title="Remove target">${ICONS.remove}</button></div>` : '';
       const proximity = entry?.ok ? goalProximityHtml(goal.target, live) : '';
       const proximityRow = proximity ? `<p class="queue-plan-meta">${proximity}</p>` : '';
-      return `<section class="queue-plan" data-target-index="${index}" data-queued-behind-blocked="${queuedBehind}"><div class="queue-plan-top"><h3>${escapeHtml(label)} ${statusBadge}</h3>${remove}</div>${proximityRow}${blocker}</section>`;
+      return `<section class="queue-plan" data-target-index="${index}" data-queued-behind-blocked="${queuedBehind}"><div class="queue-plan-top"><h3 class="queue-plan-title">${escapeHtml(label)} ${statusBadge}</h3>${controls}</div>${proximityRow}${blocker}</section>`;
     }).join('');
     const anchor = locked && Number.isFinite(Number(state.queueStartedAt)) ? Number(state.queueStartedAt) : Date.now();
     const renderStepRow = (step) => {
       const current = stepStatus(step, live, status); const per = result.perStep?.find((entry) => entry.id === step.id); const depManual = current !== 'done' && step.kind !== 'manual' ? dependencyManual(step, result.steps, status) : null;
-      const eta = depManual ? `after ${depManual.label || depManual.id}` : current === 'running' && Number(status.stepRemainingMs ?? step.expected?.ms) > 0 ? `about ${formatDuration(status.stepRemainingMs ?? step.expected?.ms)} left` : per ? `~${formatDuration(Math.max(0, Number(per.endMs) - Number(per.startMs)))}` : '';
+      const perMs = per ? Math.max(0, Number(per.endMs) - Number(per.startMs)) : 0;
+      const eta = depManual ? `after ${depManual.label || depManual.id}` : current === 'running' && Number(status.stepRemainingMs ?? step.expected?.ms) > 0 ? `about ${formatDuration(status.stepRemainingMs ?? step.expected?.ms)} left` : perMs > 0 ? `~${formatDuration(perMs)}` : '';
       const readyAt = step.kind === 'manual' ? formatFinishTime(result.readyAt?.[step.id] || 0, anchor) : null; const progressState = stepProgress(step, status); const progressMarkup = progressState ? `<progress class="step-progress" max="${escapeHtml(progressState.max)}" value="${escapeHtml(progressState.value)}" aria-label="${escapeHtml(step.label || step.id)} progress"></progress>` : '';
-      const detailBits = [stepYieldHtml(step), `${escapeHtml(eta)}${step.kind === 'manual' ? ` \u00b7 ready for you at ~${escapeHtml(readyAt)}` : ''}`].filter(Boolean).join(' \u00b7 ');
+      const timing = [escapeHtml(eta), step.kind === 'manual' ? `ready for you at ~${escapeHtml(readyAt)}` : ''].filter(Boolean).join(' \u00b7 ');
+      const detailBits = [stepYieldHtml(step), timing].filter(Boolean).join(' \u00b7 ');
       const inputsHtml = current.startsWith('blocked') ? stepInputsHtml(step) : '';
       return `<li class="record-row plan-step" data-step-id="${escapeHtml(step.id)}"><div class="record-top"><strong>${escapeHtml(step.label || actionName(actionFor(step.skillId, step.actionId)) || step.id)}</strong><div class="badges"><span class="badge">${escapeHtml(step.purpose || 'goal')}</span><span class="badge" data-status="${escapeHtml(current)}">${escapeHtml(current)}</span></div></div>${detailBits ? `<p class="step-detail">${detailBits}</p>` : ''}${inputsHtml ? `<p class="step-inputs">${inputsHtml}</p>` : ''}${progressMarkup}${step.kind === 'manual' ? `<div class="instruction-card"><strong>Waiting for you</strong><p>${escapeHtml(step.instruction || step.label || 'Complete this step in the game.')}</p></div>` : ''}</li>`;
     };
-    // Collapse consecutive automated (non-running) steps into one summary row so
-    // manual steps and the active step stay prominent; a group expands on demand.
-    const timelineGroups = []; let autoBuffer = [];
-    const flushAuto = () => { if (autoBuffer.length) { timelineGroups.push({ type: 'group', steps: autoBuffer }); autoBuffer = []; } };
-    for (const step of result.steps || []) {
-      if (step.kind === 'action' && step.id !== status.runningStepId) autoBuffer.push(step);
-      else { flushAuto(); timelineGroups.push({ type: 'step', step }); }
-    }
-    flushAuto();
-    const rows = timelineGroups.map((group) => {
-      if (group.type === 'step') return renderStepRow(group.step);
-      if (group.steps.length === 1) return renderStepRow(group.steps[0]);
-      const groupId = group.steps[0].id; const expanded = state.expandedGroups.has(groupId);
-      const totalMs = group.steps.reduce((sum, step) => sum + planNum(step.expected?.ms), 0);
-      const skillsUsed = [...new Set(group.steps.map((step) => step.skillId).filter(Boolean))].map((id) => skillNames[id] || humanizeId(id));
-      const doneCount = group.steps.filter((step) => status.stepStatuses?.[step.id] === 'done').length;
-      const metaBits = [skillsUsed.join(', '), totalMs > 0 ? `~${formatDuration(totalMs)}` : '', doneCount ? `${doneCount}/${group.steps.length} done` : ''].filter(Boolean).join(' \u00b7 ');
-      return `<li class="record-row plan-group"><button type="button" class="plan-group-toggle" data-plan-group="${escapeHtml(groupId)}" aria-expanded="${expanded}"><span class="plan-group-caret" aria-hidden="true">${ICONS.chevron}</span><span class="plan-group-title">${escapeHtml(String(group.steps.length))} automated steps</span><span class="plan-group-meta">${escapeHtml(metaBits)}</span></button>${expanded ? `<ol class="plan-group-steps">${group.steps.map(renderStepRow).join('')}</ol>` : ''}</li>`;
-    }).join('');
+    const rows = (result.steps || []).map(renderStepRow).join('');
     const manualSteps = (result.steps || []).filter((step) => step.kind === 'manual');
+    const pendingManual = manualSteps.filter((step) => status.stepStatuses?.[step.id] !== 'done').sort((a, b) => planNum(result.readyAt?.[a.id]) - planNum(result.readyAt?.[b.id]));
     const goldCost = (result.steps || []).reduce((sum, step) => sum + planNum(model._index.providersById?.get(step.providerId)?.consumesGold), 0);
     const summaryBits = [`\u2248${formatDuration(result.optimisticMs || 0)} attended`];
     if (goldCost > 0) summaryBits.push(`${planQtyText(goldCost)}g`);
-    summaryBits.push(`${manualSteps.length} manual stop${manualSteps.length === 1 ? '' : 's'}`);
-    const pendingManual = manualSteps.filter((step) => status.stepStatuses?.[step.id] !== 'done').sort((a, b) => planNum(result.readyAt?.[a.id]) - planNum(result.readyAt?.[b.id]));
+    summaryBits.push(`${pendingManual.length} manual stop${pendingManual.length === 1 ? '' : 's'}`);
     const nextManual = pendingManual[0];
-    const presence = manualSteps.length
-      ? (nextManual ? `Runs ~${formatDuration(result.schedulerMs || 0)} unattended \u00b7 next: ${escapeHtml(nextManual.label || nextManual.id)} ~${escapeHtml(formatFinishTime(result.readyAt?.[nextManual.id] || 0, anchor))}` : `Runs ~${formatDuration(result.schedulerMs || 0)} unattended`)
+    const unattendedMs = result.schedulerMs || 0;
+    const runsUnattended = unattendedMs >= 1000;
+    const nextManualBit = nextManual ? `next: ${escapeHtml(nextManual.label || nextManual.id)} ~${escapeHtml(formatFinishTime(result.readyAt?.[nextManual.id] || 0, anchor))}` : '';
+    const presence = pendingManual.length
+      ? [runsUnattended ? `Runs ~${formatDuration(unattendedMs)} unattended` : 'Needs you throughout', nextManualBit].filter(Boolean).join(' \u00b7 ')
       : 'Runs fully unattended';
     const totals = state.queueGoals.length ? `<div class="plan-overview" id="fr-queue-total"><p class="plan-overview-cost data">${escapeHtml(summaryBits.join(' \u00b7 '))}</p><p class="plan-overview-presence">${presence}</p></div>` : '';
     const infeasibility = result.infeasibility ? `<p class="banner warning" role="status">${ICONS.warning}<span>Simulation warning: ${escapeHtml(result.steps.find((step) => step.id === result.infeasibility.stepId)?.label || result.infeasibility.stepId || 'unknown step')} · ${escapeHtml(result.infeasibility.reason || 'infeasible')}</span></p>` : '';
@@ -1329,7 +1307,7 @@ function createApplication(shell, modelJson, api) {
   const stopQueue = () => { state.queueStartedAt = null; executor.stop(); };
   shell.queueControls.querySelector('#fr-run').addEventListener('click', runQueue); shell.queueControls.querySelector('#fr-resume').addEventListener('click', resumeQueue); shell.queueControls.querySelector('#fr-stop').addEventListener('click', stopQueue); shell.queueControls.querySelector('#fr-clear').addEventListener('click', () => { if (isExecutionLocked(state.executorStatus?.phase)) return; state.queueGoals = []; state.resolvedQueue = { steps: [], targets: [] }; state.queueStartedAt = null; persistQueue(); renderPlan(); });
   shell.compactStrip.querySelector('#fr-compact-start').addEventListener('click', runQueue); shell.compactStrip.querySelector('#fr-compact-resume').addEventListener('click', resumeQueue); shell.compactStrip.querySelector('#fr-compact-stop').addEventListener('click', stopQueue);
-  planPanel.addEventListener('click', (event) => { const groupToggle = event.target.closest?.('[data-plan-group]'); if (groupToggle) { const id = groupToggle.dataset.planGroup; if (state.expandedGroups.has(id)) state.expandedGroups.delete(id); else state.expandedGroups.add(id); renderPlan(); return; } const remove = event.target.closest?.('[data-queue-remove]'); if (!remove || isExecutionLocked(state.executorStatus?.phase)) return; const index = state.queueGoals.findIndex((goal) => goal.id === remove.dataset.queueRemove); if (index < 0) return; state.queueGoals.splice(index, 1); persistQueue(); refreshQueue(); renderPlan(); });
+  planPanel.addEventListener('click', (event) => { if (isExecutionLocked(state.executorStatus?.phase)) return; const move = event.target.closest?.('[data-queue-move]'); if (move) { const dir = move.dataset.queueMove; const from = state.queueGoals.findIndex((goal) => goal.id === move.dataset.queueGoal); if (from < 0) return; const to = dir === 'up' ? from - 1 : from + 1; if (to < 0 || to >= state.queueGoals.length) return; const [moved] = state.queueGoals.splice(from, 1); state.queueGoals.splice(to, 0, moved); persistQueue(); refreshQueue(); renderPlan(); return; } const remove = event.target.closest?.('[data-queue-remove]'); if (!remove) return; const index = state.queueGoals.findIndex((goal) => goal.id === remove.dataset.queueRemove); if (index < 0) return; state.queueGoals.splice(index, 1); persistQueue(); refreshQueue(); renderPlan(); });
 
   const restore = () => {
     try {
