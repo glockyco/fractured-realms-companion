@@ -490,7 +490,7 @@ tbody tr:last-child td { border-bottom: 0; }
 .loading-line::after { content: ""; display: block; width: 35%; height: 100%; background: var(--fr-harbor-400); animation: loading 1.2s linear infinite; }
 @keyframes loading { from { transform: translateX(-100%); } to { transform: translateX(300%); } }
 @media (prefers-reduced-motion: reduce) {
-  .icon-button.attention, .plan-spinner { animation: none; }
+  .icon-button.attention { animation: none; }
   .loading-line::after { animation: none; width: 100%; opacity: 0.55; }
 }
 @media (max-width: 40rem) {
