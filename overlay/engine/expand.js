@@ -348,6 +348,19 @@ export function plan(model, snapshot = {}, target = {}) {
       const stop = provider.kind === 'chart' ? { type: 'fact', fact: `map:${provider.mapId}` } : { type: target.runs != null ? 'runs' : 'time', ...(target.runs != null ? { runs } : { ms: num(target.minutes) * 60000 }) };
       addActionTarget(provider, runs, 'goal', stop);
     }
+  } else if (type === 'use-stock') {
+    // Craft as many of the chosen item as the current inventory of its inputs allows,
+    // without gathering or buying more materials. Tool and level requirements are still
+    // provisioned so the recipe is usable, but the inputs come only from stock on hand.
+    const producers = (model._index.producersByItem.get(target.itemId) ?? []).filter((p) => p.kind === 'action' && outputFor(p, target.itemId) > 0 && Object.keys(p.consumesItems ?? {}).length);
+    const provider = producers.find((p) => p.automation === 'auto') ?? producers[0];
+    if (!provider) markFailure(`no crafting recipe consumes stock to make ${target.itemId}`, target.itemId);
+    else {
+      let maxRuns = Infinity;
+      for (const [input, amount] of Object.entries(provider.consumesItems)) maxRuns = Math.min(maxRuns, Math.floor(quantity(input) / Math.max(1, num(amount))));
+      if (!Number.isFinite(maxRuns) || maxRuns <= 0) markFailure(`not enough materials in stock to make ${target.itemId}`, target.itemId);
+      else { const deps = ensureProviderRequirements(provider); if (!failure) addStep(provider, maxRuns, 'goal', { type: 'runs', runs: maxRuns }, deps); }
+    }
   } else markFailure(`unknown target type ${type}`);
 
   if (failure) return { ok: false, steps, blocked: failure, notes };

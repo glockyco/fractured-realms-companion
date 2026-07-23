@@ -133,6 +133,20 @@ test('training prefers actions with automatable inputs over manual-gathered ones
   assert.ok(cooked.includes('cook_fish')); assert.ok(!cooked.includes('cook_aaa_meat'));
 });
 
+test('use-stock crafts as many as inventory allows and blocks on empty stock', () => {
+  const base = baseModel();
+  const model = indexed({ ...base,
+    items: { ...base.items, bar: { label: 'Bar', type: 'Resource', value: 1, art: false } },
+    actions: [...base.actions, { id: 'forge', name: 'Forge', skillId: 'woodcutting', levelReq: 1, xp: 1, interval: 1000, inputs: { ore: 2 }, outputs: { bar: 1 }, automation: 'auto', gate: null }],
+  });
+  const result = plan(model, snapshot({ inventory: { ore: 7 } }), { type: 'use-stock', itemId: 'bar' });
+  assert.equal(result.ok, true);
+  const forge = result.steps.find((step) => step.actionId === 'forge');
+  assert.equal(forge?.expected.runs, 3); assert.equal(forge?.expected.consumes.ore, 6);
+  const empty = plan(model, snapshot(), { type: 'use-stock', itemId: 'bar' });
+  assert.equal(empty.ok, false); assert.match(empty.blocked?.reason ?? '', /stock/);
+});
+
 test('queue carries XP and inventory and computes manual ready times', () => {
   const base = baseModel(); const model = indexed({ ...base, actions: [...base.actions, { id: 'manualSource', name: 'Manual source', skillId: 'bounty', levelReq: 1, xp: 0, interval: 0, inputs: {}, outputs: { ore: 1 }, automation: 'manual', gate: null }], skills: [...base.skills, { id: 'bounty', name: 'Bounty', category: 'manual' }] });
   const state = snapshot({ inventory: { parchment: 2, ink: 2 } }); const independent = resolveQueue(model, state, [{ type: 'item', itemId: 'log', qty: 1 }, { type: 'item', itemId: 'log', qty: 2 }]);
