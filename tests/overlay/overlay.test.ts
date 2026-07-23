@@ -25,6 +25,7 @@ class FakeElement {
   get innerHTML() { return this._innerHTML; }
   setAttribute(name, value) { const normalized = String(value); this.attributes.set(name, normalized); if (name === 'id') { this.id = normalized; this.ownerDocument.byId.set(normalized, this); } if (name.startsWith('data-')) this.dataset[name.slice(5).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase())] = normalized; }
   getAttribute(name) { return this.attributes.get(name) ?? null; }
+  removeAttribute(name) { this.attributes.delete(name); }
   append(...children) { this.children.push(...children); }
   appendChild(child) { this.append(child); return child; }
   attachShadow() { this.shadowRoot = new FakeElement('shadow-root', this.ownerDocument); return this.shadowRoot; }
@@ -80,6 +81,23 @@ function fakeApi(initial = snapshot()) {
   };
 }
 function fetchFor(value) { return async (url) => { assert.equal(String(url), '/companion/data/model.json'); return { ok: true, status: 200, json: async () => value }; }; }
+
+class FakeWorker {
+  constructor(url, opts) { this.url = url; this.opts = opts; this.posted = []; FakeWorker.last = this; }
+  postMessage(message) { this.posted.push(message); }
+  reply(message) { this.onmessage?.({ data: message }); }
+  fail() { this.onerror?.({}); }
+}
+function installWorker(document) {
+  document.defaultView.Worker = FakeWorker;
+  document.defaultView.Blob = class { constructor(parts, options) { this.parts = parts; this.options = options; } };
+  document.defaultView.URL = { createObjectURL: () => 'blob:plan-worker' };
+  return document;
+}
+function fabricatedPlan(target) {
+  const step = { id: 'q0:x', kind: 'action', label: 'X', deps: [], skillId: 'woodcutting', actionId: 'chop', expected: { runs: 1, ms: 1000, produces: {}, consumes: {} }, purpose: 'goal' };
+  return { steps: [step], targets: [{ target, ok: true, steps: [step] }], perStep: [{ id: 'q0:x', startMs: 0, endMs: 1000 }], readyAt: {}, optimisticMs: 1000, schedulerMs: 1000 };
+}
 
 test('model boot fetches one model.json and wiki indexes model sources and uses', async () => {
   const document = new FakeDocument(); const game = fakeApi(); const result = await bootOverlay({ document, window: { __frCompanion: game }, fetch: fetchFor(model()) });
@@ -249,4 +267,55 @@ test('a step blocked only by an unfinished dependency reads "waiting for" that d
 test('overlay source contains no legacy planner import or native action queue access', async () => {
   const source = await (await import('node:fs/promises')).readFile(new URL('../../overlay/overlay.js', import.meta.url), 'utf8');
   assert.equal(source.includes("from './" + 'planner' + '.js'), false); assert.equal(source.includes('actionQueue'), false); assert.equal(source.includes('queueSlots'), false);
+});
+
+test('planning runs in a worker when one is available and adopts its result off-thread', async () => {
+  const document = installWorker(new FakeDocument());
+  const result = await bootOverlay({ document, window: { __frCompanion: fakeApi() }, fetch: fetchFor(model()) });
+  const worker = FakeWorker.last;
+  assert.ok(worker, 'plan worker constructed');
+  assert.equal(worker.posted[0]?.type, 'model');
+  const plan = result.shell.panels.plan;
+  plan.querySelector('#fr-plan-item').value = 'Log'; plan.querySelector('#fr-plan-qty').value = '1';
+  plan.querySelector('#fr-plan-form').dispatch('submit');
+  const settled = result.app.planSettled();
+  const planMsg = worker.posted.find((message) => message.type === 'plan');
+  assert.ok(planMsg, 'plan request posted to the worker');
+  assert.equal(result.app.state.queueGoals.length, 1);
+  worker.reply({ type: 'result', id: planMsg.id, result: fabricatedPlan(result.app.state.queueGoals[0].target) });
+  await settled;
+  assert.equal(result.app.state.resolvedQueue.steps[0].id, 'q0:x');
+  assert.equal(result.shell.host.dataset.planWorker, 'active');
+  assert.match(plan.querySelector('#fr-plan-result').innerHTML, /queue-steps/);
+});
+
+test('a superseded worker plan reply is dropped (latest wins)', async () => {
+  const document = installWorker(new FakeDocument());
+  const result = await bootOverlay({ document, window: { __frCompanion: fakeApi() }, fetch: fetchFor(model()) });
+  const worker = FakeWorker.last;
+  const plan = result.shell.panels.plan;
+  plan.querySelector('#fr-plan-item').value = 'Log'; plan.querySelector('#fr-plan-qty').value = '1'; plan.querySelector('#fr-plan-form').dispatch('submit'); const settledA = result.app.planSettled();
+  plan.querySelector('#fr-plan-item').value = 'Ore'; plan.querySelector('#fr-plan-qty').value = '2'; plan.querySelector('#fr-plan-form').dispatch('submit'); const settledB = result.app.planSettled();
+  const planMsgs = worker.posted.filter((message) => message.type === 'plan');
+  assert.equal(planMsgs.length, 2);
+  worker.reply({ type: 'result', id: planMsgs[1].id, result: { ...fabricatedPlan(result.app.state.queueGoals[1].target), optimisticMs: 222 } });
+  await settledB;
+  assert.equal(result.app.state.resolvedQueue.optimisticMs, 222, 'latest reply adopted');
+  worker.reply({ type: 'result', id: planMsgs[0].id, result: { ...fabricatedPlan(result.app.state.queueGoals[0].target), optimisticMs: 111 } });
+  await settledA;
+  assert.equal(result.app.state.resolvedQueue.optimisticMs, 222, 'stale reply dropped');
+});
+
+test('a worker plan error falls back to synchronous planning', async () => {
+  const document = installWorker(new FakeDocument());
+  const result = await bootOverlay({ document, window: { __frCompanion: fakeApi() }, fetch: fetchFor(model()) });
+  const worker = FakeWorker.last;
+  const plan = result.shell.panels.plan;
+  plan.querySelector('#fr-plan-item').value = 'Ore'; plan.querySelector('#fr-plan-qty').value = '1'; plan.querySelector('#fr-plan-form').dispatch('submit');
+  const planMsg = worker.posted.find((message) => message.type === 'plan');
+  const settled = result.app.planSettled();
+  worker.reply({ type: 'result', id: planMsg.id, error: 'boom' });
+  await settled;
+  assert.ok(Array.isArray(result.app.state.resolvedQueue.steps), 'synchronous fallback produced a plan');
+  assert.notEqual(result.shell.host.dataset.planWorker, 'active', 'error reply does not mark the worker active');
 });

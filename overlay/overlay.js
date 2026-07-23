@@ -394,6 +394,9 @@ tbody tr:last-child td { border-bottom: 0; }
 .plan-toolbar-summary { min-width: 0; color: var(--fr-text-secondary); font-size: 0.75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .plan-toolbar-actions { display: flex; align-items: center; gap: var(--fr-s1); margin-left: auto; }
 .plan-toolbar-actions .button { white-space: nowrap; }
+.plan-busy { position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; overflow: hidden; opacity: 0; pointer-events: none; }
+.plan-view[data-planning="true"] .plan-busy { opacity: 1; }
+.plan-busy::after { content: ""; display: block; width: 35%; height: 100%; background: var(--fr-harbor-400); animation: loading 1.2s linear infinite; }
 #fr-clear-confirmation { display: flex; align-items: center; gap: var(--fr-s1); margin-left: auto; padding: var(--fr-s1) 0; color: var(--fr-text-secondary); font-size: 0.75rem; }
 #fr-clear-confirmation strong { margin-right: var(--fr-s1); color: var(--fr-text-primary); font-weight: 600; }
 .plan-composer { flex: 0 0 auto; padding: var(--fr-space-pane); border-bottom: 1px solid var(--fr-border-subtle); background: var(--fr-surface-canvas); }
@@ -486,6 +489,10 @@ tbody tr:last-child td { border-bottom: 0; }
 .panel[data-compact="true"] .compact-strip p { display: flex; align-items: baseline; min-width: 0; gap: 0.35ch; margin: 0; overflow: hidden; color: var(--fr-neutral-300); font-size: 0.75rem; text-overflow: ellipsis; white-space: nowrap; }
 .loading-line::after { content: ""; display: block; width: 35%; height: 100%; background: var(--fr-harbor-400); animation: loading 1.2s linear infinite; }
 @keyframes loading { from { transform: translateX(-100%); } to { transform: translateX(300%); } }
+@media (prefers-reduced-motion: reduce) {
+  .icon-button.attention { animation: none; }
+  .loading-line::after, .plan-busy::after { animation: none; width: 100%; opacity: 0.55; }
+}
 @media (max-width: 40rem) {
   .panel { width: calc(100vw - (2 * var(--fr-panel-gap))); height: min(78dvh, calc(100dvh - 5rem)); resize: vertical; }
   .queue-plan-top { flex-wrap: wrap; }
@@ -1060,6 +1067,82 @@ function createApplication(shell, modelJson, api) {
     return state.resolvedQueue;
   };
 
+  // Off-thread planning. resolveQueue is a pure (model, snapshot, targets) -> result function that
+  // costs ~90-460ms on the live model; on the main thread it froze the overlay over a running game.
+  // Offload it to a module worker that imports the same served engine modules. Where Worker/Blob
+  // URLs are unavailable (Node tests, restricted hosts) we plan synchronously instead, so results
+  // and behavior are identical either way.
+  const runtimeView = documentRef.defaultView;
+  let planWorker = null;
+  let planSeq = 0;
+  let planLatest = 0;
+  const planWaiters = new Map();
+  const initPlanWorker = () => {
+    const WorkerCtor = runtimeView?.Worker;
+    const BlobCtor = runtimeView?.Blob ?? (typeof Blob === 'undefined' ? null : Blob);
+    const urlApi = runtimeView?.URL?.createObjectURL ? runtimeView.URL : (typeof URL !== 'undefined' && URL.createObjectURL ? URL : null);
+    if (!WorkerCtor || !BlobCtor || !urlApi) return null;
+    try {
+      const modelUrl = new URL('./engine/model.js', import.meta.url).href;
+      const queueUrl = new URL('./engine/queue.js', import.meta.url).href;
+      const source = [
+        `import { indexModel } from ${JSON.stringify(modelUrl)};`,
+        `import { resolveQueue } from ${JSON.stringify(queueUrl)};`,
+        'let model = null;',
+        'self.onmessage = (event) => {',
+        '  const message = event.data || {};',
+        '  if (message.type === "model") { model = indexModel(message.model || {}); return; }',
+        '  if (message.type === "plan") {',
+        '    let result = null; let error = null;',
+        '    try { result = resolveQueue(model, message.snapshot, message.targets); }',
+        '    catch (err) { error = err && err.message ? String(err.message) : String(err); }',
+        '    self.postMessage({ type: "result", id: message.id, result, error });',
+        '  }',
+        '};',
+      ].join('\n');
+      const blobUrl = urlApi.createObjectURL(new BlobCtor([source], { type: 'text/javascript' }));
+      const worker = new WorkerCtor(blobUrl, { type: 'module' });
+      worker.onmessage = (event) => {
+        const { id, result, error } = event.data || {};
+        const settle = planWaiters.get(id);
+        if (!settle) return;
+        planWaiters.delete(id);
+        if (!error && result) shell.host.dataset.planWorker = 'active';
+        settle(error ? null : result);
+      };
+      worker.onerror = () => { planWorker = null; for (const settle of planWaiters.values()) settle(null); planWaiters.clear(); };
+      worker.postMessage({ type: 'model', model: modelJson });
+      return worker;
+    } catch { return null; }
+  };
+  planWorker = initPlanWorker();
+
+  // Delayed, quiet, indeterminate busy cue: shown only if a plan outlasts ~200ms, so the common
+  // fast plan shows nothing and never flickers. Screen readers get aria-busy on the result region.
+  let planBusyTimer = null;
+  const showPlanBusy = () => { planPanel.querySelector('.plan-view')?.setAttribute('data-planning', 'true'); planPanel.querySelector('#fr-plan-result')?.setAttribute('aria-busy', 'true'); };
+  const clearPlanBusy = () => { if (planBusyTimer != null) { clearTimeout(planBusyTimer); planBusyTimer = null; } planPanel.querySelector('.plan-view')?.removeAttribute('data-planning'); planPanel.querySelector('#fr-plan-result')?.removeAttribute('aria-busy'); };
+  const armPlanBusy = () => { if (planBusyTimer == null) planBusyTimer = setTimeout(() => { planBusyTimer = null; showPlanBusy(); }, 200); };
+
+  // Resolve the current queue off-thread and adopt the latest result; superseded replies are
+  // dropped so rapid reorders never apply a stale plan. Synchronous fallback when no worker.
+  const planAsync = () => {
+    if (!planWorker) { refreshQueue(); return Promise.resolve(state.resolvedQueue); }
+    const targets = state.queueGoals.map((entry) => entry.target);
+    const snapshot = liveState();
+    const id = ++planSeq;
+    planLatest = id;
+    armPlanBusy();
+    return new Promise((resolve) => { planWaiters.set(id, resolve); planWorker.postMessage({ type: 'plan', id, snapshot, targets }); }).then((result) => {
+      if (id !== planLatest) return state.resolvedQueue;
+      if (result && Array.isArray(result.steps)) state.resolvedQueue = result; else refreshQueue();
+      clearPlanBusy();
+      return state.resolvedQueue;
+    });
+  };
+  let lastPlan = Promise.resolve();
+  const afterPlan = (done) => { if (planWorker) { lastPlan = planAsync().then(done); } else { refreshQueue(); done(); lastPlan = Promise.resolve(); } return lastPlan; };
+
   shell.loading.hidden = true;
   shell.launcher.dataset.state = 'ready';
 
@@ -1111,7 +1194,7 @@ function createApplication(shell, modelJson, api) {
   skillTable.addEventListener('click', async (event) => { const button = event.target.closest?.('[data-start-action]'); if (!button || button.disabled || isExecutionLocked(state.executorStatus?.phase)) return; const skillId = button.dataset.skillId; const action = actionFor(skillId, button.dataset.actionId); if (!action) return; const blocker = liveBlocker(model, liveState(), { kind: 'action', skillId, actionId: action.id }); if (blocker) { skillStatus.textContent = `Blocked: ${factLabel(blocker)}`; skillStatus.dataset.state = 'error'; return; } try { await api.stopAction(); await api.startAction(skillId, action.id); skillStatus.textContent = `${actionName(action)} started.`; skillStatus.dataset.state = 'idle'; } catch (error) { skillStatus.textContent = error instanceof Error ? error.message : String(error); skillStatus.dataset.state = 'error'; } });
 
   const planPanel = shell.panels.plan;
-  planPanel.innerHTML = `<div class="plan-view"><div class="plan-toolbar" id="fr-plan-toolbar"><h2>Plan</h2><span id="fr-plan-toolbar-summary" class="plan-toolbar-summary"></span><div class="plan-toolbar-actions"><button class="button compact" id="fr-plan-compose-toggle" type="button" aria-expanded="false" aria-controls="fr-plan-composer">Add target</button><button class="button compact" id="fr-clear" type="button">${ICONS.clear} Clear all</button></div></div><section id="fr-plan-composer" class="plan-composer" aria-label="Add plan target"><form class="plan-form" id="fr-plan-form"><div class="field"><label for="fr-plan-target">Target type</label><select class="control" id="fr-plan-target"><option value="item">Reach item total</option><option value="item-gain">Gain items</option><option value="level">Reach skill level</option><option value="xp">Reach skill XP</option><option value="action">Run an action</option><option value="use-stock">Use current stock</option></select></div><div class="field" id="fr-plan-item-field"><label for="fr-plan-item">Desired item</label><div class="plan-combobox"><input class="control" id="fr-plan-item" type="search" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-controls="fr-plan-options" aria-expanded="false" autocomplete="off" placeholder="Search item names"><div class="combobox-popover" id="fr-plan-options" role="listbox" hidden></div></div></div><div class="field" id="fr-plan-skill-field" hidden><label for="fr-plan-skill">Skill</label><select class="control" id="fr-plan-skill"></select></div><div class="field" id="fr-plan-action-field" hidden><label for="fr-plan-action">Action</label><select class="control" id="fr-plan-action"></select></div><div class="field" id="fr-plan-qty-field"><label for="fr-plan-qty" id="fr-plan-qty-label">Total quantity</label><input class="control data" id="fr-plan-qty" type="number" min="1" step="1" value="1" inputmode="numeric"></div><div class="field" id="fr-plan-mode-field" hidden><label for="fr-plan-action-mode">Measure by</label><select class="control" id="fr-plan-action-mode"><option value="runs">Runs</option><option value="minutes">Minutes</option></select></div><div class="plan-form-actions"><button class="button primary" id="fr-resolve-plan" type="submit">Add target</button><button class="button compact" id="fr-plan-compose-cancel" type="button">Cancel</button></div><p class="field-help" id="fr-plan-kind-help"></p></form><p class="form-error" id="fr-plan-form-error" role="status" hidden></p></section><div id="fr-plan-result" class="plan-queue" aria-label="Plan targets and steps"></div><div class="executor" aria-label="Plan execution"><div class="executor-status"><strong id="fr-executor-phase">Ready to run</strong><p id="fr-executor-message">Add a target to begin.</p><progress class="executor-progress" id="fr-executor-progress" max="1" value="0" aria-label="Plan progress"></progress></div></div><div id="fr-plan-announcer" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></div></div>`;
+  planPanel.innerHTML = `<div class="plan-view"><div class="plan-toolbar" id="fr-plan-toolbar"><h2>Plan</h2><span id="fr-plan-toolbar-summary" class="plan-toolbar-summary"></span><div class="plan-toolbar-actions"><button class="button compact" id="fr-plan-compose-toggle" type="button" aria-expanded="false" aria-controls="fr-plan-composer">Add target</button><button class="button compact" id="fr-clear" type="button">${ICONS.clear} Clear all</button></div><div class="plan-busy" aria-hidden="true"></div></div><section id="fr-plan-composer" class="plan-composer" aria-label="Add plan target"><form class="plan-form" id="fr-plan-form"><div class="field"><label for="fr-plan-target">Target type</label><select class="control" id="fr-plan-target"><option value="item">Reach item total</option><option value="item-gain">Gain items</option><option value="level">Reach skill level</option><option value="xp">Reach skill XP</option><option value="action">Run an action</option><option value="use-stock">Use current stock</option></select></div><div class="field" id="fr-plan-item-field"><label for="fr-plan-item">Desired item</label><div class="plan-combobox"><input class="control" id="fr-plan-item" type="search" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-controls="fr-plan-options" aria-expanded="false" autocomplete="off" placeholder="Search item names"><div class="combobox-popover" id="fr-plan-options" role="listbox" hidden></div></div></div><div class="field" id="fr-plan-skill-field" hidden><label for="fr-plan-skill">Skill</label><select class="control" id="fr-plan-skill"></select></div><div class="field" id="fr-plan-action-field" hidden><label for="fr-plan-action">Action</label><select class="control" id="fr-plan-action"></select></div><div class="field" id="fr-plan-qty-field"><label for="fr-plan-qty" id="fr-plan-qty-label">Total quantity</label><input class="control data" id="fr-plan-qty" type="number" min="1" step="1" value="1" inputmode="numeric"></div><div class="field" id="fr-plan-mode-field" hidden><label for="fr-plan-action-mode">Measure by</label><select class="control" id="fr-plan-action-mode"><option value="runs">Runs</option><option value="minutes">Minutes</option></select></div><div class="plan-form-actions"><button class="button primary" id="fr-resolve-plan" type="submit">Add target</button><button class="button compact" id="fr-plan-compose-cancel" type="button">Cancel</button></div><p class="field-help" id="fr-plan-kind-help"></p></form><p class="form-error" id="fr-plan-form-error" role="status" hidden></p></section><div id="fr-plan-result" class="plan-queue" aria-label="Plan targets and steps"></div><div class="executor" aria-label="Plan execution"><div class="executor-status"><strong id="fr-executor-phase">Ready to run</strong><p id="fr-executor-message">Add a target to begin.</p><progress class="executor-progress" id="fr-executor-progress" max="1" value="0" aria-label="Plan progress"></progress></div></div><div id="fr-plan-announcer" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></div></div>`;
   const planForm = planPanel.querySelector('#fr-plan-form'); const planFormError = planPanel.querySelector('#fr-plan-form-error'); const planKind = planPanel.querySelector('#fr-plan-target'); const planItem = planPanel.querySelector('#fr-plan-item'); const planOptions = planPanel.querySelector('#fr-plan-options'); const planSkill = planPanel.querySelector('#fr-plan-skill'); const planAction = planPanel.querySelector('#fr-plan-action'); const planQty = planPanel.querySelector('#fr-plan-qty'); const planQtyLabel = planPanel.querySelector('#fr-plan-qty-label'); const planMode = planPanel.querySelector('#fr-plan-action-mode'); const composer = planPanel.querySelector('#fr-plan-composer'); const composeToggle = planPanel.querySelector('#fr-plan-compose-toggle'); const composeCancel = planPanel.querySelector('#fr-plan-compose-cancel'); const kindHelp = planPanel.querySelector('#fr-plan-kind-help'); const clearButton = planPanel.querySelector('#fr-clear'); const announcer = planPanel.querySelector('#fr-plan-announcer');
   const kindCopy = { item: ['Reach item total', 'Reach an inventory total.', 'Total quantity'], 'item-gain': ['Gain items', 'Gain this many from your current inventory.', 'Quantity to gain'], level: ['Reach skill level', 'Reach a total skill level.', 'Target level'], xp: ['Reach skill XP', 'Reach a total skill XP value.', 'Target XP'], action: ['Run an action', 'Run one action for a count or duration.', 'Amount'], 'use-stock': ['Use current stock', 'Craft as much as your current inputs allow.', 'Amount'] };
   const announcePlan = (message) => { if (announcer && announcer.textContent !== message) announcer.textContent = message; };
@@ -1124,7 +1207,7 @@ function createApplication(shell, modelJson, api) {
   const setFormError = (message = '', field = null) => { planFormError.textContent = message; planFormError.hidden = !message; planFormError.dataset.state = message ? 'error' : 'idle'; for (const node of [planItem, planQty, planSkill, planAction]) { node.removeAttribute?.('aria-invalid'); node.removeAttribute?.('aria-describedby'); } if (message && field) { field.setAttribute('aria-invalid', 'true'); field.setAttribute('aria-describedby', 'fr-plan-form-error'); } };
   planKind.addEventListener('change', () => { setFormError(); updateTargetFields(); }); planSkill.addEventListener('change', () => { setFormError(); renderActionOptions(); });
   composeToggle.addEventListener('click', () => setComposerOpen(composer.hidden)); composeCancel.addEventListener('click', () => setComposerOpen(false));
-  planForm.addEventListener('submit', (event) => { event.preventDefault(); try { const target = makeTarget(); setFormError(); const entry = { id: `plan-${state.nextPlanId++}`, target }; state.queueGoals.push(entry); persistQueue(); refreshQueue(); renderPlan(); announcePlan(`Added ${targetLabel(target)} as priority ${state.queueGoals.length}.`); setComposerOpen(false); } catch (error) { const message = error instanceof Error ? error.message : String(error); setFormError(message, message.includes('Choose an item') ? planItem : planQty); } });
+  planForm.addEventListener('submit', (event) => { event.preventDefault(); try { const target = makeTarget(); setFormError(); const entry = { id: `plan-${state.nextPlanId++}`, target }; state.queueGoals.push(entry); persistQueue(); announcePlan(`Added ${targetLabel(target)} as priority ${state.queueGoals.length}.`); setComposerOpen(false); afterPlan(() => renderPlan()); } catch (error) { const message = error instanceof Error ? error.message : String(error); setFormError(message, message.includes('Choose an item') ? planItem : planQty); } });
   let planTargetResults = [];
   let activePlanTarget = -1;
   const positionPlanOptions = () => {
@@ -1295,13 +1378,13 @@ function createApplication(shell, modelJson, api) {
   const targetLabel = (target) => { if (!target) return 'Target'; if (target.type === 'item' || target.type === 'item-gain') return `${target.type === 'item-gain' ? 'Gain' : 'Reach'} ${target.qty ?? target.gain} ${labelFor(items, target.itemId)}`; if (target.type === 'use-stock') return `Make ${labelFor(items, target.itemId)} from stock`; if (target.type === 'level') return `${skillNames[target.skillId] || target.skillId} level ${target.level}`; if (target.type === 'xp') return `${skillNames[target.skillId] || target.skillId} XP ${target.xp}`; if (target.type === 'action') return `${targetActionLabel(target)} · ${target.runs ? `${target.runs} runs` : `${target.minutes} minutes`}`; return 'Target'; };
 
   const executor = createDirectExecutor(api, { liveBlocker: (stateSnapshot, step) => liveBlocker(model, stateSnapshot, step), factSatisfied: (stateSnapshot, fact) => factSatisfied(model, stateSnapshot, fact), formatBlocker: (blocker) => factLabel(blocker), onUpdate(status) { state.executorStatus = status; renderPlan?.(); } });
-  const runQueue = () => { if (isExecutionLocked(state.executorStatus?.phase)) return; refreshQueue(); if (state.resolvedQueue.steps.length) { state.queueStartedAt = Date.now(); renderPlan(); executor.run(state.resolvedQueue.steps); } };
-  const resumeQueue = () => { if (state.executorStatus?.phase !== 'waiting') return; refreshQueue(); if (state.resolvedQueue.steps.length) { state.queueStartedAt ??= Date.now(); executor.run(state.resolvedQueue.steps); } };
+  const runQueue = () => { if (isExecutionLocked(state.executorStatus?.phase)) return; afterPlan(() => { if (state.resolvedQueue.steps.length) { state.queueStartedAt = Date.now(); renderPlan(); executor.run(state.resolvedQueue.steps); } }); };
+  const resumeQueue = () => { if (state.executorStatus?.phase !== 'waiting') return; afterPlan(() => { if (state.resolvedQueue.steps.length) { state.queueStartedAt ??= Date.now(); executor.run(state.resolvedQueue.steps); } }); };
   const stopQueue = () => { state.queueStartedAt = null; executor.stop(); };
   shell.queueControls.querySelector('#fr-run').addEventListener('click', runQueue); shell.queueControls.querySelector('#fr-resume').addEventListener('click', resumeQueue); shell.queueControls.querySelector('#fr-stop').addEventListener('click', stopQueue);
   clearButton.addEventListener('click', () => { if (isExecutionLocked(state.executorStatus?.phase)) return; const existing = planPanel.querySelector('#fr-clear-confirmation'); if (existing) return; const confirmation = documentRef.createElement('div'); confirmation.id = 'fr-clear-confirmation'; confirmation.innerHTML = '<strong>Clear all targets?</strong><button class="button compact" id="fr-clear-cancel" type="button">Cancel</button><button class="button compact danger" id="fr-clear-confirm" type="button">Clear</button>'; planPanel.querySelector('#fr-plan-toolbar').append(confirmation); confirmation.querySelector('#fr-clear-cancel')?.addEventListener('click', () => { confirmation.remove?.(); clearButton.focus?.(); }); confirmation.querySelector('#fr-clear-confirm')?.addEventListener('click', () => { state.queueGoals = []; state.resolvedQueue = { steps: [], targets: [] }; state.queueStartedAt = null; persistQueue(); confirmation.remove?.(); announcePlan('All targets cleared.'); renderPlan(); }); });
   shell.compactStrip.querySelector('#fr-compact-start').addEventListener('click', runQueue); shell.compactStrip.querySelector('#fr-compact-resume').addEventListener('click', resumeQueue); shell.compactStrip.querySelector('#fr-compact-stop').addEventListener('click', stopQueue);
-  planPanel.addEventListener('click', (event) => { if (isExecutionLocked(state.executorStatus?.phase)) return; const move = event.target.closest?.('[data-queue-move]'); if (move) { const dir = move.dataset.queueMove; const from = state.queueGoals.findIndex((goal) => goal.id === move.dataset.queueGoal); if (from < 0) return; const to = dir === 'top' ? 0 : dir === 'up' ? from - 1 : from + 1; if (to < 0 || to >= state.queueGoals.length) return; const [moved] = state.queueGoals.splice(from, 1); state.queueGoals.splice(to, 0, moved); persistQueue(); refreshQueue(); renderPlan(); announcePlan(`Moved ${targetLabel(moved.target)} to priority ${to + 1}.`); planPanel.querySelector(`[data-queue-move="${dir}"][data-queue-goal="${moved.id}"]`)?.focus?.(); return; } const remove = event.target.closest?.('[data-queue-remove]'); if (!remove) return; const index = state.queueGoals.findIndex((goal) => goal.id === remove.dataset.queueRemove); if (index < 0) return; const label = targetLabel(state.queueGoals[index].target); state.queueGoals.splice(index, 1); persistQueue(); refreshQueue(); renderPlan(); announcePlan(`Removed ${label}.`); const next = state.queueGoals[index] || state.queueGoals[index - 1]; planPanel.querySelector(next ? `[data-queue-remove="${next.id}"]` : '#fr-plan-compose-toggle')?.focus?.(); });
+  planPanel.addEventListener('click', (event) => { if (isExecutionLocked(state.executorStatus?.phase)) return; const move = event.target.closest?.('[data-queue-move]'); if (move) { const dir = move.dataset.queueMove; const from = state.queueGoals.findIndex((goal) => goal.id === move.dataset.queueGoal); if (from < 0) return; const to = dir === 'top' ? 0 : dir === 'up' ? from - 1 : from + 1; if (to < 0 || to >= state.queueGoals.length) return; const [moved] = state.queueGoals.splice(from, 1); state.queueGoals.splice(to, 0, moved); persistQueue(); announcePlan(`Moved ${targetLabel(moved.target)} to priority ${to + 1}.`); afterPlan(() => { renderPlan(); planPanel.querySelector(`[data-queue-move="${dir}"][data-queue-goal="${moved.id}"]`)?.focus?.(); }); return; } const remove = event.target.closest?.('[data-queue-remove]'); if (!remove) return; const index = state.queueGoals.findIndex((goal) => goal.id === remove.dataset.queueRemove); if (index < 0) return; const label = targetLabel(state.queueGoals[index].target); state.queueGoals.splice(index, 1); persistQueue(); refreshQueue(); renderPlan(); announcePlan(`Removed ${label}.`); const next = state.queueGoals[index] || state.queueGoals[index - 1]; planPanel.querySelector(next ? `[data-queue-remove="${next.id}"]` : '#fr-plan-compose-toggle')?.focus?.(); });
 
   const restore = () => {
     try {
@@ -1321,7 +1404,7 @@ function createApplication(shell, modelJson, api) {
   };
   const restoreAndRender = () => { restore(); renderItemList(); renderItemDetail(); renderSkillTable(); renderPlan(); };
   updateTargetFields(); restoreAndRender();
-  return { model, indexedModel: model, datasets, indexes, state, executor, renderItemList, renderItemDetail, renderSkillTable, renderPlan, refreshQueue };
+  return { model, indexedModel: model, datasets, indexes, state, executor, renderItemList, renderItemDetail, renderSkillTable, renderPlan, refreshQueue, planSettled: () => lastPlan };
 }
 
 export async function fetchModel(fetchRef) {
