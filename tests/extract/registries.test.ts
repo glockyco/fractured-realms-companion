@@ -44,6 +44,12 @@ function fixture(): string {
   const achievements = '[{id:"secret_millionaire",name:"Millionaire",icon:"coin",category:"Secrets",secret:true,desc:"Have gold",check:()=>true}]';
   const equipment = Array.from({ length: 100 }, (_, i) => `${i === 0 ? 'bronze_helm' : `helm_${i}`}:{slot:"helm",def:${i === 0 ? 5 : i + 1}}`).join(',');
   const enemyAttacks = Array.from({ length: 40 }, (_, i) => `${i === 0 ? 'giant_rat' : `enemy_${i}`}:[{name:"Gnaw",weight:60,mult:1,msg:"gnaws",icon:"🦷"}]`).join(',');
+  const potionEntries = [
+    'weak_str_potion:{slot:"damage",mult:.02,durMs:Li,cdMs:Di,family:"strength"}',
+    'weak_restore_potion:{slot:null,instant:"prayer",amount:15,cdMs:Di,family:"restore"}',
+    ...Array.from({ length: 8 }, (_, i) => `potion_${i}:{slot:"damage",mult:.0${i + 1},durMs:Li,cdMs:Di,family:"strength"}`),
+  ].join(',');
+  const potions = `const Li=12e4,Di=24e4,POTIONS={${potionEntries}};`;
   return [
     `const ITEMS={${items}};`,
     `const ACTIONS={${actions}};`,
@@ -68,6 +74,7 @@ function fixture(): string {
     `const ACHIEVEMENTS=${achievements};`,
     `const EQUIPMENT={${equipment}};`,
     `const ENEMY_ATTACKS={${enemyAttacks}};`,
+    potions,
     'const DIGS=[{id:"millhaven_ruins",name:"Ruins",levelReq:1}];',
     'const OFFLINE={1:10,2:30,3:100};',
     'const K8=new Set(["vial","bow_string"]);const Nz=["wild_berries","venison","woodland_seed","bog_mushroom","plains_seed","ember_spore","ancient_spore"],eM=2,kU=new Set(["vial","bow_string",...Nz]);',
@@ -109,6 +116,8 @@ test('extracts every raw registry from a synthetic bundle', () => {
   assert.equal(result.equipment.bronze_helm.def, 5);
   assert.equal(Object.keys(result.enemyAttacks).length, 40);
   assert.equal(result.enemyAttacks.giant_rat[0] && (result.enemyAttacks.giant_rat[0] as Record<string, unknown>).name, 'Gnaw');
+  assert.equal(result.potions.weak_str_potion.durMs, 120000);
+  assert.equal(result.potions.weak_restore_potion.slot, null);
 });
 
 test('fails closed for missing, duplicate, and malformed registry anchors', () => {

@@ -33,6 +33,7 @@ export interface RawGameData {
   shopPriceMultiplier: number;
   equipment: Record<string, Record<string, unknown>>;
   enemyAttacks: Record<string, unknown[]>;
+  potions: Record<string, Record<string, unknown>>;
 }
 
 const ACTION_SKILLS = [
@@ -284,6 +285,37 @@ function extractEnemyAttacks(source: string): Record<string, unknown[]> {
   return output;
 }
 
+function extractPotions(source: string): Record<string, Record<string, unknown>> {
+  const at = anchor(source, 'weak_str_potion:{slot:"damage"', 'potions');
+  const text = sliceEnclosing(source, at, '{');
+  const references = new Set<string>();
+  for (const match of text.matchAll(/:\s*([A-Za-z_$][\w$]*)\b/g)) {
+    if (!['null', 'true', 'false', 'undefined', 'NaN', 'Infinity'].includes(match[1])) references.add(match[1]);
+  }
+  const scope: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+  const window = source.slice(Math.max(0, at - 4096), at);
+  for (const reference of references) {
+    const escaped = reference.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const matches = [...window.matchAll(new RegExp(`\\b${escaped}\\s*=\\s*([0-9]+(?:\\.[0-9]+)?(?:e[0-9]+)?)\\b`, 'g'))];
+    if (!matches.length) fail('potions', `unresolved numeric binding ${reference}`);
+    scope[reference] = Number(matches.at(-1)![1]);
+  }
+  const raw = object(evalLiteral(text, 'potions', scope), 'potions');
+  const ids = Object.keys(raw);
+  if (ids.length < 10) fail('potions', `expected at least 10 entries, got ${ids.length}`);
+  const output: Record<string, Record<string, unknown>> = Object.create(null) as Record<string, Record<string, unknown>>;
+  for (const id of ids) {
+    const entry = object(raw[id], 'potions');
+    if (!('slot' in entry) || (entry.slot !== null && entry.slot !== undefined)) string(entry.slot, 'potions');
+    if (entry.mult !== undefined && entry.mult !== null) number(entry.mult, 'potions');
+    if (entry.durMs !== undefined && entry.durMs !== null) number(entry.durMs, 'potions');
+    if (entry.cdMs !== undefined && entry.cdMs !== null) number(entry.cdMs, 'potions');
+    string(entry.family, 'potions');
+    output[id] = entry;
+  }
+  return output;
+}
+
 function extractShop(source: string): { items: string[]; multiplier: number } {
   // Raw ingredient ids sold in the shop (Nz), spread into the buyable set.
   const raw = array(extract(source, '["wild_berries","venison","woodland_seed"', 'shop'), 'shop').map((entry) => string(entry, 'shop'));
@@ -405,6 +437,7 @@ export function extractRegistries(source: string, archiveFiles: readonly string[
   const shop = extractShop(source);
   const equipment = extractEquipment(source);
   const enemyAttacks = extractEnemyAttacks(source);
+  const potions = extractPotions(source);
   return {
     items, actions, actionGates: rawGates, skills, xp: extractXp(source), tools,
     mapsRegular, mapsDeep, chartSupplyTiers, agilityCourses, bags, machines, boons,
@@ -413,5 +446,6 @@ export function extractRegistries(source: string, archiveFiles: readonly string[
     shopItems: shop.items, shopPriceMultiplier: shop.multiplier,
     equipment,
     enemyAttacks,
+    potions,
   };
 }
