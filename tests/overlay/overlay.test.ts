@@ -310,6 +310,33 @@ test('planning runs in a worker when one is available and adopts its result off-
   assert.match(plan.querySelector('#fr-plan-result').innerHTML, /queue-steps/);
 });
 
+test('every queue edit re-plans off-thread: removing a target never resolves synchronously', async () => {
+  const document = installWorker(new FakeDocument());
+  const result = await bootOverlay({ document, window: { __frCompanion: fakeApi() }, fetch: fetchFor(model()) });
+  const worker = FakeWorker.last;
+  const plan = result.shell.panels.plan;
+  // Seed one target and settle its off-thread plan.
+  plan.querySelector('#fr-plan-item').value = 'Log'; plan.querySelector('#fr-plan-qty').value = '1'; plan.querySelector('#fr-plan-form').dispatch('submit');
+  const addMsg = worker.posted.filter((message) => message.type === 'plan').at(-1);
+  worker.reply({ type: 'result', id: addMsg.id, result: fabricatedPlan(result.app.state.queueGoals[0].target) });
+  await result.app.planSettled();
+  const before = worker.posted.filter((message) => message.type === 'plan').length;
+  const staleSteps = result.app.state.resolvedQueue.steps.length;
+  // Remove it. Goals mutate synchronously, but the re-plan is deferred to the worker;
+  // the resolved queue must NOT change until the worker replies (no main-thread freeze).
+  const goalId = result.app.state.queueGoals[0].id;
+  const button = new FakeElement('button', document); button.dataset.queueRemove = goalId;
+  plan.dispatch('click', { target: button });
+  assert.equal(result.app.state.queueGoals.length, 0, 'goal removed synchronously');
+  const removeMsgs = worker.posted.filter((message) => message.type === 'plan');
+  assert.equal(removeMsgs.length, before + 1, 'remove posts a fresh off-thread plan request');
+  assert.equal(result.app.state.resolvedQueue.steps.length, staleSteps, 'resolved queue unchanged before the worker replies');
+  const settled = result.app.planSettled();
+  worker.reply({ type: 'result', id: removeMsgs.at(-1).id, result: { steps: [], targets: [] } });
+  await settled;
+  assert.equal(result.app.state.resolvedQueue.steps.length, 0, 'worker reply adopted after removal');
+});
+
 test('a superseded worker plan reply is dropped (latest wins)', async () => {
   const document = installWorker(new FakeDocument());
   const result = await bootOverlay({ document, window: { __frCompanion: fakeApi() }, fetch: fetchFor(model()) });
