@@ -35,32 +35,32 @@ function checkBag(model, state, provider, step) {
   if (afterConsume + newIds.length > Math.max(0, num(state.bagSize, 48))) return 'bag overflow';
   return null;
 }
-function applyProviderRun(model, state, provider, step) {
-  for (const [id, amount] of Object.entries(provider?.consumesItems ?? {})) state.inventory[id] = Math.max(0, num(state.inventory[id]) - num(amount));
-  if (provider?.consumesGold) state.gold = Math.max(0, num(state.gold) - num(provider.consumesGold));
+function applyProviderRun(model, state, provider, step, runs = 1) {
+  for (const [id, amount] of Object.entries(provider?.consumesItems ?? {})) state.inventory[id] = Math.max(0, num(state.inventory[id]) - num(amount) * runs);
+  if (provider?.consumesGold) state.gold = Math.max(0, num(state.gold) - num(provider.consumesGold) * runs);
   if (provider?.kind === 'chart') {
     const map = provider.map; const done = num(map?.actionsToChart, 1);
     const mapId = provider.mapId;
     const tier = model.chartSupplyTiers?.[map?.tier] ?? { supplies: { parchment: 1, ink: 1 } };
-    for (const [id, amount] of Object.entries(tier.supplies ?? {})) state.inventory[id] = Math.max(0, num(state.inventory[id]) - num(amount));
-    state.mapProgress[mapId] = num(state.mapProgress[mapId]) + 100 / done;
+    for (const [id, amount] of Object.entries(tier.supplies ?? {})) state.inventory[id] = Math.max(0, num(state.inventory[id]) - num(amount) * runs);
+    state.mapProgress[mapId] = num(state.mapProgress[mapId]) + (100 / done) * runs;
     if (state.mapProgress[mapId] >= 100 - 1e-9 && !state.chartedMaps.includes(mapId)) state.chartedMaps.push(mapId);
   } else {
     const multiplier = (1 + (provider?.skillId === 'brewing' ? brewDoubleChance(model, state) : 0)) * (1 + sealDoubleChance(model, state, provider?.skillId));
     const outputs = { ...provider?.producesItems };
     const cookingBurn = provider?.skillId === 'cooking' ? burnChance(levelForXp(model.xpTable, state.skillXp?.cooking), provider.action?.levelReq) : 0;
     for (const [id, amount] of Object.entries(outputs)) {
-      const value = num(amount) * multiplier;
+      const value = num(amount) * multiplier * runs;
       if (cookingBurn > 0) {
         const suffix = String(id).replace(/^.*?_/, '');
         add(state.inventory, id, value * (1 - cookingBurn));
         add(state.inventory, `burnt_${suffix}`, value * cookingBurn);
       } else add(state.inventory, id, value);
     }
-    if (provider?.outputGold) state.gold += num(provider.outputGold);
+    if (provider?.outputGold) state.gold += num(provider.outputGold) * runs;
   }
   for (const [skillId, amount] of Object.entries(provider?.xpGain ?? {})) {
-    const gain = provider?.kind === 'action' ? xpPerRun(model, state, skillId, provider.action) : provider?.kind === 'chart' ? num(amount) * xpMultiplier(model, state, skillId) : num(amount);
+    const gain = (provider?.kind === 'action' ? xpPerRun(model, state, skillId, provider.action) : provider?.kind === 'chart' ? num(amount) * xpMultiplier(model, state, skillId) : num(amount)) * runs;
     add(state.skillXp, skillId, gain);
   }
   for (const fact of provider?.grantsFacts ?? []) applyFact(model, state, fact);
@@ -111,7 +111,11 @@ export function simulate(model, snapshot = {}, steps = [], opts = {}) {
     const runs = Math.max(0, num(step.expected?.runs, 0));
     if (!runs) { completed.add(step.id); pending.delete(step.id); perStep.push({ id: step.id, startMs: clock, endMs: clock }); return true; }
     const start = clock;
-    for (let run = 0; run < runs; run += 1) {
+    // Walk a bounded number of runs precisely to catch blockers and bag overflow and to
+    // let the tick interval settle as XP rises, then extrapolate the remainder. Walking
+    // every run explodes for high-level or high-quantity goals (hundreds of thousands of runs).
+    const walk = Math.min(runs, 2048);
+    for (let run = 0; run < walk; run += 1) {
       const blocker = liveBlocker(model, state, step);
       if (blocker && blocker !== 'bag-full') { fail(step, blocker); return false; }
       const bagError = checkBag(model, state, provider, step);
@@ -119,6 +123,11 @@ export function simulate(model, snapshot = {}, steps = [], opts = {}) {
       const duration = actionDuration(model, state, provider, step, 1);
       applyProviderRun(model, state, provider, step);
       clock += duration;
+    }
+    if (runs > walk) {
+      const remaining = runs - walk;
+      clock += actionDuration(model, state, provider, step, 1) * remaining;
+      applyProviderRun(model, state, provider, step, remaining);
     }
     completed.add(step.id); pending.delete(step.id); perStep.push({ id: step.id, startMs: start, endMs: clock }); return true;
   };

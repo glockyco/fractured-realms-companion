@@ -87,6 +87,32 @@ test('simulation reaches deterministic item target and reports bag overflow', ()
   const full = snapshot({ bagSize: 1, inventory: { ore: 1 } }); const overflow = plan(model, full, { type: 'item', itemId: 'log', qty: 1 }); const checked = simulate(model, full, overflow.steps); assert.equal(checked.infeasibility?.stepId, overflow.steps.at(-1)?.id);
 });
 
+test('simulating a cooking action terminates and splits cooked and burnt output', () => {
+  const base = baseModel();
+  const model = indexed({ ...base,
+    skills: [...base.skills, { id: 'cooking', name: 'Cooking', category: 'action' }],
+    items: { ...base.items, raw_fish: { label: 'Raw Fish', type: 'Resource', value: 1, art: false }, cooked_fish: { label: 'Cooked Fish', type: 'Resource', value: 1, art: false } },
+    actions: [...base.actions, { id: 'cook_fish', name: 'Cook Fish', skillId: 'cooking', levelReq: 1, xp: 10, interval: 1000, inputs: { raw_fish: 1 }, outputs: { cooked_fish: 1 }, automation: 'auto', gate: null }],
+  });
+  // A cooking action's output-slot check must not loop forever appending burnt_* ids.
+  const step = { id: 'cook', kind: 'action', providerId: 'action:cooking:cook_fish', skillId: 'cooking', actionId: 'cook_fish', deps: [], stop: { type: 'runs', runs: 5 }, expected: { runs: 5, ms: 5000, produces: { cooked_fish: 5 }, consumes: { raw_fish: 5 } } };
+  const result = simulate(model, snapshot({ inventory: { raw_fish: 5 } }), [step], { manualPolicy: 'instant' });
+  assert.equal(result.infeasibility, null);
+  assert.ok(result.endState.inventory.cooked_fish > 0); assert.ok(result.endState.inventory.burnt_fish > 0);
+  assert.equal(Math.round(result.endState.inventory.cooked_fish + result.endState.inventory.burnt_fish), 5);
+});
+
+test('simulate extrapolates high run counts instead of walking every run', () => {
+  const model = indexed();
+  const runs = 50000;
+  const step = { id: 'chop', kind: 'action', providerId: 'action:woodcutting:A', skillId: 'woodcutting', actionId: 'A', deps: [], stop: { type: 'runs', runs }, expected: { runs, ms: runs * 3000, produces: { log: runs }, consumes: {} } };
+  const started = Date.now();
+  const result = simulate(model, snapshot(), [step], { manualPolicy: 'instant' });
+  assert.equal(result.infeasibility, null);
+  assert.equal(Math.round(result.endState.inventory.log), runs);
+  assert.ok(Date.now() - started < 5000, 'simulate must stay bounded for large run counts');
+});
+
 test('queue carries XP and inventory and computes manual ready times', () => {
   const base = baseModel(); const model = indexed({ ...base, actions: [...base.actions, { id: 'manualSource', name: 'Manual source', skillId: 'bounty', levelReq: 1, xp: 0, interval: 0, inputs: {}, outputs: { ore: 1 }, automation: 'manual', gate: null }], skills: [...base.skills, { id: 'bounty', name: 'Bounty', category: 'manual' }] });
   const state = snapshot({ inventory: { parchment: 2, ink: 2 } }); const independent = resolveQueue(model, state, [{ type: 'item', itemId: 'log', qty: 1 }, { type: 'item', itemId: 'log', qty: 2 }]);

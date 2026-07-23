@@ -241,7 +241,7 @@ function bagOutputBlocker(state, action, bagSize) {
   for (const [id, amount] of Object.entries(asObject(action?.inputs))) after[id] = Math.max(0, qty(after, id) - n(amount));
   const occupied = Object.values(after).filter((value) => n(value) > 0).length;
   const ids = Object.keys(itemOutputs(action));
-  if (action?.skillId === 'cooking' || action?.cooking) for (const id of ids) ids.push(`burnt_${String(id).replace(/^.*?_/, '')}`);
+  if (action?.skillId === 'cooking' || action?.cooking) for (const id of [...ids]) ids.push(`burnt_${String(id).replace(/^.*?_/, '')}`);
   const fresh = [...new Set(ids)].filter((id) => qty(after, id) <= 0);
   return occupied + fresh.length > bagSize;
 }
