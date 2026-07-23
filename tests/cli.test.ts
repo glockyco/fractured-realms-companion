@@ -120,7 +120,7 @@ test('help and version are successful without dispatch', async () => {
   assert.equal(await main(['--help'], deps), 0);
   assert.match(output.out.join(''), /Usage: fractured-companion/);
   assert.equal(await main(['--version'], deps), 0);
-  assert.match(output.out.join(''), /0\.1\.0/);
+  assert.match(output.out.join(''), /0\.2\.0/);
   assert.equal(calls, 0);
 });
 

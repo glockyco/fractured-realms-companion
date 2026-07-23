@@ -11,7 +11,7 @@ import { openDatabase } from './lib/sqlite.ts';
 import { restoreCompanion, type RestoreOptions } from './restore.ts';
 import { stateDir } from './platform/state.ts';
 
-export const VERSION = '0.1.0';
+export const VERSION = '0.2.0';
 
 const COMMANDS = new Set(['doctor', 'refresh', 'restore', 'launch', 'relaunch', 'model']);
 const OPTION_NAMES = new Set(['steam-root', 'bottle', 'json', 'no-open', 'no-patch', 'help', 'version']);
