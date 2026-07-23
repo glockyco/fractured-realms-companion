@@ -522,8 +522,8 @@ tbody tr:last-child td { border-bottom: 0; }
   .plan-step { grid-template-columns: 1.5rem minmax(0, 1fr); }
   .step-timing { grid-column: 2 / -1; text-align: left; }
 }
-
-  *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; }
+@media (prefers-reduced-motion: reduce) {
+  *:not(.plan-spinner), *:not(.plan-spinner)::before, *:not(.plan-spinner)::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; }
 }
 `;
 
