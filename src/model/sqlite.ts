@@ -32,7 +32,8 @@ function schema(db: NonNullable<ReturnType<typeof openDatabase>>): void {
   db.exec(`
     CREATE TABLE skills (id TEXT PRIMARY KEY, name TEXT, category TEXT, data_json TEXT NOT NULL);
     CREATE TABLE items (id TEXT PRIMARY KEY, label TEXT, icon TEXT, type TEXT, subtype TEXT, desc TEXT, value REAL, art INTEGER, data_json TEXT NOT NULL);
-    CREATE TABLE equipment (item_id TEXT PRIMARY KEY, slot TEXT, def REAL, data_json TEXT NOT NULL);
+    CREATE TABLE equipment (item_id TEXT PRIMARY KEY, kind TEXT NOT NULL, slot TEXT, style TEXT, def REAL, attack REAL, strength REAL, speed_ms REAL, req_skill TEXT, req_level INTEGER, secret INTEGER, data_json TEXT NOT NULL);
+    CREATE TABLE food (item_id TEXT PRIMARY KEY, heal REAL);
     CREATE TABLE enemy_attacks (enemy_id TEXT, name TEXT, weight REAL, mult REAL, msg TEXT, icon TEXT, data_json TEXT NOT NULL);
     CREATE TABLE potions (item_id TEXT PRIMARY KEY, slot TEXT, mult REAL, dur_ms REAL, cd_ms REAL, family TEXT, data_json TEXT NOT NULL);
     CREATE TABLE shop (item_id TEXT PRIMARY KEY, price REAL);
@@ -78,10 +79,14 @@ function writeRows(db: NonNullable<ReturnType<typeof openDatabase>>, model: Game
     insert(db, 'items', ['id', 'label', 'icon', 'type', 'subtype', 'desc', 'value', 'art', 'data_json'], [id, scalar(item.label), scalar(item.icon), scalar(item.type), scalar(item.subtype), scalar(item.desc), scalar(item.value), item.art ? 1 : 0, json(item)]);
   }
   for (const [itemId, price] of Object.entries(model.shop)) insert(db, 'shop', ['item_id', 'price'], [itemId, price]);
-  for (const [itemId, value] of Object.entries(model.equipment)) {
-    const row = asRecord(value);
-    insert(db, 'equipment', ['item_id', 'slot', 'def', 'data_json'], [itemId, scalar(row.slot), scalar(row.def), json(row)]);
-  }
+  const writeGear = (itemId: string, row: Record<string, unknown>, kind: 'armour' | 'weapon'): void => {
+    insert(db, 'equipment',
+      ['item_id', 'kind', 'slot', 'style', 'def', 'attack', 'strength', 'speed_ms', 'req_skill', 'req_level', 'secret', 'data_json'],
+      [itemId, kind, scalar(row.slot), scalar(row.style ?? row.type), scalar(row.def ?? row.defence), scalar(row.attack), scalar(row.strength), scalar(row.speed), scalar(row.reqSkill), scalar(row.reqLevel), row.secret ? 1 : 0, json(row)]);
+  };
+  for (const [itemId, value] of Object.entries(model.equipment ?? {})) writeGear(itemId, asRecord(value), 'armour');
+  for (const [itemId, value] of Object.entries(model.weapons ?? {})) writeGear(itemId, asRecord(value), 'weapon');
+  for (const [itemId, heal] of Object.entries(model.foodHeal ?? {})) insert(db, 'food', ['item_id', 'heal'], [itemId, heal]);
   for (const [enemyId, moves] of Object.entries(model.enemyAttacks)) for (const move of moves) {
     const row = asRecord(move);
     insert(db, 'enemy_attacks', ['enemy_id', 'name', 'weight', 'mult', 'msg', 'icon', 'data_json'], [enemyId, scalar(row.name), scalar(row.weight), scalar(row.mult), scalar(row.msg), scalar(row.icon), json(row)]);

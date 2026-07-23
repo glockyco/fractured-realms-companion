@@ -49,6 +49,10 @@ function rawData(shuffled = false): RawGameData {
     shopItems: ['twig', 'log'],
     shopPriceMultiplier: 2,
     equipment: { bronze_helm: { slot: 'helm', def: 5 }, iron_helm: { slot: 'helm', def: 2 } },
+    weapons: { bronze_sword: { type: 'melee', attack: 10, strength: 9, speed: 2600 } },
+    equipRequirements: { bronze_helm: { skill: 'defence', level: 1 }, bronze_sword: { skill: 'attack', level: 1 } },
+    foodHeal: { cooked_shrimp: 5, cooked_trout: 10 },
+    secretItems: ['dragonfang_greatblade'],
     enemyAttacks: { rat: [{ name: 'Gnaw', weight: 60, mult: 1, msg: 'gnaws', icon: '🐀' }] },
     potions: { weak_str_potion: { slot: 'damage', mult: 0.02, durMs: 120000, cdMs: 240000, family: 'strength' } },
   };
@@ -87,6 +91,10 @@ test('writeModelDb creates the derived projection', () => {
     assert.equal((db.all('SELECT COUNT(*) AS count FROM items')[0] as { count: number }).count, 2);
     assert.equal((db.all('SELECT item_id, price FROM shop WHERE item_id=?', 'log')[0] as { item_id: string; price: number }).price, 4);
     assert.equal((db.all('SELECT def FROM equipment WHERE item_id=?', 'bronze_helm')[0] as { def: number }).def, 5);
+    assert.equal((db.all('SELECT kind, req_skill, req_level FROM equipment WHERE item_id=?', 'bronze_helm')[0] as { kind: string; req_skill: string; req_level: number }).req_skill, 'defence');
+    assert.equal((db.all('SELECT kind, attack, req_skill, style FROM equipment WHERE item_id=?', 'bronze_sword')[0] as { kind: string; attack: number; req_skill: string; style: string }).kind, 'weapon');
+    assert.equal((db.all('SELECT attack FROM equipment WHERE item_id=?', 'bronze_sword')[0] as { attack: number }).attack, 10);
+    assert.equal((db.all('SELECT heal FROM food WHERE item_id=?', 'cooked_trout')[0] as { heal: number }).heal, 10);
     assert.equal((db.all('SELECT name FROM enemy_attacks WHERE enemy_id=?', 'rat')[0] as { name: string }).name, 'Gnaw');
     assert.equal((db.all('SELECT dur_ms FROM potions WHERE item_id=?', 'weak_str_potion')[0] as { dur_ms: number }).dur_ms, 120000);
     assert.equal((db.all('SELECT skill_id, automation FROM actions WHERE id=?', 'chop')[0] as { skill_id: string; automation: string }).skill_id, 'woodcutting');

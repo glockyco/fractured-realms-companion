@@ -32,6 +32,10 @@ export interface RawGameData {
   shopItems: string[];
   shopPriceMultiplier: number;
   equipment: Record<string, Record<string, unknown>>;
+  weapons: Record<string, Record<string, unknown>>;
+  equipRequirements: Record<string, { skill: string; level: number }>;
+  foodHeal: Record<string, number>;
+  secretItems: string[];
   enemyAttacks: Record<string, unknown[]>;
   potions: Record<string, Record<string, unknown>>;
 }
@@ -264,6 +268,64 @@ function extractEquipment(source: string): Record<string, Record<string, unknown
   return output;
 }
 
+// Weapons are a registry separate from armour (equipment): each carries a combat
+// style plus attack/strength/speed and, for special gear, rare modifiers (crit,
+// lifesteal, multishot, bleed, free-cast) preserved verbatim in the entry.
+function extractWeapons(source: string): Record<string, Record<string, unknown>> {
+  const at = anchor(source, 'fists:{type:"melee",attack:0,strength:0,speed:2400}', 'weapons');
+  const raw = object(evalLiteral(sliceEnclosing(source, at, '{'), 'weapons'), 'weapons');
+  const ids = Object.keys(raw);
+  if (ids.length < 10) fail('weapons', `expected at least 10 entries, got ${ids.length}`);
+  const output: Record<string, Record<string, unknown>> = Object.create(null) as Record<string, Record<string, unknown>>;
+  for (const id of ids) {
+    const entry = object(raw[id], 'weapons');
+    string(entry.type, 'weapons');
+    number(entry.attack, 'weapons');
+    number(entry.strength, 'weapons');
+    number(entry.speed, 'weapons');
+    output[id] = entry;
+  }
+  return output;
+}
+
+// Equip-level requirements live in two id-keyed tables the game merges at render:
+// armour (default skill defence) and weapons (default skill = weapon style).
+function extractEquipRequirements(source: string): Record<string, { skill: string; level: number }> {
+  const output: Record<string, { skill: string; level: number }> = Object.create(null) as Record<string, { skill: string; level: number }>;
+  for (const anchorText of ['bronze_helm:{skill:"defence",level:1}', 'bronze_dagger:{skill:"attack",level:1}']) {
+    const at = anchor(source, anchorText, 'equipRequirements');
+    const raw = object(evalLiteral(sliceEnclosing(source, at, '{'), 'equipRequirements'), 'equipRequirements');
+    for (const [id, value] of Object.entries(raw)) {
+      const entry = object(value, 'equipRequirements');
+      output[id] = { skill: string(entry.skill, 'equipRequirements'), level: number(entry.level, 'equipRequirements') };
+    }
+  }
+  if (Object.keys(output).length < 10) fail('equipRequirements', `expected at least 10 entries, got ${Object.keys(output).length}`);
+  return output;
+}
+
+// Base cooked-food heal values (id -> HP), distinct from recipe-meal heals.
+function extractFoodHeal(source: string): Record<string, number> {
+  const at = anchor(source, 'cooked_shrimp:5,cooked_beef:5', 'foodHeal');
+  const raw = object(evalLiteral(sliceEnclosing(source, at, '{'), 'foodHeal'), 'foodHeal');
+  const output: Record<string, number> = Object.create(null) as Record<string, number>;
+  for (const [id, value] of Object.entries(raw)) output[id] = number(value, 'foodHeal');
+  if (Object.keys(output).length < 5) fail('foodHeal', `expected at least 5 entries, got ${Object.keys(output).length}`);
+  return output;
+}
+
+// Boss-unique gear the compendium hides until found (two Sets of item ids).
+function extractSecretItems(source: string): string[] {
+  const output = new Set<string>();
+  for (const anchorText of ['new Set(["dragonfang_greatblade"', 'new Set(["goblin_crown"']) {
+    const at = anchor(source, anchorText, 'secretItems');
+    const bracket = source.indexOf('[', at);
+    const list = array(evalLiteral(sliceLiteral(source, bracket), 'secretItems'), 'secretItems');
+    for (const entry of list) output.add(string(entry, 'secretItems'));
+  }
+  return [...output].sort();
+}
+
 function extractEnemyAttacks(source: string): Record<string, unknown[]> {
   const at = anchor(source, '{giant_rat:[{name:"Gnaw",weight:60', 'enemyAttacks');
   const raw = object(evalLiteral(sliceEnclosing(source, at, '{'), 'enemyAttacks'), 'enemyAttacks');
@@ -436,6 +498,10 @@ export function extractRegistries(source: string, archiveFiles: readonly string[
 
   const shop = extractShop(source);
   const equipment = extractEquipment(source);
+  const weapons = extractWeapons(source);
+  const equipRequirements = extractEquipRequirements(source);
+  const foodHeal = extractFoodHeal(source);
+  const secretItems = extractSecretItems(source);
   const enemyAttacks = extractEnemyAttacks(source);
   const potions = extractPotions(source);
   return {
@@ -445,6 +511,10 @@ export function extractRegistries(source: string, archiveFiles: readonly string[
     zones, digsites, achievements, offlineGold, prestigeTitles: extractPrestigeTitles(source), stringsEn,
     shopItems: shop.items, shopPriceMultiplier: shop.multiplier,
     equipment,
+    weapons,
+    equipRequirements,
+    foodHeal,
+    secretItems,
     enemyAttacks,
     potions,
   };

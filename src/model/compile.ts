@@ -38,6 +38,8 @@ export interface GameModel {
   stringsEn: Record<string, string>;
   shop: Record<string, number>;
   equipment: Record<string, JsonRecord>;
+  weapons: Record<string, JsonRecord>;
+  foodHeal: Record<string, number>;
   enemyAttacks: Record<string, unknown[]>;
   potions: Record<string, JsonRecord>;
 }
@@ -91,6 +93,25 @@ export function compileModel(raw: RawGameData, buildId: string): GameModel {
     shop[id] = value * (raw.shopPriceMultiplier ?? 0);
   }
 
+  // Fold equip requirements + secret flag onto each gear item, mirroring the
+  // game's own render fallbacks (armour defaults to Defence, weapons to their
+  // style). `kind` discriminates the unified gear projection downstream.
+  const secretGear = new Set(raw.secretItems ?? []);
+  const equipReq = (id: string, fallbackSkill: string): { reqSkill: string; reqLevel: number } => {
+    const req = raw.equipRequirements?.[id];
+    return { reqSkill: req?.skill ?? fallbackSkill, reqLevel: typeof req?.level === 'number' ? req.level : 1 };
+  };
+  const equipment: Record<string, JsonRecord> = {};
+  for (const [id, value] of Object.entries(raw.equipment ?? {})) {
+    const row = record(value);
+    equipment[id] = { ...row, kind: 'armour', secret: secretGear.has(id), ...equipReq(id, 'defence') };
+  }
+  const weapons: Record<string, JsonRecord> = {};
+  for (const [id, value] of Object.entries(raw.weapons ?? {})) {
+    const row = record(value);
+    weapons[id] = { ...row, kind: 'weapon', secret: secretGear.has(id), ...equipReq(id, typeof row.type === 'string' ? row.type : 'attack') };
+  }
+
   return {
     schema_version: 1,
     build_id: buildId,
@@ -119,7 +140,9 @@ export function compileModel(raw: RawGameData, buildId: string): GameModel {
     prestigeTitles: raw.prestigeTitles,
     stringsEn: raw.stringsEn,
     shop,
-    equipment: raw.equipment,
+    equipment,
+    weapons,
+    foodHeal: raw.foodHeal,
     enemyAttacks: raw.enemyAttacks,
     potions: raw.potions,
   };

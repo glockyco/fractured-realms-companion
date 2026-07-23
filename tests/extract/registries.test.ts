@@ -43,6 +43,10 @@ function fixture(): string {
   const zones = '[{id:"thornwood",name:"Thornwood Outskirts",levelReq:1,enemies:[{id:"cow",hp:3,drops:[{id:"bones",chance:1,qty:1}],tags:[Xy]}]}]';
   const achievements = '[{id:"secret_millionaire",name:"Millionaire",icon:"coin",category:"Secrets",secret:true,desc:"Have gold",check:()=>true}]';
   const equipment = Array.from({ length: 100 }, (_, i) => `${i === 0 ? 'bronze_helm' : `helm_${i}`}:{slot:"helm",def:${i === 0 ? 5 : i + 1}}`).join(',');
+  const weapons = ['fists:{type:"melee",attack:0,strength:0,speed:2400}', ...Array.from({ length: 12 }, (_, i) => `wpn_${i}:{type:"melee",attack:${i + 1},strength:${i},speed:2600}`)].join(',');
+  const armourReq = ['bronze_helm:{skill:"defence",level:1}', ...Array.from({ length: 6 }, (_, i) => `helm_${i + 1}:{skill:"defence",level:${(i + 1) * 5}}`)].join(',');
+  const weaponReq = ['bronze_dagger:{skill:"attack",level:1}', ...Array.from({ length: 6 }, (_, i) => `wpn_${i}:{skill:"attack",level:${(i + 1) * 5}}`)].join(',');
+  const foodHeal = 'cooked_shrimp:5,cooked_beef:5,cooked_trout:10,cooked_bass:5,cooked_pheasant:10,cooked_rabbit:5';
   const enemyAttacks = Array.from({ length: 40 }, (_, i) => `${i === 0 ? 'giant_rat' : `enemy_${i}`}:[{name:"Gnaw",weight:60,mult:1,msg:"gnaws",icon:"🦷"}]`).join(',');
   const potionEntries = [
     'weak_str_potion:{slot:"damage",mult:.02,durMs:Li,cdMs:Di,family:"strength"}',
@@ -73,6 +77,11 @@ function fixture(): string {
     'const Xy="undead"; const ZONES=' + zones + ';',
     `const ACHIEVEMENTS=${achievements};`,
     `const EQUIPMENT={${equipment}};`,
+    `const WEAPONS={${weapons}};`,
+    `const ARMOUR_REQ={${armourReq}};`,
+    `const WEAPON_REQ={${weaponReq}};`,
+    `const FOOD={${foodHeal}};`,
+    'const SECRET_W=new Set(["dragonfang_greatblade","sanguine_edge"]);const SECRET_A=new Set(["goblin_crown","sunken_crown"]);',
     `const ENEMY_ATTACKS={${enemyAttacks}};`,
     potions,
     'const DIGS=[{id:"millhaven_ruins",name:"Ruins",levelReq:1}];',
@@ -114,6 +123,12 @@ test('extracts every raw registry from a synthetic bundle', () => {
   assert.equal(result.shopPriceMultiplier, 2);
   assert.equal(Object.keys(result.equipment).length, 100);
   assert.equal(result.equipment.bronze_helm.def, 5);
+  assert.equal(Object.keys(result.weapons).length >= 10, true);
+  assert.equal(result.weapons.fists.type, 'melee');
+  assert.equal(result.equipRequirements.bronze_helm.level, 1);
+  assert.equal(result.equipRequirements.bronze_dagger.skill, 'attack');
+  assert.equal(result.foodHeal.cooked_trout, 10);
+  assert.equal(result.secretItems.includes('goblin_crown'), true);
   assert.equal(Object.keys(result.enemyAttacks).length, 40);
   assert.equal(result.enemyAttacks.giant_rat[0] && (result.enemyAttacks.giant_rat[0] as Record<string, unknown>).name, 'Gnaw');
   assert.equal(result.potions.weak_str_potion.durMs, 120000);
