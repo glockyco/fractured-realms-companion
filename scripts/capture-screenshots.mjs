@@ -18,15 +18,14 @@ const CLOCK_MS = Date.UTC(2026, 0, 5, 14, 0, 0);
 
 // Staged queue showcasing the rebuild: a deep cross-skill item plan (whose
 // shared base materials are provisioned cumulatively), a skill-level target, and
-// a machine unlock whose plan contains manual purchase steps. Ids are resolved
-// against the committed fixture save + live model.json.
+// a Mithril Dagger target whose plan contains manual purchase steps. Ids are
+// resolved against the committed fixture save + live model.json.
 const STAGED_QUEUE = {
   goals: [
     { id: 'plan-1', target: { type: 'item', itemId: 'mithril_dagger', qty: 1 } },
     { id: 'plan-2', target: { type: 'level', skillId: 'woodcutting', level: 70 } },
-    { id: 'plan-3', target: { type: 'unlock', fact: 'machine:steam_forge' } },
   ],
-  nextPlanId: 4,
+  nextPlanId: 3,
 };
 
 async function toWebp(context, pngBuffer) {
@@ -48,6 +47,13 @@ async function toWebp(context, pngBuffer) {
   }
 }
 
+async function assertNoPlanOverlap(page) {
+  const overlap = await page.evaluate(() => {
+    const root = document.querySelector('#fractured-realms-companion')?.shadowRoot; const workspace = root?.querySelector('#fr-plan-result'); const executor = root?.querySelector('.executor');
+    if (!workspace || !executor) return true; return workspace.getBoundingClientRect().bottom > executor.getBoundingClientRect().top + 1;
+  });
+  if (overlap) throw new Error('Plan workspace intersects executor dock');
+}
 async function shoot(page, context, name, panel) {
   const png = await panel.screenshot({ animations: 'disabled' });
   const webp = await toWebp(context, png);
@@ -97,12 +103,18 @@ async function main() {
     await page.click('#fr-run');
     await page.waitForFunction(() => /running/i.test(document.querySelector('#fractured-realms-companion')?.shadowRoot?.querySelector('#fr-executor-phase')?.textContent || ''), { timeout: 15_000 });
     await page.locator('#fr-executor-progress').waitFor({ timeout: 10_000 });
+    await page.evaluate(() => { const root = document.querySelector('#fractured-realms-companion')?.shadowRoot; for (const selector of ['#fr-panel-plan', '.plan-view', '#fr-plan-result']) { const element = root?.querySelector(selector); if (element) { element.scrollTop = 0; element.scrollLeft = 0; } } });
+    await assertNoPlanOverlap(page);
     await shoot(page, context, 'action-planner', panel);
 
     // 4. Manual steps — scroll timeline to the first instruction card.
-    const card = page.locator('#fr-plan-result .plan-step:has(.instruction-card)').first();
-    await card.waitFor({ timeout: 10_000 });
-    await card.scrollIntoViewIfNeeded();
+    const cardSelector = '#fr-plan-result .plan-step:has(.instruction-card)';
+    await page.locator(cardSelector).first().waitFor({ timeout: 10_000 });
+    let scrolled = false;
+    for (let attempt = 0; attempt < 4 && !scrolled; attempt += 1) {
+      try { await page.locator(cardSelector).first().scrollIntoViewIfNeeded(); scrolled = true; } catch (error) { if (attempt === 3) throw error; await page.waitForTimeout(100); }
+    }
+    await assertNoPlanOverlap(page);
     await shoot(page, context, 'manual-steps', panel);
 
     // Stop the executor before teardown.

@@ -2,6 +2,7 @@ import { indexModel, liveBlocker, factSatisfied } from './engine/model.js';
 import { computeReach } from './engine/closure.js';
 import { resolveQueue } from './engine/queue.js';
 import { createDirectExecutor } from './executor.js';
+import { levelForXp } from './engine/formulas.js';
 
 export const DATA_FILES = Object.freeze([['model', 'model.json']]);
 
@@ -75,7 +76,28 @@ const CSS = `
   --fr-z-overlay: 2147483000;
   --fr-z-dropdown: 2147483001;
   --fr-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
-  color: var(--fr-neutral-100);
+  /* Semantic roles keep components independent from palette names. */
+  --fr-surface-canvas: var(--fr-neutral-1000);
+  --fr-surface-panel: var(--fr-neutral-950);
+  --fr-surface-control: var(--fr-neutral-900);
+  --fr-surface-hover: var(--fr-neutral-800);
+  --fr-border-subtle: var(--fr-neutral-800);
+  --fr-border-control: var(--fr-neutral-700);
+  --fr-text-primary: var(--fr-neutral-100);
+  --fr-text-secondary: var(--fr-neutral-300);
+  --fr-text-disabled: var(--fr-neutral-300);
+  --fr-state-signal: var(--fr-harbor-400);
+  --fr-state-signal-surface: var(--fr-harbor-950);
+  --fr-state-warning: var(--fr-brass-400);
+  --fr-state-warning-surface: var(--fr-brass-950);
+  --fr-state-danger: var(--fr-danger-400);
+  --fr-state-danger-surface: var(--fr-danger-950);
+  --fr-state-success: var(--fr-success-400);
+  --fr-state-success-surface: var(--fr-success-950);
+  --fr-space-control: var(--fr-s3);
+  --fr-space-pane: var(--fr-s4);
+  --fr-pane-rail: 16.5rem;
+  --fr-copy-measure: 68ch;
   font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-size: 0.875rem;
   line-height: 1.45;
@@ -175,7 +197,6 @@ svg {
   transition: color 180ms var(--fr-ease-out), background-color 180ms var(--fr-ease-out);
 }
 .icon-button:hover { background: var(--fr-neutral-900); color: var(--fr-neutral-100); }
-.tab-actions { display: flex; gap: var(--fr-s1); align-items: center; margin-left: auto; padding-bottom: 2px; }
 .icon-button.accent:not(:disabled) { color: var(--fr-harbor-400); }
 .icon-button.danger:not(:disabled) { color: var(--fr-danger-400); }
 .icon-button.attention { color: var(--fr-harbor-400); animation: attention 1.6s ease-in-out infinite; }
@@ -194,13 +215,15 @@ svg {
 .banner svg { margin-top: 0.1rem; }
 .banner strong { display: block; color: var(--fr-neutral-100); }
 .banner p { max-width: 68ch; margin: var(--fr-s1) 0 0; }
+.tabbar { display: flex; border-bottom: 1px solid var(--fr-neutral-800); background: var(--fr-neutral-950); }
 .tabs {
+  flex: 1 1 auto;
+  min-width: 0;
   display: flex;
   gap: var(--fr-s1);
   padding: var(--fr-s1) var(--fr-s3) 0;
-  border-bottom: 1px solid var(--fr-neutral-800);
-  background: var(--fr-neutral-950);
 }
+.queue-controls { flex: 0 0 auto; display: flex; align-items: center; gap: var(--fr-s1); padding: 0 var(--fr-s3); }
 .tab {
   min-height: var(--fr-control);
   padding: 0 var(--fr-s3);
@@ -346,11 +369,11 @@ h3 { margin: var(--fr-s5) 0 var(--fr-s2); font-size: 0.875rem; }
 .button.primary:hover { border-color: var(--fr-harbor-400); background: var(--fr-harbor-800); }
 .button.danger { border-color: var(--fr-danger-400); background: var(--fr-danger-950); color: var(--fr-danger-400); }
 .button:disabled, .icon-button:disabled, .control:disabled { cursor: not-allowed; opacity: 0.48; }
-.button:focus-visible, .icon-button:focus-visible, .launcher:focus-visible, .tab:focus-visible, .control:focus-visible, .search-control:focus-within, .item-row:focus-visible {
+.button:focus-visible, .icon-button:focus-visible, .launcher:focus-visible, .tab:focus-visible, .control:focus-visible, .search-control:focus-within, .item-row:focus-visible, .combobox-option:focus-visible, #fr-plan-compose-toggle:focus-visible, #fr-plan-compose-cancel:focus-visible, .compact-strip .icon-button:focus-visible, .executor-actions .button:focus-visible, #fr-clear-confirmation button:focus-visible {
   outline: 2px solid var(--fr-harbor-400);
   outline-offset: 2px;
 }
-.skills-view, .plan-view { padding: var(--fr-s4); }
+.skills-view { padding: var(--fr-s4); }
 .skills-toolbar { max-width: 24rem; margin-bottom: var(--fr-s2); }
 .skill-action-status { min-height: 1.25rem; margin: 0 0 var(--fr-s3); color: var(--fr-neutral-300); font-size: 0.75rem; }
 .skill-action-status[data-state="error"] { color: var(--fr-brass-400); }
@@ -364,71 +387,78 @@ th { position: sticky; top: 0; background: var(--fr-neutral-950); color: var(--f
 tbody tr:last-child td { border-bottom: 0; }
 .cell-title { display: block; color: var(--fr-neutral-100); font-weight: 600; }
 .cell-id { display: block; margin-top: var(--fr-s1); color: var(--fr-neutral-300); font-size: 0.6875rem; }
-.plan-form { display: flex; flex-wrap: wrap; align-items: end; gap: var(--fr-s2); padding-bottom: var(--fr-s4); border-bottom: 1px solid var(--fr-neutral-800); }
-.plan-form .field { flex: 1 1 8rem; }
+.plan-view { min-width: 0; min-height: 0; height: 100%; display: flex; flex-direction: column; overflow: hidden; }
+.plan-view > * { min-width: 0; }
+.plan-toolbar { flex: 0 0 auto; position: relative; display: flex; align-items: center; gap: var(--fr-s2); min-height: 3.5rem; padding: var(--fr-s3) var(--fr-space-pane); border-bottom: 1px solid var(--fr-border-subtle); background: var(--fr-surface-panel); }
+.plan-toolbar h2 { flex: 0 0 auto; }
+.plan-toolbar-summary { min-width: 0; color: var(--fr-text-secondary); font-size: 0.75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plan-toolbar-actions { display: flex; align-items: center; gap: var(--fr-s1); margin-left: auto; }
+.plan-toolbar-actions .button { white-space: nowrap; }
+#fr-clear-confirmation { display: flex; align-items: center; gap: var(--fr-s1); margin-left: auto; padding: var(--fr-s1) 0; color: var(--fr-text-secondary); font-size: 0.75rem; }
+#fr-clear-confirmation strong { margin-right: var(--fr-s1); color: var(--fr-text-primary); font-weight: 600; }
+.plan-composer { flex: 0 0 auto; padding: var(--fr-space-pane); border-bottom: 1px solid var(--fr-border-subtle); background: var(--fr-surface-canvas); }
+.plan-composer[hidden] { display: none; }
+.plan-form { display: flex; flex-wrap: wrap; align-items: end; gap: var(--fr-s2) var(--fr-s3); }
+.plan-form .field { flex: 1 1 9rem; }
 .plan-form .button { flex: 0 0 auto; }
-.plan-summary { display: flex; align-items: center; justify-content: space-between; gap: var(--fr-s3); margin: var(--fr-s4) 0 var(--fr-s2); }
-.plan-summary p { margin: var(--fr-s1) 0 0; color: var(--fr-neutral-300); }
-.step-index { width: 1.625rem; height: 1.625rem; display: inline-grid; place-items: center; border-radius: 999px; background: var(--fr-neutral-900); color: var(--fr-neutral-300); font-size: 0.6875rem; }
-.step-name { flex: 1 1 auto; font-weight: 650; }
-.step-qty { color: var(--fr-harbor-400); }
-.step-note { display: flex; align-items: flex-start; gap: var(--fr-s2); color: var(--fr-brass-400) !important; }
-.step-note svg { margin-top: 0.1rem; }
-.plan-step .step-inputs { color: var(--fr-brass-400); }
-.queue-header { display: flex; align-items: center; justify-content: space-between; gap: var(--fr-s3); margin-top: var(--fr-s5); }
-.queue-plan[data-state="blocked"] .queue-plan-title { color: var(--fr-brass-400); }
-.queue-header h3 { margin: 0; }
-.queue-total { color: var(--fr-neutral-300); font-size: 0.75rem; white-space: normal; text-align: right; }
-.plan-overview { margin: var(--fr-s4) 0 var(--fr-s2); }
-.plan-overview p { margin: var(--fr-s1) 0 0; font-size: 0.75rem; }
-.plan-overview-cost { color: var(--fr-neutral-100); }
-.plan-overview-presence { color: var(--fr-neutral-300); }
-.your-part { margin: var(--fr-s4) 0 var(--fr-s2); }
-.your-part h3 { margin: 0 0 var(--fr-s2); }
-.your-part-list { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--fr-neutral-800); }
-.your-part-item { display: flex; align-items: baseline; justify-content: space-between; gap: var(--fr-s3); padding: var(--fr-s2) 0; border-bottom: 1px solid var(--fr-neutral-800); }
-.your-part-item .yp-name { min-width: 0; overflow: hidden; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
-.your-part-item .yp-meta { flex: 0 0 auto; color: var(--fr-neutral-300); font-size: 0.75rem; white-space: nowrap; }
-.your-part-item[data-state="now"] .yp-name, .your-part-item[data-state="now"] .yp-meta { color: var(--fr-harbor-400); }
-.your-part-item[data-state="done"] .yp-name { color: var(--fr-success-400); }
-.queue-list { margin: var(--fr-s2) 0 0; padding: 0; list-style: none; border-top: 1px solid var(--fr-neutral-700); }
-.queue-plan { padding: var(--fr-s3) 0; border-bottom: 1px solid var(--fr-neutral-700); }
-.queue-plan[data-state="active"] { background: var(--fr-harbor-950); margin-inline: calc(-1 * var(--fr-s2)); padding-inline: var(--fr-s2); }
-.queue-plan[data-state="complete"] .queue-plan-title { color: var(--fr-success-400); }
-.queue-plan-top { display: flex; align-items: center; gap: var(--fr-s2); }
-.queue-plan-index { color: var(--fr-neutral-300); font-size: 0.75rem; }
-.queue-plan-title { min-width: 0; flex: 1 1 auto; overflow: hidden; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
-.queue-plan-meta { color: var(--fr-neutral-300); font-size: 0.75rem; white-space: nowrap; }
-.queue-plan-actions { display: flex; gap: var(--fr-s1); }
-.queue-plan-actions .icon-button { width: 1.875rem; height: 1.875rem; }
-.queue-steps { margin: var(--fr-s2) 0 0 1.625rem; padding: 0; list-style: none; }
-.queue-step { display: grid; grid-template-columns: 1.25rem minmax(0, 1fr) auto; align-items: center; gap: var(--fr-s2); min-height: 2rem; color: var(--fr-neutral-300); font-size: 0.75rem; }
-.queue-step[data-state="active"] { color: var(--fr-neutral-100); }
-.queue-step[data-state="complete"] { color: var(--fr-success-400); }
-.queue-step[data-kind="prerequisite"] { color: var(--fr-success-400); }
-.queue-step[data-kind="prerequisite"] .queue-step-marker { border-color: var(--fr-success-400); background: var(--fr-success-950); }
-.queue-step-detail { display: block; color: var(--fr-neutral-300); font-size: 0.6875rem; }
-.queue-step-marker { width: 1.125rem; height: 1.125rem; display: inline-grid; place-items: center; border: 1px solid var(--fr-neutral-700); border-radius: 999px; font-size: 0.625rem; }
-.queue-step[data-state="active"] .queue-step-marker { border-color: var(--fr-harbor-400); background: var(--fr-harbor-800); }
-.queue-step[data-state="complete"] .queue-step-marker { border-color: var(--fr-success-400); background: var(--fr-success-950); }
-.queue-step-time { white-space: nowrap; }
-.step-progress { grid-column: 2 / -1; width: 100%; height: 0.375rem; overflow: hidden; border: 0; border-radius: 999px; background: var(--fr-neutral-800); accent-color: var(--fr-harbor-400); }
-.step-progress::-webkit-progress-bar { background: var(--fr-neutral-800); }
-.step-progress::-webkit-progress-value { background: var(--fr-harbor-400); }
-.executor-progress { width: 100%; height: 0.375rem; margin-top: var(--fr-s2); overflow: hidden; border: 0; border-radius: 999px; background: var(--fr-neutral-800); accent-color: var(--fr-harbor-400); }
-.executor-progress::-webkit-progress-bar { background: var(--fr-neutral-800); }
-.executor-progress::-webkit-progress-value { background: var(--fr-harbor-400); }
-.executor {
-  position: sticky;
-  bottom: 0;
-  margin: var(--fr-s4) calc(-1 * var(--fr-s4)) calc(-1 * var(--fr-s4));
-  padding: var(--fr-s3) var(--fr-s4);
-  border-top: 1px solid var(--fr-neutral-700);
-  background: var(--fr-neutral-950);
-}
+.plan-form-actions { display: flex; gap: var(--fr-s1); }
+.field-help { margin: 0; color: var(--fr-text-secondary); font-size: 0.6875rem; line-height: 1.35; }
+#fr-plan-result { flex: 1 1 auto; min-width: 0; min-height: 0; overflow: auto; padding: var(--fr-space-pane); }
+#fr-plan-result .empty { color: var(--fr-text-secondary); font-size: 0.8125rem; line-height: 1.5; }
+.plan-queue-list { margin: 0; padding: 0; list-style: none; }
+.queue-plan { padding: var(--fr-s3) 0; }
+.queue-plan + .queue-plan { border-top: 1px solid var(--fr-border-subtle); }
+.queue-plan[data-active="true"] { border-left: 2px solid var(--fr-state-signal); margin-left: calc(-1 * var(--fr-s3)); padding-left: var(--fr-s3); }
+.queue-plan-top { display: flex; align-items: center; gap: var(--fr-s2); min-width: 0; }
+.queue-plan-index { flex: 0 0 auto; color: var(--fr-text-secondary); font-size: 0.75rem; }
+.queue-plan-title { min-width: 0; flex: 1 1 auto; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.8125rem; font-weight: 650; }
+.queue-plan-top .badge { flex: 0 0 auto; }
+.queue-plan-meta { flex: 0 0 auto; color: var(--fr-text-secondary); font-size: 0.75rem; white-space: nowrap; }
+.queue-plan-actions { flex: 0 0 auto; display: flex; flex-wrap: nowrap; align-items: center; gap: var(--fr-s1); margin-left: auto; }
+.queue-plan-actions .icon-button { width: var(--fr-control); height: var(--fr-control); }
+.queue-plan-actions .icon-button.danger { color: var(--fr-danger-400); }
+.queue-plan[data-state="done"] .queue-plan-title { color: var(--fr-state-success); }
+.queue-plan[data-state="blocked"] .queue-plan-title, .queue-plan[data-state="waiting"] .queue-plan-title { color: var(--fr-state-warning); }
+.queue-plan .badge[data-state="planned"] { border-color: var(--fr-harbor-800); color: var(--fr-state-signal); }
+.queue-plan .badge[data-state="done"] { border-color: var(--fr-success-400); background: var(--fr-state-success-surface); color: var(--fr-state-success); }
+.queue-plan .badge[data-state="blocked"], .queue-plan .badge[data-state="waiting"] { border-color: var(--fr-brass-700); background: var(--fr-state-warning-surface); color: var(--fr-state-warning); }
+.queue-plan-proximity, .target-explanation { margin: var(--fr-s2) 0 0 1.75rem; color: var(--fr-text-secondary); font-size: 0.75rem; line-height: 1.4; overflow-wrap: anywhere; }
+.queue-steps { margin: var(--fr-s2) 0 0 1.75rem; padding: 0; list-style: none; }
+.plan-step { display: grid; grid-template-columns: 1.5rem minmax(0, 1fr) auto; align-items: start; gap: var(--fr-s2); padding: var(--fr-s2) 0; }
+.plan-step + .plan-step { border-top: 1px solid var(--fr-border-subtle); }
+.step-marker { width: 1.25rem; height: 1.25rem; display: inline-grid; place-items: center; border: 1px solid var(--fr-border-control); border-radius: 999px; color: var(--fr-text-secondary); font-size: 0.625rem; }
+.plan-step[data-state="running"] .step-marker { border-color: var(--fr-state-signal); color: var(--fr-state-signal); }
+.plan-step[data-state="done"] .step-marker { border-color: var(--fr-success-400); color: var(--fr-state-success); }
+.plan-step[data-state="blocked"] .step-marker, .plan-step[data-state^="manual"] .step-marker { border-color: var(--fr-brass-700); color: var(--fr-state-warning); }
+.step-content { min-width: 0; }
+.step-content > strong { display: block; overflow-wrap: anywhere; line-height: 1.3; font-weight: 600; }
+.step-detail { display: block; margin-top: 0.125rem; color: var(--fr-text-secondary); font-size: 0.6875rem; line-height: 1.4; overflow-wrap: anywhere; }
+.step-state { display: inline-block; margin-top: 0.125rem; color: var(--fr-text-secondary); font-size: 0.6875rem; }
+.plan-step[data-state="running"] .step-state { color: var(--fr-state-signal); }
+.plan-step[data-state="blocked"] .step-state, .plan-step[data-state^="manual"] .step-state { color: var(--fr-state-warning); }
+.step-timing { flex: 0 0 auto; color: var(--fr-text-secondary); font-size: 0.6875rem; line-height: 1.35; text-align: right; white-space: nowrap; }
+.instruction-card { grid-column: 1 / -1; margin-top: var(--fr-s2); padding: var(--fr-s2) 0 0; border-top: 1px solid var(--fr-border-subtle); background: transparent; color: var(--fr-text-secondary); font-size: 0.6875rem; line-height: 1.4; }
+.instruction-card strong { display: block; color: var(--fr-text-primary); }
+.step-progress { grid-column: 1 / -1; width: 100%; height: 0.5rem; margin-top: var(--fr-s2); overflow: hidden; border: 0; border-radius: 999px; background: var(--fr-neutral-800); accent-color: var(--fr-state-signal); }
+.step-progress-text { grid-column: 1 / -1; margin-top: 0.125rem; color: var(--fr-text-secondary); font-size: 0.6875rem; }
+.step-progress::-webkit-progress-bar, .executor-progress::-webkit-progress-bar { background: var(--fr-neutral-800); }
+.step-progress::-webkit-progress-value, .executor-progress::-webkit-progress-value { background: var(--fr-state-signal); }
+.executor-progress { width: 100%; height: 0.375rem; margin-top: var(--fr-s2); overflow: hidden; border: 0; border-radius: 999px; background: var(--fr-neutral-800); accent-color: var(--fr-state-signal); }
+.plan-overview { display: grid; gap: var(--fr-s1); margin: var(--fr-s5) 0 var(--fr-s2); padding-top: var(--fr-s4); border-top: 1px solid var(--fr-border-subtle); }
+.plan-overview div { display: flex; justify-content: space-between; gap: var(--fr-s2); }
+.plan-overview dt { color: var(--fr-text-secondary); font-size: 0.75rem; }
+.plan-overview dd { margin: 0; }
+.plan-overview-presence { margin: var(--fr-s3) 0 0; color: var(--fr-text-secondary); font-size: 0.75rem; line-height: 1.45; }
+.plan-manual-list { margin-top: var(--fr-s4); border-top: 1px solid var(--fr-border-subtle); }
+.plan-manual-list summary { min-height: var(--fr-control); padding: var(--fr-s2) 0; cursor: pointer; }
+.plan-manual-list ul { margin: 0; padding: 0; list-style: none; }
+.manual-list-row { display: flex; justify-content: space-between; gap: var(--fr-s2); padding: var(--fr-s2) 0; border-top: 1px solid var(--fr-border-subtle); color: var(--fr-text-secondary); font-size: 0.75rem; }
+.manual-list-row[data-state="manual-now"] { color: var(--fr-state-warning); }
+.plan-edit-lock { margin: 0 0 var(--fr-s3); color: var(--fr-text-secondary); font-size: 0.75rem; }
+.executor { flex: 0 0 auto; min-width: 0; padding: var(--fr-s3) var(--fr-space-pane); border-top: 1px solid var(--fr-border-subtle); background: var(--fr-surface-panel); }
 .executor-status { min-width: 0; }
 .executor-status strong { display: block; }
-.executor-status p { display: flex; align-items: baseline; min-width: 0; gap: 0.35ch; margin: var(--fr-s1) 0 0; color: var(--fr-neutral-300); font-size: 0.75rem; }
+.executor-status p { min-width: 0; margin: var(--fr-s1) 0 0; color: var(--fr-text-secondary); font-size: 0.75rem; line-height: 1.4; overflow-wrap: anywhere; }
 .exec-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .exec-meta { flex: 0 0 auto; white-space: nowrap; }
 .loading-line { height: 0.25rem; overflow: hidden; background: var(--fr-neutral-900); }
@@ -440,7 +470,7 @@ tbody tr:last-child td { border-bottom: 0; }
   resize: none;
   grid-template-rows: auto auto;
 }
-.panel[data-compact="true"] .tabs,
+.panel[data-compact="true"] .tabbar,
 .panel[data-compact="true"] .tabpanels,
 .panel[data-compact="true"] .loading-line { display: none; }
 .panel[data-compact="true"] .compact-strip {
@@ -460,21 +490,33 @@ tbody tr:last-child td { border-bottom: 0; }
 @media (max-width: 40rem) {
   .panel { width: calc(100vw - (2 * var(--fr-panel-gap))); height: min(78dvh, calc(100dvh - 5rem)); resize: vertical; }
   .queue-plan-top { flex-wrap: wrap; }
-  .queue-plan-actions { margin-left: 1.625rem; }
+  .queue-plan-meta { order: 3; }
+  .queue-plan-actions { margin-left: 1.75rem; }
   .items-layout { display: block; }
   .item-browser { height: 48%; border-right: 0; border-bottom: 1px solid var(--fr-neutral-800); }
   .detail { height: 52%; }
   .plan-form .field, .plan-form .button { flex-basis: 100%; }
-  .skills-view, .plan-view, .detail { padding: var(--fr-s3); }
+  .skills-view, .detail { padding: var(--fr-s3); }
 }
 @media (max-width: 22rem) {
   .panel { border-radius: var(--fr-radius-md); }
   .tab { flex: 1 1 0; padding-inline: var(--fr-s2); }
-  .tab-actions { flex: 0 0 auto; }
   .toolbar { padding: var(--fr-s2); }
   .launcher-label { max-width: 12rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 }
-@media (prefers-reduced-motion: reduce) {
+@media (max-width: 40rem) {
+  .plan-form .field, .plan-form-actions { flex-basis: 100%; }
+  .plan-form-actions .button { flex: 1 1 0; }
+}
+@media (max-width: 22rem) {
+  .plan-toolbar { flex-wrap: wrap; }
+  .plan-toolbar-actions { width: 100%; margin-left: 0; }
+  .plan-toolbar-actions .button { flex: 1 1 0; }
+  .queue-plan-actions { margin-left: 0; }
+  .plan-step { grid-template-columns: 1.5rem minmax(0, 1fr); }
+  .step-timing { grid-column: 2 / -1; text-align: left; }
+}
+
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; }
 }
 `;
@@ -739,14 +781,6 @@ export function createOverlayShell(documentRef) {
     return button;
   });
 
-  const queueControls = makeElement(documentRef, 'div', {
-    class: 'tab-actions', role: 'group', 'aria-label': 'Queue controls',
-    html: `<button class="icon-button accent" id="fr-run" type="button" title="Start queue — stops your current game action" aria-label="Start queue" disabled>${ICONS.play}</button>`
-      + `<button class="icon-button" id="fr-resume" type="button" title="Resume queue" aria-label="Resume queue" hidden>${ICONS.resume}</button>`
-      + `<button class="icon-button danger" id="fr-stop" type="button" title="Stop queue" aria-label="Stop queue" disabled>${ICONS.stop}</button>`
-      + `<button class="icon-button" id="fr-clear" type="button" title="Clear queue" aria-label="Clear queue" disabled>${ICONS.clear}</button>`,
-  });
-  tabs.append(queueControls);
   const tabpanels = makeElement(documentRef, 'div', { class: 'tabpanels' });
   const panels = Object.fromEntries(TAB_IDS.map((tabId, index) => {
     const region = makeElement(documentRef, 'div', {
@@ -761,7 +795,13 @@ export function createOverlayShell(documentRef) {
     class: 'compact-strip',
     html: '<strong id="fr-compact-phase"></strong><p id="fr-compact-message"></p><progress class="executor-progress" id="fr-compact-progress" max="1" value="0"></progress><div class="compact-actions"><button class="icon-button accent" id="fr-compact-start" type="button" title="Start queue" aria-label="Start queue" hidden>' + ICONS.play + '</button><button class="icon-button" id="fr-compact-resume" type="button" title="Resume queue" aria-label="Resume queue" hidden>' + ICONS.resume + '</button><button class="icon-button danger" id="fr-compact-stop" type="button" title="Stop queue" aria-label="Stop queue">' + ICONS.stop + '</button></div>',
   });
-  panel.append(header, loading, error, tabs, tabpanels, compactStrip);
+  const queueControls = makeElement(documentRef, 'div', {
+    class: 'queue-controls', role: 'group', 'aria-label': 'Plan execution',
+    html: '<button class="icon-button accent" id="fr-run" type="button" title="Start plan" aria-label="Start plan">' + ICONS.play + '</button><button class="icon-button" id="fr-resume" type="button" title="Resume plan" aria-label="Resume plan" hidden>' + ICONS.resume + '</button><button class="icon-button danger" id="fr-stop" type="button" title="Stop plan" aria-label="Stop plan" hidden>' + ICONS.stop + '</button>',
+  });
+  const tabbar = makeElement(documentRef, 'div', { class: 'tabbar' });
+  tabbar.append(tabs, queueControls);
+  panel.append(header, loading, error, tabbar, tabpanels, compactStrip);
   shadow.append(style, launcher, panel);
   documentRef.body.append(host);
 
@@ -878,7 +918,7 @@ export function createOverlayShell(documentRef) {
     });
   });
   panel.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') {
+    if (event.key === 'Escape' && !event.defaultPrevented) {
       event.preventDefault();
       setOpen(false, true);
     }
@@ -890,7 +930,7 @@ export function createOverlayShell(documentRef) {
     if (!panel.hidden) fitPanel();
   });
 
-  return { host, shadow, launcher, panel, header, identity, compactToggle, compactStrip, close, loading, error, tabs, tabButtons, queueControls, panels, setOpen, setCompact, selectTab, showError };
+  return { host, shadow, launcher, panel, header, identity, compactToggle, compactStrip, close, loading, error, tabs, tabbar, queueControls, tabButtons, panels, setOpen, setCompact, selectTab, showError };
 }
 
 function blockedText(blocked) {
@@ -1010,6 +1050,9 @@ function createApplication(shell, modelJson, api) {
     executorStatus: { phase: 'idle', message: 'Add a target to begin.', stepStatuses: {}, runningStepId: null },
     queueStartedAt: null,
     nextPlanId: 1,
+    manualListOpen: false,
+    composerOpen: false,
+    lastAnnouncementKey: '',
   };
   const storage = documentRef.defaultView?.localStorage;
   const liveState = () => { try { return api.getState() || {}; } catch { return {}; } };
@@ -1055,7 +1098,7 @@ function createApplication(shell, modelJson, api) {
   };
   itemSearch.addEventListener('input', renderItemList);
   itemList.addEventListener('click', (event) => { const row = event.target.closest?.('[data-item-id]'); if (!row) return; state.selectedItemId = row.dataset.itemId; renderItemList(); renderItemDetail(); });
-  detail.addEventListener('click', (event) => { const button = event.target.closest?.('[data-plan-item]'); if (!button) return; state.selectedPlanItemId = button.dataset.planItem; planKind.value = 'item'; planItem.value = items[state.selectedPlanItemId]?.label || state.selectedPlanItemId; updateTargetFields(); shell.selectTab(2, true); });
+  detail.addEventListener('click', (event) => { const button = event.target.closest?.('[data-plan-item]'); if (!button) return; state.selectedPlanItemId = button.dataset.planItem; planKind.value = 'item'; planItem.value = items[state.selectedPlanItemId]?.label || state.selectedPlanItemId; updateTargetFields(); setComposerOpen(true, { focus: false }); shell.selectTab(2, false); planQty.focus?.(); planQty.select?.(); });
   detail.addEventListener('error', (event) => { if (event.target.matches?.('.item-art')) event.target.hidden = true; }, true);
 
   const skillsPanel = shell.panels.skills;
@@ -1070,23 +1113,21 @@ function createApplication(shell, modelJson, api) {
   skillTable.addEventListener('click', async (event) => { const button = event.target.closest?.('[data-start-action]'); if (!button || button.disabled || isExecutionLocked(state.executorStatus?.phase)) return; const skillId = button.dataset.skillId; const action = actionFor(skillId, button.dataset.actionId); if (!action) return; const blocker = liveBlocker(model, liveState(), { kind: 'action', skillId, actionId: action.id }); if (blocker) { skillStatus.textContent = `Blocked: ${factLabel(blocker)}`; skillStatus.dataset.state = 'error'; return; } try { await api.stopAction(); await api.startAction(skillId, action.id); skillStatus.textContent = `${actionName(action)} started.`; skillStatus.dataset.state = 'idle'; } catch (error) { skillStatus.textContent = error instanceof Error ? error.message : String(error); skillStatus.dataset.state = 'error'; } });
 
   const planPanel = shell.panels.plan;
-  planPanel.innerHTML = `<div class="plan-view"><form class="plan-form" id="fr-plan-form"><div class="field"><label for="fr-plan-target">Target type</label><select class="control" id="fr-plan-target"><option value="item">Item total</option><option value="item-gain">Item gain</option><option value="level">Skill level</option><option value="xp">Skill XP</option><option value="action">Action</option><option value="use-stock">Use up stock</option></select></div><div class="field" id="fr-plan-item-field"><label for="fr-plan-item">Desired item</label><div class="plan-combobox"><input class="control" id="fr-plan-item" type="search" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-controls="fr-plan-options" aria-expanded="false" autocomplete="off" placeholder="Search item names"><div class="combobox-popover" id="fr-plan-options" role="listbox" hidden></div></div></div><div class="field" id="fr-plan-skill-field" hidden><label for="fr-plan-skill">Skill</label><select class="control" id="fr-plan-skill"></select></div><div class="field" id="fr-plan-action-field" hidden><label for="fr-plan-action">Action</label><select class="control" id="fr-plan-action"></select></div><div class="field" id="fr-plan-qty-field"><label for="fr-plan-qty" id="fr-plan-qty-label">Quantity</label><input class="control data" id="fr-plan-qty" type="number" min="1" step="1" value="1" inputmode="numeric"></div><div class="field" id="fr-plan-mode-field" hidden><label for="fr-plan-action-mode">Action target</label><select class="control" id="fr-plan-action-mode"><option value="runs">Runs</option><option value="minutes">Minutes</option></select></div><button class="button" id="fr-resolve-plan" type="submit">Add target</button></form><p class="form-error" id="fr-plan-form-error" role="status" aria-live="polite" hidden></p><div id="fr-plan-result"><div class="empty">Add a target to begin a queue.</div></div><div class="executor" aria-label="Queue status"><div class="executor-status" role="status" aria-live="polite"><strong id="fr-executor-phase">Ready</strong><p id="fr-executor-message">Add a target to begin a queue.</p><progress class="executor-progress" id="fr-executor-progress" max="1" value="0" aria-label="Queue progress"></progress></div></div></div>`;
-  const planForm = planPanel.querySelector('#fr-plan-form'); const planFormError = planPanel.querySelector('#fr-plan-form-error'); const planKind = planPanel.querySelector('#fr-plan-target'); const planItem = planPanel.querySelector('#fr-plan-item'); const planOptions = planPanel.querySelector('#fr-plan-options'); const planSkill = planPanel.querySelector('#fr-plan-skill'); const planAction = planPanel.querySelector('#fr-plan-action'); const planQty = planPanel.querySelector('#fr-plan-qty'); const planQtyLabel = planPanel.querySelector('#fr-plan-qty-label'); const planMode = planPanel.querySelector('#fr-plan-action-mode');
+  planPanel.innerHTML = `<div class="plan-view"><div class="plan-toolbar" id="fr-plan-toolbar"><h2>Plan</h2><span id="fr-plan-toolbar-summary" class="plan-toolbar-summary"></span><div class="plan-toolbar-actions"><button class="button compact" id="fr-plan-compose-toggle" type="button" aria-expanded="false" aria-controls="fr-plan-composer">Add target</button><button class="button compact" id="fr-clear" type="button">${ICONS.clear} Clear all</button></div></div><section id="fr-plan-composer" class="plan-composer" aria-label="Add plan target"><form class="plan-form" id="fr-plan-form"><div class="field"><label for="fr-plan-target">Target type</label><select class="control" id="fr-plan-target"><option value="item">Reach item total</option><option value="item-gain">Gain items</option><option value="level">Reach skill level</option><option value="xp">Reach skill XP</option><option value="action">Run an action</option><option value="use-stock">Use current stock</option></select><p class="field-help" id="fr-plan-kind-help"></p></div><div class="field" id="fr-plan-item-field"><label for="fr-plan-item">Desired item</label><div class="plan-combobox"><input class="control" id="fr-plan-item" type="search" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-controls="fr-plan-options" aria-expanded="false" autocomplete="off" placeholder="Search item names"><div class="combobox-popover" id="fr-plan-options" role="listbox" hidden></div></div></div><div class="field" id="fr-plan-skill-field" hidden><label for="fr-plan-skill">Skill</label><select class="control" id="fr-plan-skill"></select></div><div class="field" id="fr-plan-action-field" hidden><label for="fr-plan-action">Action</label><select class="control" id="fr-plan-action"></select></div><div class="field" id="fr-plan-qty-field"><label for="fr-plan-qty" id="fr-plan-qty-label">Total quantity</label><input class="control data" id="fr-plan-qty" type="number" min="1" step="1" value="1" inputmode="numeric"></div><div class="field" id="fr-plan-mode-field" hidden><label for="fr-plan-action-mode">Measure by</label><select class="control" id="fr-plan-action-mode"><option value="runs">Runs</option><option value="minutes">Minutes</option></select></div><div class="plan-form-actions"><button class="button primary" id="fr-resolve-plan" type="submit">Add target</button><button class="button compact" id="fr-plan-compose-cancel" type="button">Cancel</button></div></form><p class="form-error" id="fr-plan-form-error" role="status" hidden></p></section><div id="fr-plan-result" class="plan-queue" aria-label="Plan targets and steps"></div><div class="executor" aria-label="Plan execution"><div class="executor-status"><strong id="fr-executor-phase">Ready to run</strong><p id="fr-executor-message">Add a target to begin.</p><progress class="executor-progress" id="fr-executor-progress" max="1" value="0" aria-label="Plan progress"></progress></div></div><div id="fr-plan-announcer" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></div></div>`;
+  const planForm = planPanel.querySelector('#fr-plan-form'); const planFormError = planPanel.querySelector('#fr-plan-form-error'); const planKind = planPanel.querySelector('#fr-plan-target'); const planItem = planPanel.querySelector('#fr-plan-item'); const planOptions = planPanel.querySelector('#fr-plan-options'); const planSkill = planPanel.querySelector('#fr-plan-skill'); const planAction = planPanel.querySelector('#fr-plan-action'); const planQty = planPanel.querySelector('#fr-plan-qty'); const planQtyLabel = planPanel.querySelector('#fr-plan-qty-label'); const planMode = planPanel.querySelector('#fr-plan-action-mode'); const composer = planPanel.querySelector('#fr-plan-composer'); const composeToggle = planPanel.querySelector('#fr-plan-compose-toggle'); const composeCancel = planPanel.querySelector('#fr-plan-compose-cancel'); const kindHelp = planPanel.querySelector('#fr-plan-kind-help'); const clearButton = planPanel.querySelector('#fr-clear'); const announcer = planPanel.querySelector('#fr-plan-announcer');
+  const kindCopy = { item: ['Reach item total', 'Reach an inventory total.', 'Total quantity'], 'item-gain': ['Gain items', 'Gain this many from your current inventory.', 'Quantity to gain'], level: ['Reach skill level', 'Reach a total skill level.', 'Target level'], xp: ['Reach skill XP', 'Reach a total skill XP value.', 'Target XP'], action: ['Run an action', 'Run one action for a count or duration.', 'Amount'], 'use-stock': ['Use current stock', 'Craft as much as your current inputs allow.', 'Amount'] };
+  const announcePlan = (message) => { if (announcer && announcer.textContent !== message) announcer.textContent = message; };
+  const setComposerOpen = (open, { focus = true } = {}) => { const enabled = Boolean(open); state.composerOpen = enabled; composer.hidden = !enabled; composeToggle.hidden = !state.queueGoals.length || enabled; composeToggle.setAttribute('aria-expanded', String(enabled)); if (enabled && focus) (planKind || composer).focus?.(); else if (!enabled && focus) composeToggle.focus?.(); };
   planSkill.innerHTML = skills.map((skill) => `<option value="${escapeHtml(skill.id)}">${escapeHtml(skillNames[skill.id] || skill.id)}</option>`).join('');
   if (!planKind.value) planKind.value = 'item';
   if (!planSkill.value) planSkill.value = skills[0]?.id || '';
   const renderActionOptions = () => { const actions = model._index.actionsBySkill.get(planSkill.value) || []; const special = planSkill.value === 'agility' ? (model.agilityCourses || []).map((course) => ({ id: course.id, name: course.name })) : planSkill.value === 'cartography' ? (model.maps || []).map((map) => ({ id: map.id, name: map.name })) : []; const options = actions.length ? actions : special; planAction.innerHTML = options.map((action) => `<option value="${escapeHtml(action.id)}">${escapeHtml(actionName(action))}</option>`).join(''); planAction.value = options[0]?.id || ''; };
-  const updateTargetFields = () => {
-    const kind = planKind.value; const itemKind = kind === 'item' || kind === 'item-gain' || kind === 'use-stock'; const skillKind = kind === 'level' || kind === 'xp' || kind === 'action';
-    planPanel.querySelector('#fr-plan-item-field').hidden = !itemKind; planPanel.querySelector('#fr-plan-skill-field').hidden = !skillKind; planPanel.querySelector('#fr-plan-action-field').hidden = kind !== 'action'; planPanel.querySelector('#fr-plan-mode-field').hidden = kind !== 'action';
-    planPanel.querySelector('#fr-plan-qty-field').hidden = kind === 'use-stock';
-    planQtyLabel.textContent = kind === 'level' ? 'Level' : kind === 'xp' ? 'XP' : kind === 'item-gain' ? 'Gain' : kind === 'action' ? 'Amount' : 'Quantity';
-    planQty.min = kind === 'level' ? '2' : '1';
-    renderActionOptions();
-  };
-  const setFormError = (message = '') => { planFormError.textContent = message; planFormError.hidden = !message; planFormError.dataset.state = message ? 'error' : 'idle'; };
+  const updateTargetFields = () => { const kind = planKind.value; const itemKind = kind === 'item' || kind === 'item-gain' || kind === 'use-stock'; const skillKind = kind === 'level' || kind === 'xp' || kind === 'action'; planPanel.querySelector('#fr-plan-item-field').hidden = !itemKind; planPanel.querySelector('#fr-plan-skill-field').hidden = !skillKind; planPanel.querySelector('#fr-plan-action-field').hidden = kind !== 'action'; planPanel.querySelector('#fr-plan-mode-field').hidden = kind !== 'action'; planPanel.querySelector('#fr-plan-qty-field').hidden = kind === 'use-stock'; const copy = kindCopy[kind] || kindCopy.item; kindHelp.textContent = copy[1]; planQtyLabel.textContent = copy[2]; planQty.min = '1'; renderActionOptions(); };
+  const setFormError = (message = '', field = null) => { planFormError.textContent = message; planFormError.hidden = !message; planFormError.dataset.state = message ? 'error' : 'idle'; for (const node of [planItem, planQty, planSkill, planAction]) { node.removeAttribute?.('aria-invalid'); node.removeAttribute?.('aria-describedby'); } if (message && field) { field.setAttribute('aria-invalid', 'true'); field.setAttribute('aria-describedby', 'fr-plan-form-error'); } };
   planKind.addEventListener('change', () => { setFormError(); updateTargetFields(); }); planSkill.addEventListener('change', () => { setFormError(); renderActionOptions(); });
-  planForm.addEventListener('submit', (event) => { event.preventDefault(); try { const target = makeTarget(); setFormError(); state.queueGoals.push({ id: `plan-${state.nextPlanId++}`, target }); persistQueue(); refreshQueue(); renderPlan(); } catch (error) { setFormError(error instanceof Error ? error.message : String(error)); } });  let planTargetResults = [];
+  composeToggle.addEventListener('click', () => setComposerOpen(composer.hidden)); composeCancel.addEventListener('click', () => setComposerOpen(false));
+  planForm.addEventListener('submit', (event) => { event.preventDefault(); try { const target = makeTarget(); setFormError(); const entry = { id: `plan-${state.nextPlanId++}`, target }; state.queueGoals.push(entry); persistQueue(); refreshQueue(); renderPlan(); announcePlan(`Added ${targetLabel(target)} as priority ${state.queueGoals.length}.`); setComposerOpen(false); } catch (error) { const message = error instanceof Error ? error.message : String(error); setFormError(message, message.includes('Choose an item') ? planItem : planQty); } });
+  let planTargetResults = [];
   let activePlanTarget = -1;
   const positionPlanOptions = () => {
     const rect = planItem.getBoundingClientRect?.() || { left: 8, bottom: 44, width: 240 };
@@ -1126,9 +1167,12 @@ function createApplication(shell, modelJson, api) {
   planOptions.addEventListener('click', (event) => { const button = event.target.closest?.('[data-plan-option]'); if (button) selectPlanItem(button.dataset.planOption); });
   shell.shadow.addEventListener?.('pointerdown', (event) => { if (event.target !== planItem && !planOptions.contains?.(event.target)) closeItemOptions(); });
   planPanel.addEventListener('scroll', (event) => { if (planOptions.contains?.(event.target)) return; closeItemOptions(); }, true);
+  planPanel.addEventListener('keydown', (event) => { if (event.key !== 'Escape') return; if (!planOptions.hidden) { event.preventDefault(); closeItemOptions(); return; } if (!composer.hidden && state.queueGoals.length) { event.preventDefault(); setComposerOpen(false); } });
   shell.close.addEventListener('click', closeItemOptions); documentRef.defaultView?.addEventListener?.('resize', closeItemOptions);
   const makeTarget = () => {
-    const kind = planKind.value; const amount = Math.max(1, Math.trunc(Number(planQty.value) || 0));
+    const kind = planKind.value; const rawAmount = Number(planQty.value);
+    if (kind !== 'use-stock' && (!Number.isFinite(rawAmount) || !Number.isInteger(rawAmount) || rawAmount < 1)) throw new Error('Enter a whole number of at least 1.');
+    const amount = rawAmount;
     if (kind === 'item' || kind === 'item-gain' || kind === 'use-stock') { const itemId = state.selectedPlanItemId || sortedItems.find(([id, item]) => String(item.label || '').toLocaleLowerCase() === planItem.value.trim().toLocaleLowerCase())?.[0]; if (!itemId || !items[itemId]) throw new Error('Choose an item from the search results.'); return kind === 'use-stock' ? { type: 'use-stock', itemId } : { type: kind, itemId, [kind === 'item' ? 'qty' : 'gain']: amount }; }
     if (kind === 'level') return { type: 'level', skillId: planSkill.value, level: amount };
     if (kind === 'xp') return { type: 'xp', skillId: planSkill.value, xp: amount };
@@ -1136,20 +1180,8 @@ function createApplication(shell, modelJson, api) {
   };
 
   let renderPlan;
-  const dependencyManual = (step, allSteps, status) => {
-    const byId = new Map((allSteps || []).map((candidate) => [candidate.id, candidate])); const seen = new Set();
-    const visit = (id) => {
-      if (seen.has(id)) return null; seen.add(id);
-      const dependency = byId.get(id); if (!dependency) return null;
-      if (dependency.kind === 'manual' && status.stepStatuses?.[dependency.id] !== 'done') return dependency;
-      for (const parentId of dependency.deps || []) { const found = visit(parentId); if (found) return found; }
-      return null;
-    };
-    for (const id of step.deps || []) { const found = visit(id); if (found) return found; }
-    return null;
-  };
   const stepProgress = (step, status) => {
-    if (status.runningStepId !== step.id) return null;
+    if (!step || status.runningStepId !== step.id) return null;
     const rawValue = typeof status.stepProgress === 'object' && status.stepProgress !== null ? status.stepProgress[step.id] : status.stepProgress ?? status.stepProduced ?? status.progressValue ?? 0;
     const rawMax = typeof status.stepProgressMax === 'object' && status.stepProgressMax !== null ? status.stepProgressMax[step.id] : status.stepProgressMax ?? status.stepTarget ?? step.expected?.runs;
     const value = rawValue && typeof rawValue === 'object' ? rawValue.value ?? rawValue.current : rawValue;
@@ -1171,40 +1203,23 @@ function createApplication(shell, modelJson, api) {
     } catch { return []; }
   };
   const renderExecutor = () => {
-    const status = state.executorStatus || {}; const phase = status.phase || 'idle'; const locked = isExecutionLocked(phase);
-    const phaseNode = planPanel.querySelector('#fr-executor-phase'); const messageNode = planPanel.querySelector('#fr-executor-message'); const progress = planPanel.querySelector('#fr-executor-progress');
-    const totalSteps = Number(status.totalSteps) || state.resolvedQueue.steps.length || 0; const completedSteps = Number(status.completedSteps) || 0;
-    const running = state.resolvedQueue.steps.find((step) => step.id === status.runningStepId);
-    const phaseText = phase[0]?.toUpperCase() + phase.slice(1);
-    phaseNode.textContent = phaseText;
-    const remainMs = Number(status.stepRemainingMs ?? running?.expected?.ms) || 0;
-    const nowMeta = phase === 'running' && running ? `${Math.min(totalSteps, completedSteps + 1)}/${totalSteps}${remainMs > 0 ? ` \u00b7 ~${formatDuration(remainMs)} left` : ''}` : '';
-    const baseMessage = status.message || (phase === 'waiting' ? 'Waiting for a runnable step.' : '');
-    messageNode.textContent = nowMeta ? `${baseMessage || running.label || 'Working'} \u00b7 ${nowMeta}` : baseMessage;
-    progress.max = Math.max(1, totalSteps); progress.value = Math.min(progress.max, completedSteps);
-    const runButton = shell.queueControls.querySelector('#fr-run'); const resumeButton = shell.queueControls.querySelector('#fr-resume'); const stopButton = shell.queueControls.querySelector('#fr-stop'); const clearButton = shell.queueControls.querySelector('#fr-clear');
-    runButton.disabled = !state.resolvedQueue.steps.length || locked;
-    stopButton.disabled = !locked; resumeButton.hidden = phase !== 'waiting';
-    clearButton.disabled = !state.queueGoals.length || locked;
-    clearButton.title = locked ? 'Clear queue when execution stops' : 'Clear queue'; clearButton.setAttribute('aria-label', clearButton.title);
-    for (const button of shell.panels.skills.querySelectorAll?.('[data-start-action]') || []) button.disabled = locked;
-    const launcherLabel = shell.launcher.querySelector?.('#fr-launcher-label');
-    if (launcherLabel) launcherLabel.textContent = phase === 'running'
-      ? `Companion · ${Math.min(totalSteps, completedSteps + (running ? 1 : 0))}/${totalSteps}`
-      : phase === 'waiting' ? 'Companion · waiting' : phase === 'complete' ? 'Companion · queue done' : phase === 'error' ? 'Companion · queue stopped' : 'Companion';
-    shell.launcher.dataset.state = phase === 'error' ? 'error' : 'ready';
-    const compactPhase = shell.compactStrip.querySelector('#fr-compact-phase'); const compactMessage = shell.compactStrip.querySelector('#fr-compact-message'); const compactProgress = shell.compactStrip.querySelector('#fr-compact-progress'); const compactStart = shell.compactStrip.querySelector('#fr-compact-start'); const compactResume = shell.compactStrip.querySelector('#fr-compact-resume'); const compactStop = shell.compactStrip.querySelector('#fr-compact-stop');
-    compactPhase.textContent = phaseText; compactMessage.textContent = messageNode.textContent;
-    compactProgress.max = Math.max(1, totalSteps); compactProgress.value = Math.min(compactProgress.max, completedSteps);
-    compactStart.hidden = !state.queueGoals.length || locked; compactStart.disabled = !state.resolvedQueue.steps.length;
-    compactResume.hidden = phase !== 'waiting'; compactResume.disabled = !state.resolvedQueue.steps.length; compactStop.hidden = !locked; compactStop.disabled = !locked;
-  };
-  const stepStatus = (step, live, status) => {
-    if (status.stepStatuses?.[step.id] === 'done') return 'done';
-    if (status.stepStatuses?.[step.id] === 'running') return 'running';
-    if (step.kind === 'manual') return 'waiting on you';
-    const blocker = liveBlocker(model, live, step); return blocker ? `blocked: ${factLabel(blocker)}` : 'ready';
-  };
+      const status = state.executorStatus || {}; const phase = status.phase || 'idle'; const locked = isExecutionLocked(phase); const result = state.resolvedQueue; const totalSteps = Number(status.totalSteps) || result.steps.length || 0; const completedSteps = Number(status.completedSteps) || 0; const running = result.steps.find((step) => step.id === status.runningStepId); const currentProgress = stepProgress(running, status); const fraction = currentProgress ? currentProgress.value / currentProgress.max : 0; const overall = Math.min(totalSteps, completedSteps + (running ? fraction : 0));
+      const phaseNode = planPanel.querySelector('#fr-executor-phase'); const messageNode = planPanel.querySelector('#fr-executor-message'); const progress = planPanel.querySelector('#fr-executor-progress'); const runButton = shell.queueControls.querySelector('#fr-run'); const resumeButton = shell.queueControls.querySelector('#fr-resume'); const stopButton = shell.queueControls.querySelector('#fr-stop');
+      const firstUnresolved = result.steps.find((step) => status.stepStatuses?.[step.id] !== 'done'); const blockedTarget = result.targets.find((entry) => entry?.blocked); let phaseText = 'Ready to run'; let message = 'Add a target to begin.';
+      if (phase === 'running') { phaseText = 'Running'; const remainMs = Number(status.stepRemainingMs ?? running?.expected?.ms) || 0; message = `${running?.label || 'Current action'} · step ${Math.min(totalSteps, completedSteps + 1)} of ${totalSteps}${remainMs > 0 ? ` · ~${formatDuration(remainMs)} left` : ''}`; } else if (phase === 'waiting') { phaseText = 'Needs you'; message = status.message || 'Complete the next manual step.'; } else if (phase === 'complete' || (state.queueGoals.length && totalSteps === 0)) { phaseText = 'Plan complete'; message = status.message || 'All targets are satisfied.'; } else if (phase === 'error') { phaseText = 'Plan stopped'; message = status.message || 'The plan stopped.'; } else if (status.message === 'Stopped') { phaseText = 'Stopped'; message = 'Stopped'; } else if (state.queueGoals.length && !result.steps.length && blockedTarget) { phaseText = 'Plan blocked'; message = `Resolve ${blockedTarget.blocked?.fact ? factLabel(blockedTarget.blocked.fact) : 'the blocker'} or remove the blocked target.`; } else if (state.queueGoals.length && firstUnresolved) { phaseText = 'Ready to run'; message = `First: ${firstUnresolved.label || firstUnresolved.id}. Starting stops your current game action.`; }
+      phaseNode.textContent = phaseText; messageNode.textContent = message; progress.max = Math.max(1, totalSteps); progress.value = overall; progress.setAttribute('aria-valuetext', currentProgress ? `${completedSteps} of ${totalSteps} steps complete, ${Math.round(currentProgress.value)} of ${currentProgress.max} runs in the current step` : `${completedSteps} of ${totalSteps} steps complete`);
+      const retry = phase === 'error' && result.steps.length; runButton.hidden = locked || !result.steps.length; runButton.disabled = !result.steps.length || locked; runButton.setAttribute('aria-label', retry ? 'Retry plan' : 'Start plan'); runButton.setAttribute('title', retry ? 'Retry plan' : 'Start plan'); resumeButton.hidden = phase !== 'waiting'; resumeButton.disabled = !result.steps.length; stopButton.hidden = !locked; stopButton.disabled = !locked; clearButton.disabled = !state.queueGoals.length || locked;
+      for (const button of planPanel.querySelectorAll?.('[data-queue-move], [data-queue-remove]') || []) { button.disabled = locked; if (locked) button.setAttribute('aria-describedby', 'fr-plan-edit-lock-hint'); else button.removeAttribute?.('aria-describedby'); } const confirmation = planPanel.querySelector('#fr-clear-confirmation'); if (confirmation) for (const button of confirmation.querySelectorAll?.('button') || []) button.disabled = locked; for (const button of shell.panels.skills.querySelectorAll?.('[data-start-action]') || []) button.disabled = locked;
+      const launcherLabel = shell.launcher.querySelector?.('#fr-launcher-label'); if (launcherLabel) launcherLabel.textContent = phase === 'running' ? `Companion · ${Math.min(totalSteps, completedSteps + (running ? 1 : 0))}/${totalSteps}` : phase === 'waiting' ? 'Companion · waiting' : phase === 'complete' ? 'Companion · plan done' : phase === 'error' ? 'Companion · plan stopped' : 'Companion'; shell.launcher.dataset.state = phase === 'error' ? 'error' : 'ready';
+      const compactPhase = shell.compactStrip.querySelector('#fr-compact-phase'); const compactMessage = shell.compactStrip.querySelector('#fr-compact-message'); const compactProgress = shell.compactStrip.querySelector('#fr-compact-progress'); const compactStart = shell.compactStrip.querySelector('#fr-compact-start'); const compactResume = shell.compactStrip.querySelector('#fr-compact-resume'); const compactStop = shell.compactStrip.querySelector('#fr-compact-stop'); compactPhase.textContent = phaseText; compactMessage.textContent = message; compactProgress.max = Math.max(1, totalSteps); compactProgress.value = overall; compactProgress.setAttribute('aria-valuetext', progress.getAttribute('aria-valuetext') || ''); compactStart.hidden = !state.queueGoals.length || locked; compactStart.disabled = !result.steps.length; compactResume.hidden = phase !== 'waiting'; compactResume.disabled = !result.steps.length; compactStop.hidden = !locked; compactStop.disabled = !locked;
+      const announcementKey = `${phase}|${status.runningStepId || ''}|${phase === 'waiting' ? message : ''}|${phase === 'error' ? message : ''}|${phase === 'complete' ? 'complete' : ''}`; if (state.lastAnnouncementKey !== announcementKey) { state.lastAnnouncementKey = announcementKey; if (phase === 'running' && running) announcePlan(`Running ${running.label || running.id}.`); else if (phase === 'waiting') announcePlan(message); else if (phase === 'complete') announcePlan('Plan complete.'); else if (phase === 'error') announcePlan(message); }
+    }
+  const stepPresentation = (step, allSteps, live, status) => {
+      const reported = status.stepStatuses?.[step.id]; if (reported === 'done') return { state: 'done', label: 'Done', blocker: null }; if (reported === 'running') return { state: 'running', label: 'Running', blocker: null };
+      const deps = (step.deps || []).map((id) => allSteps.find((candidate) => candidate.id === id)).filter(Boolean); const unfinished = deps.find((dependency) => status.stepStatuses?.[dependency.id] !== 'done');
+      if (step.kind === 'manual') return unfinished ? { state: 'manual-later', label: 'Needs you later', blocker: unfinished } : { state: 'manual-now', label: 'Needs you', blocker: null };
+      if (unfinished) return { state: 'later', label: 'Later', blocker: unfinished }; const blocker = liveBlocker(model, live, step); return blocker ? { state: 'blocked', label: `Blocked · ${factLabel(blocker)}`, blocker } : { state: 'ready', label: 'Ready', blocker: null };
+    }
   const planNum = (value) => Number(value) || 0;
   const planQtyText = (value) => { const n = planNum(value); if (Number.isInteger(n)) return n.toLocaleString(); return n < 1 ? n.toFixed(2) : n.toFixed(1); };
   // The item a step drives toward: its item-quantity stop, else its largest whole output.
@@ -1231,70 +1246,51 @@ function createApplication(shell, modelJson, api) {
     return `needs ${entries.map(([id, qty]) => `<span class="data">${escapeHtml(planQtyText(qty))}</span> ${escapeHtml(labelFor(items, id))}`).join(' \u00b7 ')}`;
   };
   // Live progress toward an inventory- or gold-denominated goal.
-  const goalProximityHtml = (target, live) => {
-    if (target?.type === 'item') return `<span class="data">${escapeHtml(planQtyText(live.inventory?.[target.itemId]))}</span> / <span class="data">${escapeHtml(planQtyText(target.qty))}</span> ${escapeHtml(labelFor(items, target.itemId))}`;
-    return '';
-  };
+  const goalProximityHtml = (target, live) => { if (target?.type === 'item') return `<span class="data">${escapeHtml(planQtyText(live.inventory?.[target.itemId]))}</span> / <span class="data">${escapeHtml(planQtyText(target.qty))}</span> ${escapeHtml(labelFor(items, target.itemId))}`; if (target?.type === 'item-gain') return `Current <span class="data">${escapeHtml(planQtyText(live.inventory?.[target.itemId]))}</span> · gain goal <span class="data">+${escapeHtml(planQtyText(target.gain))}</span>`; if (target?.type === 'level') { const current = levelForXp(model.xpTable, live.skillXp?.[target.skillId]); return `Level <span class="data">${current}</span> / <span class="data">${escapeHtml(planQtyText(target.level))}</span>`; } if (target?.type === 'xp') return `<span class="data">${escapeHtml(planQtyText(live.skillXp?.[target.skillId]))}</span> / <span class="data">${escapeHtml(planQtyText(target.xp))}</span> XP`; return ''; };
   renderPlan = () => {
-    const result = state.resolvedQueue; const live = liveState(); const status = state.executorStatus || {}; const locked = isExecutionLocked(status.phase); const labels = Object.fromEntries(state.queueGoals.map((entry) => [entry.id, targetLabel(entry.target)]));
-    const firstBlocked = result.targets.findIndex((entry) => !entry.ok);
-    const targetRows = state.queueGoals.map((goal, index) => {
-      const entry = result.targets[index]; const queuedBehind = !entry && firstBlocked >= 0 && index > firstBlocked; const blocked = entry?.blocked; const label = labels[goal.id] || targetLabel(goal.target);
-      const chain = blocked ? blockerChain(blocked, live) : [];
-      const satisfied = entry?.ok && (entry.steps?.length ?? 0) === 0;
-      const statusBadge = queuedBehind ? '<span class="badge warning">queued behind blocked target</span>' : satisfied ? '<span class="badge success">done</span>' : entry?.ok ? '<span class="badge signal">ready</span>' : entry ? '<span class="badge danger">blocked</span>' : '<span class="badge">queued</span>';
-      const blocker = blocked ? `<p class="banner warning">Blocked: ${escapeHtml(blocked.fact || '')}${blocked.reason ? ` · ${escapeHtml(blocked.reason)}` : ''}${chain.length ? `<br>Prerequisite chain: ${escapeHtml(chain.map(factLabel).join(' → '))}` : ''}</p>` : queuedBehind ? '<p class="banner warning">Not planned: queued behind the blocked target above.</p>' : '';
-      const controls = !locked ? `<div class="queue-plan-actions"><button class="icon-button" type="button" data-queue-move="top" data-queue-goal="${escapeHtml(goal.id)}"${index === 0 ? ' disabled' : ''} aria-label="Move ${escapeHtml(label)} to top" title="Move to top">${ICONS.top}</button><button class="icon-button" type="button" data-queue-move="up" data-queue-goal="${escapeHtml(goal.id)}"${index === 0 ? ' disabled' : ''} aria-label="Move ${escapeHtml(label)} up" title="Move up">${ICONS.up}</button><button class="icon-button" type="button" data-queue-move="down" data-queue-goal="${escapeHtml(goal.id)}"${index === state.queueGoals.length - 1 ? ' disabled' : ''} aria-label="Move ${escapeHtml(label)} down" title="Move down">${ICONS.down}</button><button class="icon-button" type="button" data-queue-remove="${escapeHtml(goal.id)}" aria-label="Remove ${escapeHtml(label)}" title="Remove target">${ICONS.remove}</button></div>` : '';
-      const proximity = entry?.ok ? goalProximityHtml(goal.target, live) : '';
-      const proximityRow = proximity ? `<p class="queue-plan-meta">${proximity}</p>` : '';
-      return `<section class="queue-plan" data-target-index="${index}" data-queued-behind-blocked="${queuedBehind}"><div class="queue-plan-top"><h3 class="queue-plan-title">${escapeHtml(label)} ${statusBadge}</h3>${controls}</div>${proximityRow}${blocker}</section>`;
-    }).join('');
-    const anchor = locked && Number.isFinite(Number(state.queueStartedAt)) ? Number(state.queueStartedAt) : Date.now();
-    const renderStepRow = (step) => {
-      const current = stepStatus(step, live, status); const per = result.perStep?.find((entry) => entry.id === step.id); const depManual = current !== 'done' && step.kind !== 'manual' ? dependencyManual(step, result.steps, status) : null;
-      const perMs = per ? Math.max(0, Number(per.endMs) - Number(per.startMs)) : 0;
-      const eta = depManual ? `after ${depManual.label || depManual.id}` : current === 'running' && Number(status.stepRemainingMs ?? step.expected?.ms) > 0 ? `about ${formatDuration(status.stepRemainingMs ?? step.expected?.ms)} left` : perMs > 0 ? `~${formatDuration(perMs)}` : '';
-      const readyAt = step.kind === 'manual' ? formatFinishTime(result.readyAt?.[step.id] || 0, anchor) : null; const progressState = stepProgress(step, status); const progressMarkup = progressState ? `<progress class="step-progress" max="${escapeHtml(progressState.max)}" value="${escapeHtml(progressState.value)}" aria-label="${escapeHtml(step.label || step.id)} progress"></progress>` : '';
-      const timing = [escapeHtml(eta), step.kind === 'manual' ? `ready for you at ~${escapeHtml(readyAt)}` : ''].filter(Boolean).join(' \u00b7 ');
-      const detailBits = [stepYieldHtml(step), timing].filter(Boolean).join(' \u00b7 ');
-      const inputsHtml = current.startsWith('blocked') ? stepInputsHtml(step) : '';
-      return `<li class="record-row plan-step" data-step-id="${escapeHtml(step.id)}"><div class="record-top"><strong>${escapeHtml(step.label || actionName(actionFor(step.skillId, step.actionId)) || step.id)}</strong><div class="badges"><span class="badge">${escapeHtml(step.purpose || 'goal')}</span><span class="badge" data-status="${escapeHtml(current)}">${escapeHtml(current)}</span></div></div>${detailBits ? `<p class="step-detail">${detailBits}</p>` : ''}${inputsHtml ? `<p class="step-inputs">${inputsHtml}</p>` : ''}${progressMarkup}${step.kind === 'manual' ? `<div class="instruction-card"><strong>Waiting for you</strong><p>${escapeHtml(step.instruction || step.label || 'Complete this step in the game.')}</p></div>` : ''}</li>`;
+      const result = state.resolvedQueue; const live = liveState(); const status = state.executorStatus || {}; const planResult = planPanel.querySelector('#fr-plan-result'); const firstBlocked = result.targets.findIndex((entry) => !entry.ok); const anchor = isExecutionLocked(status.phase) && Number.isFinite(Number(state.queueStartedAt)) ? Number(state.queueStartedAt) : Date.now();
+      const targetDone = (target, entry) => { if (!entry?.ok) return false; if (target.type === 'item') return planNum(live.inventory?.[target.itemId]) >= planNum(target.qty); if (target.type === 'level') return levelForXp(model.xpTable, live.skillXp?.[target.skillId]) >= target.level; if (target.type === 'xp') return planNum(live.skillXp?.[target.skillId]) >= target.xp; return (entry.steps || []).length === 0 || (entry.steps || []).every((step) => status.stepStatuses?.[step.id] === 'done'); };
+      const renderStepRow = (step, stepNumber) => {
+        const presentation = stepPresentation(step, result.steps, live, status);
+        const per = result.perStep?.find((e) => e.id === step.id); const perMs = per ? Math.max(0, Number(per.endMs) - Number(per.startMs)) : 0;
+        let stateText = presentation.label;
+        if (presentation.state === 'later') { const laterDeps = (step.deps || []).map((id) => result.steps.find((s) => s.id === id)).filter((d) => d && status.stepStatuses?.[d.id] !== 'done'); const binding = laterDeps.reduce((a, b) => (planNum(result.perStep?.find((e) => e.id === b.id)?.endMs) > planNum(result.perStep?.find((e) => e.id === a.id)?.endMs) ? b : a), laterDeps[0]); stateText = binding ? `waiting for ${binding.label || binding.id}` : 'waiting for earlier work'; }
+        const timeText = presentation.state === 'running' && Number(status.stepRemainingMs) > 0 ? `~${formatDuration(status.stepRemainingMs)} left` : presentation.state === 'manual-later' ? `~${formatFinishTime(result.readyAt?.[step.id] || 0, anchor)}` : perMs > 0 ? `~${formatDuration(perMs)}` : '';
+        const showState = ['running', 'blocked', 'manual-now', 'manual-later', 'later'].includes(presentation.state);
+        const marker = presentation.state === 'done' ? ICONS.check : String(stepNumber);
+        const progressState = stepProgress(step, status); const pct = progressState ? Math.round((progressState.value / progressState.max) * 100) : 0;
+        const progressMarkup = progressState ? `<progress class="step-progress" max="${escapeHtml(progressState.max)}" value="${escapeHtml(progressState.value)}" aria-label="${escapeHtml(step.label || step.id)}: ${escapeHtml(progressState.value)} of ${escapeHtml(progressState.max)} runs"></progress><span class="step-progress-text data">${escapeHtml(planQtyText(progressState.value))} / ${escapeHtml(planQtyText(progressState.max))} · ${pct}%</span>` : '';
+        const instruction = step.kind === 'manual' && presentation.state !== 'done' ? '<p class="instruction-card">Do it in-game to continue.</p>' : '';
+        const detailHtml = [stepYieldHtml(step), stepInputsHtml(step)].filter(Boolean).join(' · ');
+        return `<li class="plan-step" data-step-id="${escapeHtml(step.id)}" data-state="${presentation.state}"><span class="step-marker">${marker}</span><div class="step-content"><strong>${escapeHtml(step.label || actionName(actionFor(step.skillId, step.actionId)) || step.id)}</strong>${detailHtml ? `<span class="step-detail">${detailHtml}</span>` : ''}${showState ? `<span class="step-state" data-state="${presentation.state}">${escapeHtml(stateText)}</span>` : ''}${instruction}${progressMarkup}</div>${timeText ? `<span class="step-timing data">${escapeHtml(timeText)}</span>` : ''}</li>`;
+      };
+      const runningId = status.runningStepId;
+      const targetCards = state.queueGoals.map((goal, index) => {
+        const entry = result.targets[index]; const waiting = !entry && firstBlocked >= 0 && index > firstBlocked; const blocked = entry?.blocked; const label = targetLabel(goal.target); const done = targetDone(goal.target, entry);
+        const stateName = done ? 'done' : blocked ? 'blocked' : waiting ? 'waiting' : entry?.ok ? 'planned' : 'queued';
+        const stateLabel = done ? 'Done' : blocked ? 'Blocked' : waiting ? 'Waiting' : entry?.ok ? 'Planned' : 'Queued';
+        const chain = blocked ? blockerChain(blocked, live) : [];
+        const explanation = blocked ? `<p class="target-explanation">${blocked.fact ? `Blocked by ${escapeHtml(factLabel(blocked.fact))}` : 'Unable to resolve this target.'}${chain.length ? `<br>Prerequisite chain: ${escapeHtml(chain.map(factLabel).join(' → '))}` : ''}</p>` : waiting ? '<p class="target-explanation">Waiting for the blocked target above.</p>' : '';
+        const proximity = entry?.ok ? goalProximityHtml(goal.target, live) : ''; const proximityRow = proximity ? `<p class="queue-plan-proximity">${proximity}</p>` : '';
+        const steps = entry?.steps || []; const cardActive = steps.some((s) => s.id === runningId);
+        const cardMs = steps.reduce((sum, s) => { const p = result.perStep?.find((e) => e.id === s.id); return sum + (p ? Math.max(0, Number(p.endMs) - Number(p.startMs)) : 0); }, 0);
+        const cardMeta = steps.length ? `${steps.length} ${steps.length === 1 ? 'step' : 'steps'}${cardMs > 0 ? ` · ~${formatDuration(cardMs)}` : ''}` : (blocked ? 'blocked' : done ? 'done' : waiting ? 'waiting' : '');
+        const lockHint = isExecutionLocked(status.phase) ? ' aria-describedby="fr-plan-edit-lock-hint" disabled' : '';
+        const controls = `<span class="queue-plan-actions"><button class="icon-button" type="button" data-queue-move="top" data-queue-goal="${escapeHtml(goal.id)}"${index === 0 ? ' disabled' : ''}${lockHint} aria-label="Move ${escapeHtml(label)} to top" title="Move to top">${ICONS.top}</button><button class="icon-button" type="button" data-queue-move="up" data-queue-goal="${escapeHtml(goal.id)}"${index === 0 ? ' disabled' : ''}${lockHint} aria-label="Move ${escapeHtml(label)} up" title="Move up">${ICONS.up}</button><button class="icon-button" type="button" data-queue-move="down" data-queue-goal="${escapeHtml(goal.id)}"${index === state.queueGoals.length - 1 ? ' disabled' : ''}${lockHint} aria-label="Move ${escapeHtml(label)} down" title="Move down">${ICONS.down}</button><button class="icon-button danger" type="button" data-queue-remove="${escapeHtml(goal.id)}"${lockHint} aria-label="Remove ${escapeHtml(label)}" title="Remove">${ICONS.remove}</button></span>`;
+        const stepRows = steps.map((step, i) => renderStepRow(step, i + 1)).join(''); const stepsList = stepRows ? `<ol class="queue-steps">${stepRows}</ol>` : '';
+        return `<li class="queue-plan" data-target-id="${escapeHtml(goal.id)}" data-state="${stateName}"${cardActive ? ' data-active="true"' : ''}><div class="queue-plan-top"><span class="queue-plan-index data">${String(index + 1).padStart(2, '0')}</span><h3 class="queue-plan-title">${escapeHtml(label)}</h3><span class="badge" data-state="${stateName}">${stateLabel}</span>${cardMeta ? `<span class="queue-plan-meta">${escapeHtml(cardMeta)}</span>` : ''}${controls}</div>${proximityRow}${explanation}${stepsList}</li>`;
+      }).join('');
+      const manualSteps = result.steps.filter((step) => step.kind === 'manual'); const pendingManual = manualSteps.filter((step) => status.stepStatuses?.[step.id] !== 'done').sort((a, b) => planNum(result.readyAt?.[a.id]) - planNum(result.readyAt?.[b.id])); const manualNow = manualSteps.some((step) => stepPresentation(step, result.steps, live, status).state === 'manual-now'); const goldCost = result.steps.reduce((sum, step) => sum + planNum(model._index.providersById?.get(step.providerId)?.consumesGold), 0); const nextManual = pendingManual[0];
+      const overview = `<dl class="plan-overview" id="fr-queue-total"><div><dt>Estimate</dt><dd class="data">≈${escapeHtml(formatDuration(result.optimisticMs || 0))}</dd></div>${goldCost > 0 ? `<div><dt>Cost</dt><dd class="data">${escapeHtml(planQtyText(goldCost))}g</dd></div>` : ''}<div><dt>Manual stops</dt><dd class="data">${pendingManual.length}</dd></div></dl>`;
+      const presence = nextManual ? `<p class="plan-overview-presence">Runs ~${escapeHtml(formatDuration(result.schedulerMs || 0))} before it needs you.<br>Next: ${escapeHtml(nextManual.label || nextManual.id)} at ~${escapeHtml(formatFinishTime(result.readyAt?.[nextManual.id] || 0, anchor))}.</p>` : '<p class="plan-overview-presence">Runs fully unattended.</p>';
+      const manualRows = manualSteps.map((step) => { const presentation = stepPresentation(step, result.steps, live, status); const ready = result.readyAt?.[step.id] || 0; return `<li class="manual-list-row" data-state="${presentation.state}"><span>${escapeHtml(step.label || step.id)}</span><span class="data">${presentation.state === 'manual-now' ? 'ready' : presentation.state === 'done' ? 'done' : `~${escapeHtml(formatFinishTime(ready, anchor))}`}</span></li>`; }).join('');
+      const warning = result.infeasibility ? `<p class="banner warning" role="status">${ICONS.warning}<span>Simulation warning: ${escapeHtml(result.steps.find((step) => step.id === result.infeasibility.stepId)?.label || 'step')}.</span></p>` : '';
+      const lockNote = isExecutionLocked(status.phase) ? '<p class="plan-edit-lock" role="note">Stop the plan to edit targets.</p>' : '';
+      planResult.innerHTML = state.queueGoals.length ? `${lockNote}${warning}<ol class="plan-queue-list">${targetCards}</ol>${overview}${presence}${manualSteps.length ? `<details class="plan-manual-list"${manualNow || state.manualListOpen ? ' open' : ''}><summary>Manual stops (${pendingManual.length})</summary><ul>${manualRows}</ul></details>` : ''}<p id="fr-plan-edit-lock-hint" class="visually-hidden">Stop the plan to edit targets.</p>` : '<div class="empty">What do you want to achieve?<br>Add an item, skill, or action target. The companion will show every prerequisite before anything runs.</div>';
+      const summary = planPanel.querySelector('#fr-plan-toolbar-summary'); if (summary) { const stepsN = result.steps.length; summary.textContent = stepsN ? `${state.queueGoals.length} ${state.queueGoals.length === 1 ? 'target' : 'targets'} · ${stepsN} ${stepsN === 1 ? 'step' : 'steps'} · ${pendingManual.length} manual · ~${formatDuration(result.optimisticMs || 0)}${goldCost > 0 ? ` · ${planQtyText(goldCost)}g` : ''}` : ''; summary.hidden = !stepsN; }
+      if (state.queueGoals.length === 0) setComposerOpen(true, { focus: false }); else if (!state.composerOpen) setComposerOpen(false, { focus: false });
+      renderExecutor();
     };
-    const rows = (result.steps || []).map(renderStepRow).join('');
-    const manualSteps = (result.steps || []).filter((step) => step.kind === 'manual');
-    const pendingManual = manualSteps.filter((step) => status.stepStatuses?.[step.id] !== 'done').sort((a, b) => planNum(result.readyAt?.[a.id]) - planNum(result.readyAt?.[b.id]));
-    const goldCost = (result.steps || []).reduce((sum, step) => sum + planNum(model._index.providersById?.get(step.providerId)?.consumesGold), 0);
-    const summaryBits = [`\u2248${formatDuration(result.optimisticMs || 0)} attended`];
-    if (goldCost > 0) summaryBits.push(`${planQtyText(goldCost)}g`);
-    summaryBits.push(`${pendingManual.length} manual stop${pendingManual.length === 1 ? '' : 's'}`);
-    const nextManual = pendingManual[0];
-    const unattendedMs = result.schedulerMs || 0;
-    const runsUnattended = unattendedMs >= 1000;
-    const nextManualBit = nextManual ? `next: ${escapeHtml(nextManual.label || nextManual.id)} ~${escapeHtml(formatFinishTime(result.readyAt?.[nextManual.id] || 0, anchor))}` : '';
-    const presence = pendingManual.length
-      ? [runsUnattended ? `Runs ~${formatDuration(unattendedMs)} unattended` : 'Needs you throughout', nextManualBit].filter(Boolean).join(' \u00b7 ')
-      : 'Runs fully unattended';
-    const totals = state.queueGoals.length ? `<div class="plan-overview" id="fr-queue-total"><p class="plan-overview-cost data">${escapeHtml(summaryBits.join(' \u00b7 '))}</p><p class="plan-overview-presence">${presence}</p></div>` : '';
-    const infeasibility = result.infeasibility ? `<p class="banner warning" role="status">${ICONS.warning}<span>Simulation warning: ${escapeHtml(result.steps.find((step) => step.id === result.infeasibility.stepId)?.label || result.infeasibility.stepId || 'unknown step')} · ${escapeHtml(result.infeasibility.reason || 'infeasible')}</span></p>` : '';
-    const manualStepRow = (step) => {
-      const done = status.stepStatuses?.[step.id] === 'done';
-      const gold = planNum(model._index.providersById?.get(step.providerId)?.consumesGold);
-      const cost = gold > 0 ? `${planQtyText(gold)}g` : '';
-      let stateName; let when;
-      if (done) { stateName = 'done'; when = 'done'; }
-      else {
-        const gate = dependencyManual(step, result.steps, status); const ready = planNum(result.readyAt?.[step.id]);
-        if (gate) { stateName = 'gated'; when = `after ${gate.label || gate.id}`; }
-        else if (ready <= 0) { stateName = 'now'; when = 'do now'; }
-        else { stateName = 'later'; when = `~${formatFinishTime(ready, anchor)}`; }
-      }
-      const meta = [cost, when].filter(Boolean).join(' \u00b7 ');
-      return `<li class="your-part-item" data-state="${stateName}"><span class="yp-name">${escapeHtml(step.label || step.id)}</span><span class="yp-meta">${escapeHtml(meta)}</span></li>`;
-    };
-    const yourPart = manualSteps.length ? `<section class="your-part" aria-label="Steps that need you"><h3>Your part</h3><ul class="your-part-list">${manualSteps.map(manualStepRow).join('')}</ul></section>` : '';
-    planPanel.querySelector('#fr-plan-result').innerHTML = state.queueGoals.length ? `${targetRows}${totals}${yourPart}${infeasibility}<h3>Timeline</h3><ol class="record-list">${rows || '<li class="empty">No steps required; targets are already satisfied.</li>'}</ol>` : '<div class="empty">Add a target to begin a queue.</div>';
-    renderExecutor();
-  };
   const targetActionLabel = (target) => actionName(actionFor(target.skillId, target.actionId) || (target.skillId === 'agility' ? (model.agilityCourses || []).find((course) => course.id === target.actionId) : target.skillId === 'cartography' ? (model.maps || []).find((map) => map.id === target.actionId) : null));
   const targetLabel = (target) => { if (!target) return 'Target'; if (target.type === 'item' || target.type === 'item-gain') return `${target.type === 'item-gain' ? 'Gain' : 'Reach'} ${target.qty ?? target.gain} ${labelFor(items, target.itemId)}`; if (target.type === 'use-stock') return `Make ${labelFor(items, target.itemId)} from stock`; if (target.type === 'level') return `${skillNames[target.skillId] || target.skillId} level ${target.level}`; if (target.type === 'xp') return `${skillNames[target.skillId] || target.skillId} XP ${target.xp}`; if (target.type === 'action') return `${targetActionLabel(target)} · ${target.runs ? `${target.runs} runs` : `${target.minutes} minutes`}`; return 'Target'; };
 
@@ -1302,9 +1298,10 @@ function createApplication(shell, modelJson, api) {
   const runQueue = () => { if (isExecutionLocked(state.executorStatus?.phase)) return; refreshQueue(); if (state.resolvedQueue.steps.length) { state.queueStartedAt = Date.now(); renderPlan(); executor.run(state.resolvedQueue.steps); } };
   const resumeQueue = () => { if (state.executorStatus?.phase !== 'waiting') return; refreshQueue(); if (state.resolvedQueue.steps.length) { state.queueStartedAt ??= Date.now(); executor.run(state.resolvedQueue.steps); } };
   const stopQueue = () => { state.queueStartedAt = null; executor.stop(); };
-  shell.queueControls.querySelector('#fr-run').addEventListener('click', runQueue); shell.queueControls.querySelector('#fr-resume').addEventListener('click', resumeQueue); shell.queueControls.querySelector('#fr-stop').addEventListener('click', stopQueue); shell.queueControls.querySelector('#fr-clear').addEventListener('click', () => { if (isExecutionLocked(state.executorStatus?.phase)) return; state.queueGoals = []; state.resolvedQueue = { steps: [], targets: [] }; state.queueStartedAt = null; persistQueue(); renderPlan(); });
+  shell.queueControls.querySelector('#fr-run').addEventListener('click', runQueue); shell.queueControls.querySelector('#fr-resume').addEventListener('click', resumeQueue); shell.queueControls.querySelector('#fr-stop').addEventListener('click', stopQueue);
+  clearButton.addEventListener('click', () => { if (isExecutionLocked(state.executorStatus?.phase)) return; const existing = planPanel.querySelector('#fr-clear-confirmation'); if (existing) return; const confirmation = documentRef.createElement('div'); confirmation.id = 'fr-clear-confirmation'; confirmation.innerHTML = '<strong>Clear all targets?</strong><button class="button compact" id="fr-clear-cancel" type="button">Cancel</button><button class="button compact danger" id="fr-clear-confirm" type="button">Clear</button>'; planPanel.querySelector('#fr-plan-toolbar').append(confirmation); confirmation.querySelector('#fr-clear-cancel')?.addEventListener('click', () => { confirmation.remove?.(); clearButton.focus?.(); }); confirmation.querySelector('#fr-clear-confirm')?.addEventListener('click', () => { state.queueGoals = []; state.resolvedQueue = { steps: [], targets: [] }; state.queueStartedAt = null; persistQueue(); confirmation.remove?.(); announcePlan('All targets cleared.'); renderPlan(); }); });
   shell.compactStrip.querySelector('#fr-compact-start').addEventListener('click', runQueue); shell.compactStrip.querySelector('#fr-compact-resume').addEventListener('click', resumeQueue); shell.compactStrip.querySelector('#fr-compact-stop').addEventListener('click', stopQueue);
-  planPanel.addEventListener('click', (event) => { if (isExecutionLocked(state.executorStatus?.phase)) return; const move = event.target.closest?.('[data-queue-move]'); if (move) { const dir = move.dataset.queueMove; const from = state.queueGoals.findIndex((goal) => goal.id === move.dataset.queueGoal); if (from < 0) return; const to = dir === 'top' ? 0 : dir === 'up' ? from - 1 : from + 1; if (to < 0 || to >= state.queueGoals.length) return; const [moved] = state.queueGoals.splice(from, 1); state.queueGoals.splice(to, 0, moved); persistQueue(); refreshQueue(); renderPlan(); return; } const remove = event.target.closest?.('[data-queue-remove]'); if (!remove) return; const index = state.queueGoals.findIndex((goal) => goal.id === remove.dataset.queueRemove); if (index < 0) return; state.queueGoals.splice(index, 1); persistQueue(); refreshQueue(); renderPlan(); });
+  planPanel.addEventListener('click', (event) => { if (isExecutionLocked(state.executorStatus?.phase)) return; const move = event.target.closest?.('[data-queue-move]'); if (move) { const dir = move.dataset.queueMove; const from = state.queueGoals.findIndex((goal) => goal.id === move.dataset.queueGoal); if (from < 0) return; const to = dir === 'top' ? 0 : dir === 'up' ? from - 1 : from + 1; if (to < 0 || to >= state.queueGoals.length) return; const [moved] = state.queueGoals.splice(from, 1); state.queueGoals.splice(to, 0, moved); persistQueue(); refreshQueue(); renderPlan(); announcePlan(`Moved ${targetLabel(moved.target)} to priority ${to + 1}.`); planPanel.querySelector(`[data-queue-move="${dir}"][data-queue-goal="${moved.id}"]`)?.focus?.(); return; } const remove = event.target.closest?.('[data-queue-remove]'); if (!remove) return; const index = state.queueGoals.findIndex((goal) => goal.id === remove.dataset.queueRemove); if (index < 0) return; const label = targetLabel(state.queueGoals[index].target); state.queueGoals.splice(index, 1); persistQueue(); refreshQueue(); renderPlan(); announcePlan(`Removed ${label}.`); const next = state.queueGoals[index] || state.queueGoals[index - 1]; planPanel.querySelector(next ? `[data-queue-remove="${next.id}"]` : '#fr-plan-compose-toggle')?.focus?.(); });
 
   const restore = () => {
     try {
@@ -1348,7 +1345,6 @@ export async function bootOverlay(options = {}) {
     return { shell, app, api, model, datasets: model };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    const timeout = message.includes('did not become available');
     shell.showError(timeout ? 'Companion connection timed out' : 'Companion data could not load', message);
     return { shell, app: null, api: null, error };
   }

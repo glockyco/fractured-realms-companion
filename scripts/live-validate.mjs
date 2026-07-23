@@ -57,6 +57,37 @@ async function shutdown() {
   if (launchedByUs && !keepOpen) await quitCompanion();
 }
 
+async function clearPlan(page) {
+  const clearBtn = page.locator('#fr-clear');
+  if (await clearBtn.isDisabled()) return;
+  await clearBtn.click();
+  const confirmation = page.locator('#fr-clear-confirmation');
+  await confirmation.waitFor({ state: 'visible', timeout: 5_000 });
+  await confirmation.locator('#fr-clear-confirm').click();
+  await page.waitForFunction(() => {
+    const root = document.querySelector('#fractured-realms-companion')?.shadowRoot;
+    return root?.querySelectorAll('#fr-plan-result .queue-plan').length === 0;
+  }, { timeout: 5_000 });
+}
+
+async function assertPlanLayout(page, width, height) {
+  await page.setViewportSize({ width, height });
+  await page.waitForTimeout(100);
+  const metrics = await page.evaluate(() => {
+    const root = document.querySelector('#fractured-realms-companion')?.shadowRoot;
+    const view = root?.querySelector('.plan-view'); const workspace = root?.querySelector('#fr-plan-result'); const executor = root?.querySelector('.executor');
+    const composer = root?.querySelector('#fr-plan-composer'); const actions = root?.querySelector('.queue-controls'); const instruction = root?.querySelector('.instruction-card');
+    if (!view || !workspace || !executor || !composer || !actions) return null;
+    instruction?.scrollIntoView?.({ block: 'nearest' });
+    const workspaceRect = workspace.getBoundingClientRect(); const executorRect = executor.getBoundingClientRect(); const instructionRect = instruction?.getBoundingClientRect?.();
+    return { overlap: workspaceRect.bottom > executorRect.top + 1, overflow: view.scrollWidth !== view.clientWidth, composerReachable: composer.hidden || composer.getClientRects().length > 0, actionsReachable: actions.getClientRects().length > 0, instructionReachable: !instructionRect || (instructionRect.top >= workspaceRect.top - 1 && instructionRect.bottom <= workspaceRect.bottom + 1) };
+  });
+  if (!metrics) throw new Error(`Plan layout not mounted at ${width}x${height}`);
+  if (metrics.overlap) throw new Error(`Plan workspace overlaps executor at ${width}x${height}`);
+  if (metrics.overflow) throw new Error(`Plan has horizontal overflow at ${width}x${height}`);
+  if (!metrics.composerReachable || !metrics.actionsReachable || !metrics.instructionReachable) throw new Error(`Plan controls are unreachable at ${width}x${height}: ${JSON.stringify(metrics)}`);
+}
+
 async function bail(page, guard, name, detail) {
   fail(name, detail);
   await artifacts(page, guard);
@@ -173,10 +204,7 @@ async function main() {
     const start = (await gameState(page)).inventory?.[itemId] ?? 0;
     const target = start + 2;
     await page.click('#fr-tab-plan');
-    // A reused live-profile may carry a persisted queue from a prior run; clear it
-    // so the resolved plan below is deterministic.
-    const clearBtn = page.locator('#fr-clear');
-    if (!(await clearBtn.isDisabled())) { await clearBtn.click(); await page.locator('#fr-plan-result .plan-step').first().waitFor({ state: 'detached', timeout: 5_000 }).catch(() => {}); }
+    await clearPlan(page);
     await page.selectOption('#fr-plan-target', 'item');
     await page.fill('#fr-plan-item', 'Minor Fire Rune');
     const option = page.locator('#fr-plan-options [data-plan-option]', { hasText: 'Minor Fire Rune' }).first();
@@ -219,27 +247,43 @@ async function main() {
     await bail(page, guard, 'plan-execute-auto', error instanceof Error ? error.message : String(error));
   }
 
-  // 8. Waiting phase (manual step): unlock target that requires a manual purchase.
+  // 8. Waiting phase (manual step): discover a supported one-run action whose first step needs the player.
   try {
-    await page.click('#fr-clear');
-    await page.selectOption('#fr-plan-target', 'unlock');
-    const unlockValue = await page.locator('#fr-plan-unlock').inputValue();
-    if (!unlockValue) throw new Error('no unlock option available on fresh save');
-    await page.click('#fr-resolve-plan');
-    await page.locator('#fr-plan-result .plan-step').first().waitFor({ timeout: 10_000 });
+    await clearPlan(page);
+    await page.selectOption('#fr-plan-target', 'action');
+    const skillOptions = page.locator('#fr-plan-skill option');
+    const skillCount = await skillOptions.count();
+    const orderedSkills = [];
+    for (let index = 0; index < skillCount; index += 1) orderedSkills.push({ value: await skillOptions.nth(index).getAttribute('value'), text: await skillOptions.nth(index).innerText() });
+    orderedSkills.sort((a, b) => (/trapping/i.test(a.text) ? -1 : /trapping/i.test(b.text) ? 1 : 0));
+    let foundManual = false;
+    for (const skill of orderedSkills) {
+      if (!skill.value) continue;
+      await page.selectOption('#fr-plan-skill', skill.value);
+      const actions = page.locator('#fr-plan-action option');
+      for (let index = 0; index < await actions.count(); index += 1) {
+        const actionValue = await actions.nth(index).getAttribute('value');
+        if (!actionValue) continue;
+        await page.selectOption('#fr-plan-action', actionValue);
+        await page.fill('#fr-plan-qty', '1');
+        await page.click('#fr-resolve-plan');
+        await page.locator('#fr-plan-result .plan-step').first().waitFor({ timeout: 10_000 });
+        if (await page.locator('#fr-plan-result .plan-step[data-state="manual-now"]').count()) { foundManual = true; break; }
+        await clearPlan(page);
+        await page.selectOption('#fr-plan-target', 'action');
+      }
+      if (foundManual) break;
+    }
+    if (!foundManual) throw new Error('no supported one-run action resolved to manual-now');
     await page.click('#fr-run');
-    await page.waitForFunction(() => /waiting/i.test(document.querySelector('#fractured-realms-companion')?.shadowRoot?.querySelector('#fr-executor-phase')?.textContent || ''), { timeout: 20_000 });
-    const runDisabled = await page.locator('#fr-run').isDisabled();
-    const stopDisabled = await page.locator('#fr-stop').isDisabled();
-    if (!runDisabled) throw new Error('Run control not locked during waiting phase');
-    if (stopDisabled) throw new Error('Stop control unexpectedly disabled during waiting phase');
-    const msg = await page.locator('#fr-executor-message').innerText();
-    const cards = await page.locator('#fr-plan-result .instruction-card').count();
-    if (cards < 1) throw new Error('no manual instruction card rendered');
+    await page.waitForFunction(() => /needs you/i.test(document.querySelector('#fractured-realms-companion')?.shadowRoot?.querySelector('#fr-executor-phase')?.textContent || ''), { timeout: 20_000 });
+    const runDisabled = await page.locator('#fr-run').isDisabled(); const stopDisabled = await page.locator('#fr-stop').isDisabled();
+    if (!runDisabled) throw new Error('Run control not locked during waiting phase'); if (stopDisabled) throw new Error('Stop control unexpectedly disabled during waiting phase');
+    if ((await page.locator('#fr-plan-result .instruction-card').count()) < 1) throw new Error('no manual instruction card rendered');
+    await assertPlanLayout(page, 900, 960); await assertPlanLayout(page, 640, 800); await assertPlanLayout(page, 320, 640); await page.setViewportSize({ width: 900, height: 960 });
     await page.click('#fr-stop');
-    await page.waitForFunction(() => /idle|ready/i.test(document.querySelector('#fractured-realms-companion')?.shadowRoot?.querySelector('#fr-executor-phase')?.textContent || ''), { timeout: 15_000 });
+    await page.waitForFunction(() => /stopped|ready/i.test(document.querySelector('#fractured-realms-companion')?.shadowRoot?.querySelector('#fr-executor-phase')?.textContent || ''), { timeout: 15_000 });
     pass('waiting-phase-manual');
-    void msg;
   } catch (error) {
     await bail(page, guard, 'waiting-phase-manual', error instanceof Error ? error.message : String(error));
   }

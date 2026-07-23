@@ -107,14 +107,13 @@ test('resolveQueue timeline renders manual instruction cards and readyAt wall-cl
   const result = await bootOverlay({ document: new FakeDocument(), window: { __frCompanion: fakeApi() }, fetch: fetchFor(model()) });
   const plan = result.shell.panels.plan; plan.querySelector('#fr-plan-item').value = 'Ore'; plan.querySelector('#fr-plan-form').dispatch('submit');
   const html = plan.querySelector('#fr-plan-result').innerHTML;
-  assert.match(html, /Waiting for you/); assert.match(html, /ready for you at/); assert.match(html, /Buy Tool/); assert.ok(result.app.state.resolvedQueue.steps.some((step) => step.kind === 'manual')); assert.equal(formatFinishTime(0).length > 0, true);
+  assert.match(html, /instruction-card/); assert.match(html, /Needs you/); assert.match(html, /Buy Tool/); assert.ok(result.app.state.resolvedQueue.steps.some((step) => step.kind === 'manual')); assert.equal(formatFinishTime(0).length > 0, true);
 });
 
 test('clear queue is enabled for stored targets and removes them', async () => {
   const result = await bootOverlay({ document: new FakeDocument(), window: { __frCompanion: fakeApi() }, fetch: fetchFor(model()) });
   const plan = result.shell.panels.plan; const form = plan.querySelector('#fr-plan-form'); const item = plan.querySelector('#fr-plan-item'); item.value = 'Log'; form.dispatch('submit');
-  const clear = result.shell.queueControls.querySelector('#fr-clear'); assert.equal(clear.disabled, false); clear.dispatch('click');
-  assert.equal(result.app.state.queueGoals.length, 0); assert.equal(result.app.state.resolvedQueue.steps.length, 0); assert.equal(clear.disabled, true);
+  const clear = result.shell.panels.plan.querySelector('#fr-clear'); assert.equal(clear.disabled, false); clear.dispatch('click'); const confirmation = plan.querySelector('#fr-plan-toolbar').querySelector('#fr-clear-confirmation'); assert.ok(confirmation); confirmation.querySelector('#fr-clear-cancel').dispatch('click'); assert.equal(result.app.state.queueGoals.length, 1); clear.dispatch('click'); confirmation.querySelector('#fr-clear-confirm').dispatch('click'); assert.equal(result.app.state.queueGoals.length, 0); assert.equal(result.app.state.resolvedQueue.steps.length, 0); assert.equal(clear.disabled, true);
 });
 
 test('queue targets can be reordered to the top', async () => {
@@ -166,12 +165,12 @@ test('restore drops malformed persisted targets against the model schema', async
 test('targets queued behind a blocked target remain visible', async () => {
   const result = await bootOverlay({ document: new FakeDocument(), window: { __frCompanion: fakeApi() }, fetch: fetchFor(model()) });
   result.app.state.queueGoals = [{ id: 'blocked', target: { type: 'item', itemId: 'missing', qty: 1 } }, { id: 'later', target: { type: 'item', itemId: 'log', qty: 1 } }]; result.app.refreshQueue(); result.app.renderPlan();
-  const html = result.shell.panels.plan.querySelector('#fr-plan-result').innerHTML; assert.match(html, /Missing/); assert.match(html, /queued behind blocked target/); assert.match(html, /Not planned/);
+  const html = result.shell.panels.plan.querySelector('#fr-plan-result').innerHTML; assert.match(html, /Missing/); assert.match(html, /Waiting for the blocked target above/); assert.doesNotMatch(html, /blocked\.reason/);
 });
 
-test('plan result surfaces attended time and unattended presence summary', async () => {
+test('plan result surfaces operational overview and presence summary', async () => {
   const result = await bootOverlay({ document: new FakeDocument(), window: { __frCompanion: fakeApi() }, fetch: fetchFor(model()) }); const plan = result.shell.panels.plan; plan.querySelector('#fr-plan-item').value = 'Log'; plan.querySelector('#fr-plan-form').dispatch('submit');
-  const html = plan.querySelector('#fr-plan-result').innerHTML; assert.match(html, /id="fr-queue-total"/); assert.match(html, /attended/); assert.match(html, /unattended/); assert.match(html, /manual stop/);
+  const html = plan.querySelector('#fr-plan-result').innerHTML; assert.match(html, /id="fr-queue-total"/); assert.match(html, /Estimate/); assert.match(html, /Manual stops/); assert.match(html, /Runs fully unattended|Runs ~/);
 });
 
 test('planner validation uses a form error without changing executor phase', async () => {
@@ -188,6 +187,63 @@ test('wiki detail shows recipe healing and skills table tool column', async () =
   const base = model(); const fixture = model({ items: { ...base.items, log: { ...base.items.log, type: 'Consumable', healAmount: 25 } }, recipeMeals: [{ id: 'meal_recipe', output: 'log', healAmount: 25, levelReq: 1 }], actions: [{ id: 'chop', name: 'Chop Log', skillId: 'woodcutting', levelReq: 1, xp: 10, interval: 1000, inputs: {}, outputs: { log: 1 }, toolReq: 'tool', automation: 'auto', gate: null }, { id: 'smelt', name: 'Smelt Ore', skillId: 'woodcutting', levelReq: 1, xp: 10, interval: 1000, inputs: { log: 1 }, outputs: { ore: 1 }, automation: 'auto', gate: null }] });
   const result = await bootOverlay({ document: new FakeDocument(), window: { __frCompanion: fakeApi() }, fetch: fetchFor(fixture) }); result.app.state.selectedItemId = 'log'; result.app.renderItemDetail();
   assert.match(result.shell.panels.items.querySelector('#fr-item-detail').innerHTML, /Healing/); assert.match(result.shell.panels.skills.querySelector('#fr-skill-table').innerHTML, />Tool</);
+});
+
+test('composer retains fields and exposes exact kind help copy', async () => {
+  const result = await bootOverlay({ document: new FakeDocument(), window: { __frCompanion: fakeApi() }, fetch: fetchFor(model()) }); const plan = result.shell.panels.plan; const kind = plan.querySelector('#fr-plan-target'); const qty = plan.querySelector('#fr-plan-qty'); const help = plan.querySelector('#fr-plan-kind-help'); const cases = [['item', 'Reach an inventory total.', 'Total quantity'], ['item-gain', 'Gain this many from your current inventory.', 'Quantity to gain'], ['level', 'Reach a total skill level.', 'Target level'], ['xp', 'Reach a total skill XP value.', 'Target XP'], ['action', 'Run one action for a count or duration.', 'Amount'], ['use-stock', 'Craft as much as your current inputs allow.', 'Amount']];
+  for (const [value, copy, label] of cases) { kind.value = value; kind.dispatch('change'); assert.equal(help.textContent, copy); assert.equal(plan.querySelector('#fr-plan-qty-label').textContent, label); }
+  kind.value = 'item'; kind.dispatch('change'); plan.querySelector('#fr-plan-item').value = 'Log'; qty.value = '3'; plan.querySelector('#fr-plan-form').dispatch('submit'); assert.equal(plan.querySelector('#fr-plan-composer').hidden, true); assert.equal(plan.querySelector('#fr-plan-compose-toggle').hidden, false); assert.equal(qty.value, '3'); plan.querySelector('#fr-plan-compose-toggle').dispatch('click'); assert.equal(plan.querySelector('#fr-plan-composer').hidden, false); assert.equal(qty.value, '3');
+});
+
+test('planner rejects non-finite and fractional quantities with associated ARIA error', async () => {
+  const result = await bootOverlay({ document: new FakeDocument(), window: { __frCompanion: fakeApi() }, fetch: fetchFor(model()) }); const plan = result.shell.panels.plan; plan.querySelector('#fr-plan-item').value = 'Log'; const qty = plan.querySelector('#fr-plan-qty'); qty.value = '1.5'; plan.querySelector('#fr-plan-form').dispatch('submit'); const error = plan.querySelector('#fr-plan-form-error'); assert.equal(result.app.state.queueGoals.length, 0); assert.equal(qty.getAttribute('aria-invalid'), 'true'); assert.equal(qty.getAttribute('aria-describedby'), 'fr-plan-form-error'); assert.match(error.textContent, /whole number/);
+});
+
+test('targets render Planned then Done from live truth with proximity values', async () => {
+  const game = fakeApi(); const result = await bootOverlay({ document: new FakeDocument(), window: { __frCompanion: game }, fetch: fetchFor(model()) }); const plan = result.shell.panels.plan; plan.querySelector('#fr-plan-item').value = 'Log'; plan.querySelector('#fr-plan-qty').value = '2'; plan.querySelector('#fr-plan-form').dispatch('submit'); let html = plan.querySelector('#fr-plan-result').innerHTML; assert.match(html, /data-state="planned"/); assert.match(html, /<span class="data">0<\/span> \/ <span class="data">2<\/span> Log/); game.set({ inventory: { log: 2 } }); result.app.renderPlan(); html = plan.querySelector('#fr-plan-result').innerHTML; assert.match(html, /data-state="done"/); assert.match(html, /Done/);
+});
+
+test('locked target edits remain visible and disabled with lock hint', async () => {
+  const result = await bootOverlay({ document: new FakeDocument(), window: { __frCompanion: fakeApi() }, fetch: fetchFor(model()) }); const plan = result.shell.panels.plan; plan.querySelector('#fr-plan-item').value = 'Log'; plan.querySelector('#fr-plan-form').dispatch('submit'); result.shell.queueControls.querySelector('#fr-run').dispatch('click'); const html = plan.querySelector('#fr-plan-result').innerHTML; assert.match(html, /data-queue-move/); assert.match(html, /data-queue-remove/); assert.match(html, /aria-describedby="fr-plan-edit-lock-hint"/); assert.match(html, /disabled/);
+});
+
+test('level and XP target proximity uses live formulas', async () => {
+  const game = fakeApi({ ...snapshot(), skillXp: { woodcutting: 10 } }); const result = await bootOverlay({ document: new FakeDocument(), window: { __frCompanion: game }, fetch: fetchFor(model()) }); result.app.state.queueGoals = [{ id: 'level', target: { type: 'level', skillId: 'woodcutting', level: 2 } }, { id: 'xp', target: { type: 'xp', skillId: 'woodcutting', xp: 25 } }]; result.app.refreshQueue(); result.app.renderPlan(); const html = result.shell.panels.plan.querySelector('#fr-plan-result').innerHTML; assert.match(html, /Level <span class="data">1<\/span> \/ <span class="data">2<\/span>/); assert.match(html, /<span class="data">10<\/span> \/ <span class="data">25<\/span> XP/);
+});
+
+test('timeline states dependencies and fractional executor progress without timer announcements', async () => {
+  const result = await bootOverlay({ document: new FakeDocument(), window: { __frCompanion: fakeApi() }, fetch: fetchFor(model()) }); const plan = result.shell.panels.plan; plan.querySelector('#fr-plan-item').value = 'Ore'; plan.querySelector('#fr-plan-form').dispatch('submit'); const step = result.app.state.resolvedQueue.steps.find((entry) => entry.kind !== 'manual'); result.app.state.executorStatus = { phase: 'running', message: '', totalSteps: result.app.state.resolvedQueue.steps.length, completedSteps: 0, runningStepId: step.id, stepStatuses: { [step.id]: 'running' }, stepProgress: 1, stepProgressMax: 2, stepRemainingMs: 1000 }; result.app.renderPlan(); const progress = plan.querySelector('#fr-executor-progress'); assert.equal(progress.value, 0.5); const announcement = plan.querySelector('#fr-plan-announcer').textContent; result.app.state.executorStatus.stepRemainingMs = 500; result.app.renderPlan(); assert.equal(plan.querySelector('#fr-plan-announcer').textContent, announcement); assert.match(plan.querySelector('#fr-plan-result').innerHTML, /data-state="later"|data-state="running"/);
+});
+
+test('timeline steps nest under each target card', async () => {
+  const document = new FakeDocument();
+  const result = await bootOverlay({ document, window: { __frCompanion: fakeApi() }, fetch: fetchFor(model()) });
+  const plan = result.shell.panels.plan;
+  plan.querySelector('#fr-plan-item').value = 'Log'; plan.querySelector('#fr-plan-form').dispatch('submit');
+  plan.querySelector('#fr-plan-item').value = 'Ore'; plan.querySelector('#fr-plan-form').dispatch('submit');
+  const container = plan.querySelector('#fr-plan-result');
+  const html = container.innerHTML;
+  assert.equal((html.match(/class="queue-plan"/g) || []).length, 2);
+  assert.match(html, /class="queue-steps"/); assert.match(html, /class="[^"]*plan-step/);
+});
+
+test('start control is hidden while a plan runs, leaving stop visible', async () => {
+  const result = await bootOverlay({ document: new FakeDocument(), window: { __frCompanion: fakeApi() }, fetch: fetchFor(model()) });
+  const plan = result.shell.panels.plan; plan.querySelector('#fr-plan-item').value = 'Log'; plan.querySelector('#fr-plan-form').dispatch('submit');
+  const run = result.shell.queueControls.querySelector('#fr-run'); const stop = result.shell.queueControls.querySelector('#fr-stop');
+  assert.equal(run.hidden, false); run.dispatch('click');
+  assert.equal(result.app.executor.getStatus().phase, 'running'); assert.equal(run.hidden, true); assert.equal(stop.hidden, false); result.app.executor.stop();
+});
+
+test('a step blocked only by an unfinished dependency reads "waiting for" that dependency', async () => {
+  const result = await bootOverlay({ document: new FakeDocument(), window: { __frCompanion: fakeApi() }, fetch: fetchFor(model()) });
+  const A = { id: 'q0:a', kind: 'action', label: 'Alpha', deps: [], skillId: 'woodcutting', actionId: 'chop', expected: { runs: 1, ms: 1000, produces: {}, consumes: {} }, purpose: 'gather' };
+  const B = { id: 'q0:b', kind: 'action', label: 'Beta', deps: ['q0:a'], skillId: 'woodcutting', actionId: 'chop', expected: { runs: 1, ms: 1000, produces: {}, consumes: {} }, purpose: 'goal' };
+  result.app.state.queueGoals = [{ id: 't', target: { type: 'item', itemId: 'log', qty: 1 } }];
+  result.app.state.resolvedQueue = { steps: [A, B], targets: [{ target: result.app.state.queueGoals[0].target, ok: true, steps: [A, B] }], perStep: [{ id: 'q0:a', startMs: 0, endMs: 1000 }, { id: 'q0:b', startMs: 1000, endMs: 2000 }], readyAt: {}, optimisticMs: 2000, schedulerMs: 2000 };
+  result.app.state.executorStatus = { phase: 'idle', stepStatuses: {} };
+  result.app.renderPlan();
+  assert.match(result.shell.panels.plan.querySelector('#fr-plan-result').innerHTML, /waiting for Alpha/);
 });
 
 test('overlay source contains no legacy planner import or native action queue access', async () => {

@@ -51,7 +51,8 @@ function runCli(args) {
 /** Ensure a healthy companion, optionally refreshing+launching the install. */
 export async function ensureCompanionRunning({ refresh = false } = {}) {
   const existing = await companionHealthy();
-  if (existing) return { launched: false, health: existing };
+  if (existing && !refresh) return { launched: false, health: existing };
+  if (existing && refresh) await quitCompanion();
 
   if (refresh) {
     const refreshed = runCli(['refresh']);
