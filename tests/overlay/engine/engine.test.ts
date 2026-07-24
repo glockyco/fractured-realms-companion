@@ -20,6 +20,18 @@ test('level and interval formulas use the level-surplus factor and clamp', () =>
   assert.equal(xpPerRun(model, state, 'woodcutting', model.actions[1]), 30);
 });
 
+test('prestige rank scales xp and interval from model constants', () => {
+  const model = indexed();
+  const ranked = snapshot({ prestigeRank: { woodcutting: 5 } });
+  // +1% XP per rank: 10 * (1 + 5 * 0.01)
+  assert.equal(xpPerRun(model, ranked, 'woodcutting', model.actions[0]), 10.5);
+  // -0.5% interval per rank, multiplicative, with no level surplus at level 1
+  assert.equal(effectiveInterval(model, ranked, 'woodcutting', model.actions[0]), Math.round(3000 * (1 - 5 * 0.005)));
+  // no prestige rank leaves xp and interval untouched
+  assert.equal(xpPerRun(model, snapshot(), 'woodcutting', model.actions[0]), 10);
+  assert.equal(effectiveInterval(model, snapshot(), 'woodcutting', model.actions[0]), 3000);
+});
+
 test('time-to-level uses the best action independently in each level segment', () => {
   const model = indexed(); const state = snapshot(); let expected = 0;
   for (let level = 1; level < 10; level += 1) {

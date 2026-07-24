@@ -69,6 +69,15 @@ function machineSmithingSpeed(model, state) {
 }
 function intervalAction(action) { return number(action?.interval, 0); }
 
+/** Additive XP bonus from prestige rank: a flat per-rank bonus taken from the model. */
+export function prestigeXpBonus(model, state = {}, skillId) {
+  return number(state.prestigeRank?.[skillId]) * number(model?.prestige?.xpBonusPerRank);
+}
+/** Multiplicative interval reduction from prestige rank: a flat per-rank speed bonus. */
+export function prestigeSpeedReduction(model, state = {}, skillId) {
+  return number(state.prestigeRank?.[skillId]) * number(model?.prestige?.speedBonusPerRank);
+}
+
 /** Effective action-tick interval (milliseconds), including the game's clamp. */
 export function effectiveInterval(model, state = {}, skillId, action = {}) {
   if (skillId === 'cartography' && action?.actionsToChart != null) return cartographyInterval(model, state, action);
@@ -78,8 +87,9 @@ export function effectiveInterval(model, state = {}, skillId, action = {}) {
   const toolSpeed = number(best?.speedBonus, 0);
   const smithing = skillId === 'smithing' ? machineSmithingSpeed(model, state) : 0;
   const seal = sealIntervalReduction(model, state, skillId);
+  const prestige = prestigeSpeedReduction(model, state, skillId);
   const levelSpeed = Math.min(0.5, Math.max(0, (level - req) / 99 * 0.5));
-  const speed = (1 - toolSpeed) * (1 - smithing) * (1 - seal) * (1 - levelSpeed);
+  const speed = (1 - toolSpeed) * (1 - smithing) * (1 - seal) * (1 - prestige) * (1 - levelSpeed);
   return Math.max(500, Math.round(intervalAction(action) * speed));
 }
 /** Effective cartography tick interval: cartography has no tool or level-surplus term. */
@@ -105,7 +115,7 @@ export function xpMultiplier(model, state = {}, skillId) {
   multiplier += machineXpBonus(model, state, skillId);
   multiplier += sealXpBonus(model, state, skillId);
   if (state.grandRewardClaimed) multiplier += 0.15;
-  multiplier += number(state.prestigeRank?.[skillId]) * 0.01;
+  multiplier += prestigeXpBonus(model, state, skillId);
   return multiplier;
 }
 export function xpPerRun(model, state, skillId, action) {

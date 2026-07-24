@@ -29,7 +29,7 @@ export function baseModel(overrides = {}) {
       { id: 'B', name: 'B', skillId: 'woodcutting', levelReq: 5, xp: 30, interval: 4000, inputs: {}, outputs: { log: 1 }, automation: 'auto', gate: null },
     ],
     tools: { woodcutting: [{ id: 'tool', name: 'Tool', levelReq: 1, xpBonus: 0, speedBonus: 0, cost: 200 }] },
-    maps: [], chartSupplyTiers: {}, agilityCourses: [], bags: [], machines: [], boons: [], restorations: [], recipeMeals: [], seals: [], patterns: {}, grandReward: {}, buildings: [], buildingXp: {}, zones: [], digsites: [], achievements: [], offlineGold: {}, titles: [], stringsEn: {},
+    maps: [], chartSupplyTiers: {}, agilityCourses: [], bags: [], machines: [], boons: [], restorations: [], recipeMeals: [], seals: [], patterns: {}, grandReward: {}, buildings: [], buildingXp: {}, zones: [], digsites: [], achievements: [], offlineGold: {}, titles: [], prestige: { maxRank: 10, xpBonusPerRank: 0.01, speedBonusPerRank: 0.005, rankLabels: ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X'], weights: [], categoryTotals: { gathering: 12900000 }, skills: { woodcutting: { category: 'gathering', maxXp: 12900000, thresholds: [], native: [], cross: [] } } }, stringsEn: {},
     ...overrides,
   };
   return model;
