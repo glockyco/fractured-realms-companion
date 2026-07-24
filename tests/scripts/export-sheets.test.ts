@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import { openDatabase, sqliteAvailable } from '../../src/lib/sqlite.ts';
-import { listTables, buildSheet, toCell, buildAllSheets, buildServiceAccountJwt, sheetsFetch, resolveSpreadsheetId, readPersistedSpreadsheetId, persistSpreadsheetId } from '../../scripts/export-sheets.mjs';
+import { listTables, buildSheet, toCell, buildAllSheets, buildServiceAccountJwt, sheetsFetch, resolveSpreadsheetId, readPersistedSpreadsheetId, persistSpreadsheetId, buildOverview, describeTable, dataTabRequests } from '../../scripts/export-sheets.mjs';
 
 const HAS_SQLITE = sqliteAvailable();
 
@@ -184,4 +184,41 @@ test('persistSpreadsheetId round-trips through the config dir', () => {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('describeTable gives curated text and humanizes unknown tables', () => {
+  assert.match(describeTable('titles'), /titles/i);
+  assert.equal(describeTable('mystery_widgets'), 'Mystery widgets data.');
+});
+
+test('buildOverview lays out metadata, usage, and a hyperlinked contents table', () => {
+  const metadata = { buildId: '24337318', dataSchema: 2, generatedAt: '2026-07-24T00:00:00.000Z', cliVersion: '0.2.0' };
+  const toc = [
+    { title: 'items', rows: 548, sheetId: 111, description: 'Item catalog.' },
+    { title: 'titles', rows: 42, sheetId: 222, description: 'Titles.' },
+  ];
+  const overview = buildOverview(metadata, toc);
+  assert.equal(overview.title, 'Overview');
+  const flat = overview.grid.map((row) => row.join('\u0001'));
+  // metadata surfaced verbatim
+  assert.ok(flat.some((line) => line.includes('Steam build') && line.includes('24337318')));
+  assert.ok(flat.some((line) => line.includes('Data tool version') && line.includes('0.2.0')));
+  // totals computed from the toc
+  assert.ok(flat.some((line) => line.includes('Total data rows') && line.includes('590')));
+  // contents rows carry a gid HYPERLINK, the row count, and the description
+  const itemsRow = overview.grid.find((row) => typeof row[0] === 'string' && row[0].includes('#gid=111'));
+  assert.deepEqual(itemsRow, ['=HYPERLINK("#gid=111","items")', 548, 'Item catalog.']);
+  // the title row is marked bold
+  assert.equal(overview.boldRows[0], 0);
+  assert.ok(overview.boldRows.length >= 3);
+});
+
+test('dataTabRequests freezes, bolds, filters, and bands the written range', () => {
+  const requests = dataTabRequests(7, 100, 4);
+  const kinds = requests.map((request) => Object.keys(request)[0]);
+  assert.deepEqual(kinds, ['updateSheetProperties', 'repeatCell', 'setBasicFilter', 'addBanding']);
+  // filter and banding cover the header + all data rows across every column
+  const filterRange = requests.find((r) => r.setBasicFilter).setBasicFilter.filter.range;
+  assert.deepEqual(filterRange, { sheetId: 7, startRowIndex: 0, endRowIndex: 101, startColumnIndex: 0, endColumnIndex: 4 });
+  assert.equal(requests.find((r) => r.addBanding).addBanding.bandedRange.range.endRowIndex, 101);
 });

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Publish the compiled game model (`<stateDir>/model.db`) to a canonical Google
-// Spreadsheet so others can build on the data. One tab per model table. Zero
+// Spreadsheet so others can build on the data. An Overview landing tab (metadata
+// and a hyperlinked table of contents) plus one tab per model table. Zero
 // runtime dependencies: a service-account RS256 JWT is signed with node:crypto
 // and the Google Sheets REST API is driven with the global fetch, so no npm
 // package is added. `--dry-run` reports the tabs offline without credentials.
@@ -11,8 +12,8 @@
 //                                    ~/.config/fractured-realms-companion/google-credentials.json
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { dirname, join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import crypto from 'node:crypto';
 import { stateDir } from './backup-saves.mjs';
@@ -58,6 +59,117 @@ export function buildSheet(db, table) {
 /** Build every tab from an open model database. */
 export function buildAllSheets(db) {
   return listTables(db).map((table) => buildSheet(db, table));
+}
+
+export const OVERVIEW_TITLE = 'Overview';
+
+/** Human one-liners for each model table; unknown tables fall back to a humanized name. */
+const TABLE_DESCRIPTIONS = {
+  achievements: 'Achievements: names, categories, and unlock conditions.',
+  action_inputs: 'Items each skill action consumes, per run.',
+  action_outputs: 'Items each skill action produces, per run.',
+  action_rares: 'Rare bonus drops from skill actions, with chances.',
+  actions: 'Every skill action: level, XP, interval, and gating.',
+  agility_courses: 'Agility courses and their obstacles.',
+  bags: 'Storage bags: size, cost, and agility requirement.',
+  boons: 'Prayer boons and the skill bonuses they grant.',
+  building_upgrade_costs: 'Per-item material costs for building upgrades.',
+  building_upgrades: 'Town building upgrade levels and effects.',
+  buildings: 'Town buildings and their upgrade tracks.',
+  chart_supply_tiers: 'Cartography supply tiers used to chart maps.',
+  digsites: 'Archaeology dig sites and level requirements.',
+  enemies: 'Enemies: HP, combat stats, and tags.',
+  enemy_attacks: 'Per-enemy attack tables (weights and effects).',
+  enemy_drops: 'Loot each enemy drops, with chances.',
+  equipment: 'Armour: slot, defence, requirements, and secret flag.',
+  food: 'Cooked food and the HP each item heals.',
+  grand_reward: 'The grand reward and its bonuses.',
+  items: 'Master item catalog: label, type, value, and icon.',
+  machine_costs: 'Per-item build costs for skill machines.',
+  machines: 'Skill machines and the buffs they provide.',
+  maps: 'Cartography maps (regular and deep) and their tiers.',
+  obstacles: 'Individual agility obstacles: XP and interval.',
+  offline_gold: 'Offline gold earned per minute, by level.',
+  outpost_xp: 'Outpost building XP bonuses, by level.',
+  patterns: 'Glyphweaving patterns and their sources.',
+  potions: 'Potions: effect family, magnitude, and durations.',
+  prestige_bonuses: 'Native and cross bonuses unlocked at each prestige rank.',
+  prestige_config: 'Global prestige rules: max rank and per-rank XP/speed bonus.',
+  prestige_thresholds: 'Cumulative prestige XP required for each rank, per skill.',
+  prestige_tracks: 'Per-skill prestige tracks: category and max prestige XP.',
+  recipe_meals: 'Cooking recipe meals: inputs, XP, and healing.',
+  restorations: 'Prayer restorations: inputs and outputs.',
+  seal_buffs: 'Individual buffs granted by each mastery seal.',
+  seals: 'Mastery seals and the skills they empower.',
+  shop: 'Shop-buyable items and their prices.',
+  skills: 'All skills: id, name, and category.',
+  strings: 'Localized display strings (names and descriptions).',
+  titles: 'Earnable titles: mastery, prestige, and special.',
+  tools: 'Skill tools: level, XP/speed bonuses, and cost.',
+  xp_table: 'Level-to-XP thresholds (1..99).',
+  zones: 'Combat zones and the enemies within.',
+};
+
+/** A readable description for a table, falling back to a humanized name. */
+export function describeTable(name) {
+  return TABLE_DESCRIPTIONS[name] ?? `${name.replaceAll('_', ' ').replace(/^\w/, (c) => c.toUpperCase())} data.`;
+}
+
+/** Read publish metadata from the staged pack manifest and the CLI package. */
+export function readMetadata() {
+  const load = (path) => { try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return {}; } };
+  const pack = load(join(stateDir(), 'pack', 'pack.json'));
+  const pkg = load(join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json'));
+  return {
+    buildId: pack.build_id ?? 'unknown',
+    dataSchema: pack.schema_version ?? 'unknown',
+    generatedAt: pack.generated_at ?? 'unknown',
+    cliVersion: pkg.version ?? 'unknown',
+  };
+}
+
+/**
+ * Build the Overview landing tab: a grid of USER_ENTERED cells with a title, a
+ * metadata block, usage notes, and a hyperlinked table of contents. `toc` entries
+ * carry each tab's { title, rows, sheetId, description }. Returns the grid plus the
+ * row indices that should be rendered bold.
+ */
+export function buildOverview(metadata, toc) {
+  const totalRows = toc.reduce((sum, entry) => sum + entry.rows, 0);
+  const grid = [];
+  const boldRows = [];
+  const heading = (row) => { boldRows.push(grid.length); grid.push(row); };
+  heading(['Fractured Realms \u2014 Game Data']);
+  grid.push([]);
+  grid.push(['Steam build', String(metadata.buildId)]);
+  grid.push(['Data generated (UTC)', String(metadata.generatedAt)]);
+  grid.push(['Data tool version', String(metadata.cliVersion)]);
+  grid.push(['Data schema', String(metadata.dataSchema)]);
+  grid.push(['Tables', toc.length, 'Total data rows', totalRows]);
+  grid.push([]);
+  heading(['How to use']);
+  grid.push(['Each tab below is one dataset. Row 1 is the header \u2014 use the filter buttons to sort and filter.']);
+  grid.push(["Columns ending in _json (e.g. data_json) hold each record's full raw data as JSON."]);
+  grid.push(['Durations and intervals are in milliseconds; XP and values are raw game numbers.']);
+  grid.push(['To build on this data: File \u2192 Make a copy, or read the tabs via the Google Sheets API.']);
+  grid.push([]);
+  heading(['Contents']);
+  heading(['Tab', 'Rows', 'Description']);
+  for (const entry of toc) grid.push([`=HYPERLINK("#gid=${entry.sheetId}","${entry.title}")`, entry.rows, entry.description]);
+  grid.push([]);
+  grid.push(['Generated automatically \u2014 edits here are overwritten on each publish.']);
+  return { title: OVERVIEW_TITLE, grid, boldRows };
+}
+
+/** Frozen bold header, banding, and a filter for one written data tab. */
+export function dataTabRequests(sheetId, rowCount, colCount) {
+  const range = { sheetId, startRowIndex: 0, endRowIndex: rowCount + 1, startColumnIndex: 0, endColumnIndex: colCount };
+  return [
+    { updateSheetProperties: { properties: { sheetId, gridProperties: { frozenRowCount: 1 } }, fields: 'gridProperties.frozenRowCount' } },
+    { repeatCell: { range: { sheetId, startRowIndex: 0, endRowIndex: 1 }, cell: { userEnteredFormat: { textFormat: { bold: true } } }, fields: 'userEnteredFormat.textFormat.bold' } },
+    { setBasicFilter: { filter: { range } } },
+    { addBanding: { bandedRange: { range, rowProperties: { headerColor: { red: 0.85, green: 0.85, blue: 0.85 }, firstBandColor: { red: 1, green: 1, blue: 1 }, secondBandColor: { red: 0.96, green: 0.96, blue: 0.96 } } } } },
+  ];
 }
 
 /** Build a signed service-account JWT for the Sheets scope. */
@@ -131,21 +243,23 @@ export async function sheetsFetch(url, token, init = {}, deps = {}) {
 }
 
 /**
- * Publish every sheet to the spreadsheet: prune tabs for retired tables, create
- * missing tabs, clear + write each tab, then freeze and bold the header row.
- * Fail-soft per tab. Returns the titles that failed.
+ * Publish the model to the spreadsheet: prune tabs for retired tables, ensure the
+ * Overview landing tab and one tab per table exist, write values (Overview with
+ * USER_ENTERED so its links resolve, data tabs RAW), then format data tabs with a
+ * frozen bold header, banding, and a filter. Fail-soft per tab; returns failed titles.
  */
-export async function publishSheets(spreadsheetId, credsPath, sheets, write = (text) => process.stdout.write(text)) {
+export async function publishSheets(spreadsheetId, credsPath, sheets, metadata = {}, write = (text) => process.stdout.write(text)) {
   const token = await getAccessToken(credsPath);
   const base = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}`;
 
-  const meta = await sheetsFetch(`${base}?fields=sheets.properties(sheetId,title)`, token);
+  const meta = await sheetsFetch(`${base}?fields=sheets.properties(sheetId,title),sheets.bandedRanges(bandedRangeId)`, token);
   const existing = new Map((meta.sheets ?? []).map((sheet) => [sheet.properties.title, sheet.properties.sheetId]));
+  const staleBandings = (meta.sheets ?? []).flatMap((sheet) => (sheet.bandedRanges ?? []).map((band) => band.bandedRangeId));
 
-  // Mirror the model exactly: drop tabs for tables that no longer exist (renamed
-  // or removed) so the canonical sheet never carries stale registries. Sheets
-  // requires at least one tab, so a delete that would empty the book is skipped.
-  const desired = new Set(sheets.map((sheet) => sheet.title));
+  // Mirror the model exactly, but always keep the Overview landing tab: drop tabs
+  // for tables that no longer exist so the canonical sheet never carries stale
+  // registries. Sheets requires at least one tab, so a book-emptying delete is skipped.
+  const desired = new Set([OVERVIEW_TITLE, ...sheets.map((sheet) => sheet.title)]);
   const stale = [...existing].filter(([title]) => !desired.has(title));
   if (stale.length > 0 && stale.length < existing.size) {
     const body = JSON.stringify({ requests: stale.map(([, sheetId]) => ({ deleteSheet: { sheetId } })) });
@@ -153,15 +267,29 @@ export async function publishSheets(spreadsheetId, credsPath, sheets, write = (t
     for (const [title] of stale) { existing.delete(title); write(`  ${title}: removed (retired table)\n`); }
   }
 
-  const toAdd = sheets.filter((sheet) => !existing.has(sheet.title));
-  if (toAdd.length > 0) {
-    const body = JSON.stringify({ requests: toAdd.map((sheet) => ({ addSheet: { properties: { title: sheet.title } } })) });
+  const missing = [OVERVIEW_TITLE, ...sheets.map((sheet) => sheet.title)].filter((title) => !existing.has(title));
+  if (missing.length > 0) {
+    const body = JSON.stringify({ requests: missing.map((title) => ({ addSheet: { properties: { title } } })) });
     const result = await sheetsFetch(`${base}:batchUpdate`, token, { method: 'POST', body });
-    result.replies.forEach((reply, index) => existing.set(toAdd[index].title, reply.addSheet.properties.sheetId));
+    result.replies.forEach((reply, index) => existing.set(missing[index], reply.addSheet.properties.sheetId));
   }
 
   const failures = [];
   const written = [];
+
+  // Overview first: build its table of contents from the now-known tab ids and write
+  // it with USER_ENTERED so the HYPERLINK navigation formulas resolve.
+  const toc = sheets.map((sheet) => ({ title: sheet.title, rows: sheet.rows.length, sheetId: existing.get(sheet.title), description: describeTable(sheet.title) }));
+  const overview = buildOverview(metadata, toc);
+  try {
+    await sheetsFetch(`${base}/values/${encodeURIComponent(`'${overview.title}'`)}:clear`, token, { method: 'POST', body: '{}' });
+    await sheetsFetch(`${base}/values/${encodeURIComponent(`'${overview.title}'!A1`)}?valueInputOption=USER_ENTERED`, token, { method: 'PUT', body: JSON.stringify({ values: overview.grid }) });
+    write(`  ${overview.title}: landing page\n`);
+  } catch (error) {
+    failures.push(overview.title);
+    write(`  ${overview.title}: FAILED \u2014 ${error instanceof Error ? error.message : String(error)}\n`);
+  }
+
   for (const sheet of sheets) {
     try {
       const range = encodeURIComponent(`'${sheet.title}'`);
@@ -169,23 +297,33 @@ export async function publishSheets(spreadsheetId, credsPath, sheets, write = (t
       const a1 = encodeURIComponent(`'${sheet.title}'!A1`);
       const values = [sheet.header, ...sheet.rows.map((row) => row.map(toCell))];
       await sheetsFetch(`${base}/values/${a1}?valueInputOption=RAW`, token, { method: 'PUT', body: JSON.stringify({ values }) });
-      written.push(sheet.title);
+      written.push(sheet);
       write(`  ${sheet.title}: ${sheet.rows.length} rows\n`);
     } catch (error) {
       failures.push(sheet.title);
-      write(`  ${sheet.title}: FAILED — ${error instanceof Error ? error.message : String(error)}\n`);
+      write(`  ${sheet.title}: FAILED \u2014 ${error instanceof Error ? error.message : String(error)}\n`);
     }
   }
 
-  if (written.length > 0) {
-    const requests = [];
-    for (const title of written) {
-      const sheetId = existing.get(title);
-      requests.push({ updateSheetProperties: { properties: { sheetId, gridProperties: { frozenRowCount: 1 } }, fields: 'gridProperties.frozenRowCount' } });
-      requests.push({ repeatCell: { range: { sheetId, startRowIndex: 0, endRowIndex: 1 }, cell: { userEnteredFormat: { textFormat: { bold: true } } }, fields: 'userEnteredFormat.textFormat.bold' } });
-    }
-    await sheetsFetch(`${base}:batchUpdate`, token, { method: 'POST', body: JSON.stringify({ requests }) });
+  // One batched formatting pass: clear stale banding, format the Overview, and give
+  // every written data tab a frozen bold header, banding, and a filter.
+  const requests = staleBandings.map((bandedRangeId) => ({ deleteBanding: { bandedRangeId } }));
+  const overviewId = existing.get(overview.title);
+  if (overviewId !== undefined && !failures.includes(overview.title)) {
+    const overviewCols = Math.max(1, ...overview.grid.map((row) => row.length));
+    // Reset formatting first: values:clear leaves prior bold in place, which would
+    // misalign when rows shift between publishes.
+    requests.push({ repeatCell: { range: { sheetId: overviewId, startRowIndex: 0, endRowIndex: overview.grid.length, startColumnIndex: 0, endColumnIndex: overviewCols }, cell: { userEnteredFormat: { textFormat: { bold: false, fontSize: 10 } } }, fields: 'userEnteredFormat.textFormat(bold,fontSize)' } });
+    requests.push({ updateSheetProperties: { properties: { sheetId: overviewId, index: 0, gridProperties: { frozenRowCount: 1 } }, fields: 'index,gridProperties.frozenRowCount' } });
+    requests.push({ repeatCell: { range: { sheetId: overviewId, startRowIndex: 0, endRowIndex: 1 }, cell: { userEnteredFormat: { textFormat: { bold: true, fontSize: 14 } } }, fields: 'userEnteredFormat.textFormat(bold,fontSize)' } });
+    for (const row of overview.boldRows.slice(1)) requests.push({ repeatCell: { range: { sheetId: overviewId, startRowIndex: row, endRowIndex: row + 1 }, cell: { userEnteredFormat: { textFormat: { bold: true } } }, fields: 'userEnteredFormat.textFormat.bold' } });
   }
+  for (const sheet of written) {
+    const sheetId = existing.get(sheet.title);
+    if (sheetId === undefined) continue;
+    requests.push(...dataTabRequests(sheetId, sheet.rows.length, sheet.header.length));
+  }
+  if (requests.length > 0) await sheetsFetch(`${base}:batchUpdate`, token, { method: 'POST', body: JSON.stringify({ requests }) });
 
   return failures;
 }
@@ -285,6 +423,7 @@ async function main(argv = process.argv.slice(2)) {
 
   if (dryRun) {
     reportSheets(sheets);
+    process.stdout.write(`Plus an "${OVERVIEW_TITLE}" landing tab (metadata + hyperlinked contents).\n`);
     process.stdout.write('DRY RUN — no changes written\n');
     return 0;
   }
@@ -294,8 +433,9 @@ async function main(argv = process.argv.slice(2)) {
     persistedId: readPersistedSpreadsheetId(),
   });
   const credsPath = resolveCredentialsPath();
-  const failures = await publishSheets(spreadsheetId, credsPath, sheets);
-  process.stdout.write(`Published ${sheets.length - failures.length}/${sheets.length} tabs to ${spreadsheetId}.\n`);
+  const failures = await publishSheets(spreadsheetId, credsPath, sheets, readMetadata());
+  const totalTabs = sheets.length + 1; // data tabs + Overview
+  process.stdout.write(`Published ${totalTabs - failures.length}/${totalTabs} tabs to ${spreadsheetId}.\n`);
   if (source === 'env') {
     try { persistSpreadsheetId(spreadsheetId); process.stdout.write(`Remembered spreadsheet id (${spreadsheetIdPath()}); future runs need no env var.\n`); }
     catch { /* persistence is a convenience, not required for the publish */ }
