@@ -131,9 +131,9 @@ export async function sheetsFetch(url, token, init = {}, deps = {}) {
 }
 
 /**
- * Publish every sheet to the spreadsheet: create missing tabs, clear + write
- * each tab, then freeze and bold the header row. Fail-soft per tab. Returns the
- * titles that failed.
+ * Publish every sheet to the spreadsheet: prune tabs for retired tables, create
+ * missing tabs, clear + write each tab, then freeze and bold the header row.
+ * Fail-soft per tab. Returns the titles that failed.
  */
 export async function publishSheets(spreadsheetId, credsPath, sheets, write = (text) => process.stdout.write(text)) {
   const token = await getAccessToken(credsPath);
@@ -141,6 +141,17 @@ export async function publishSheets(spreadsheetId, credsPath, sheets, write = (t
 
   const meta = await sheetsFetch(`${base}?fields=sheets.properties(sheetId,title)`, token);
   const existing = new Map((meta.sheets ?? []).map((sheet) => [sheet.properties.title, sheet.properties.sheetId]));
+
+  // Mirror the model exactly: drop tabs for tables that no longer exist (renamed
+  // or removed) so the canonical sheet never carries stale registries. Sheets
+  // requires at least one tab, so a delete that would empty the book is skipped.
+  const desired = new Set(sheets.map((sheet) => sheet.title));
+  const stale = [...existing].filter(([title]) => !desired.has(title));
+  if (stale.length > 0 && stale.length < existing.size) {
+    const body = JSON.stringify({ requests: stale.map(([, sheetId]) => ({ deleteSheet: { sheetId } })) });
+    await sheetsFetch(`${base}:batchUpdate`, token, { method: 'POST', body });
+    for (const [title] of stale) { existing.delete(title); write(`  ${title}: removed (retired table)\n`); }
+  }
 
   const toAdd = sheets.filter((sheet) => !existing.has(sheet.title));
   if (toAdd.length > 0) {
