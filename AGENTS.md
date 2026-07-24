@@ -40,7 +40,10 @@ State whether evidence came directly from the compiled model or was recovered fr
 
 ## Safety boundaries
 
-Do not run `refresh`, `restore`, `launch`, or `relaunch` as routine validation. They inspect or mutate an installed game and are appropriate only for explicitly required live integration. Live validation happens only through `scripts/live-validate.mjs` after `scripts/backup-saves.mjs`, which are the sanctioned wrappers for the otherwise-prohibited refresh and launch.
+These commands touch a real game install, so run them deliberately rather than as reflexive validation. Distinguish data-only work from archive or live-game mutation:
+
+- `refresh --no-patch` recompiles the model, pack, and `model.db` from the pristine archive (or its verified immutable backup) and writes only state-directory files. `export-sheets` publishes that derived data to the shared canonical spreadsheet, creating, clearing, and pruning tabs to mirror the model. Neither mutates the game archive. Run them when the task calls for regenerating or deploying data (for example, after an extraction change) — no `backup-saves`/`live-validate` prerequisite applies.
+- `refresh` (patching), `restore`, `launch`, and `relaunch` mutate the installed archive or drive the live game. Run them only when the task explicitly requires it, never merely to inspect data. Validation that actually launches the game goes through `scripts/live-validate.mjs` after `scripts/backup-saves.mjs`, the sanctioned wrappers that back up saves first.
 
 Preserve fail-closed fingerprint, metadata, backup, foreign-marker, and source-anchor checks. Never hand-edit a game archive or bypass native-game refusal checks. Never read, write, or depend on the game's native `actionQueue`.
 
