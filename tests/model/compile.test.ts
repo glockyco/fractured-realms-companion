@@ -44,7 +44,7 @@ function rawData(shuffled = false): RawGameData {
     digsites: [{ id: 'dig', name: 'Dig', levelReq: 1 }],
     achievements: [{ id: 'achievement', name: 'Achievement', category: 'Goals' }],
     offlineGold: { '1': 10 },
-    prestigeTitles: null,
+    titles: [{ id: 'max_woodcutting', name: 'Grandmaster Woodcutter', source: 'Reach level 99 in Woodcutting', category: 'Mastery', icon: '\u{1F3C6}', skillId: 'woodcutting' }],
     stringsEn: { 'name.log': 'Log' },
     shopItems: ['twig', 'log'],
     shopPriceMultiplier: 2,

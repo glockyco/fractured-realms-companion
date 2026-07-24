@@ -27,7 +27,7 @@ export interface RawGameData {
   digsites: unknown[];
   achievements: Array<Record<string, unknown>>;
   offlineGold: Record<string, number>;
-  prestigeTitles: Record<string, string> | null;
+  titles: Array<Record<string, unknown>>;
   stringsEn: Record<string, string>;
   shopItems: string[];
   shopPriceMultiplier: number;
@@ -236,21 +236,43 @@ function extractSupplyTiers(source: string): Record<string, unknown> {
   }
   return value;
 }
-function extractPrestigeTitles(source: string): Record<string, string> | null {
-  const candidates: Record<string, string>[] = [];
-  for (const match of source.matchAll(/woodcutting:\"Master of the Grove\"/g)) {
-    const at = match.index ?? -1;
-    if (at < 0) continue;
-    try {
-      const text = sliceEnclosing(source, at, '{');
-      const result: Record<string, string> = Object.create(null) as Record<string, string>;
-      for (const field of text.matchAll(/([A-Za-z_$][\w$]*)\s*:\s*(["'])(.*?)\2/g)) result[field[1]] = field[3];
-      if (result.woodcutting && result.mining && result.fishing) candidates.push(result);
-    } catch { /* fail-soft by design */ }
+// The in-game titles registry, assembled exactly as the renderer builds it
+// (`[...mastery, ...prestige, ...static]`): a Mastery title for every skill
+// (level 99), a Prestige title for every skill that has a prestige track (rank
+// X), and a fixed set of Collection, Achievement, Combat, and Easter Egg titles.
+// Names, sources, categories, and icons are reproduced verbatim from the bundle;
+// nothing is inferred from ids.
+function extractTitles(source: string): Array<Record<string, unknown>> {
+  const skills = array(extract(source, 'Po=', 'titles'), 'titles').map((entry) => object(entry, 'titles'));
+  const masteryNames = object(evalLiteral(sliceEnclosing(source, anchor(source, 'woodcutting:"Grandmaster Woodcutter"', 'titles'), '{'), 'titles'), 'titles');
+  const prestigeConfig = object(extract(source, 'cb=', 'titles'), 'titles');
+  const prestigeNames = object(extract(source, 'n5=', 'titles'), 'titles');
+  const staticTitles = array(extract(source, 's5=', 'titles'), 'titles').map((entry) => object(entry, 'titles'));
+
+  const titles: Array<Record<string, unknown>> = [];
+  for (const skill of skills) {
+    const id = string(skill.id, 'titles');
+    const name = string(skill.name, 'titles');
+    const mastery = masteryNames[id];
+    titles.push({ id: `max_${id}`, name: typeof mastery === 'string' ? mastery : `Grandmaster ${name}`, source: `Reach level 99 in ${name}`, category: 'Mastery', icon: '\u{1F3C6}', skillId: id });
   }
-  if (!candidates.length) return null;
-  const canonical = JSON.stringify(candidates[0]);
-  return candidates.every((candidate) => JSON.stringify(candidate) === canonical) ? candidates[0] : null;
+  for (const skill of skills) {
+    const id = string(skill.id, 'titles');
+    if (!Object.hasOwn(prestigeConfig, id)) continue;
+    const name = string(skill.name, 'titles');
+    const prestige = prestigeNames[id];
+    titles.push({ id: `prestige_${id}_x`, name: typeof prestige === 'string' ? prestige : `${name} Transcendent`, source: `Reach Prestige Rank X in ${name}`, category: 'Prestige', icon: '\u2726', skillId: id });
+  }
+  for (const entry of staticTitles) {
+    validateIdName(entry, 'titles');
+    string(entry.source, 'titles');
+    string(entry.category, 'titles');
+    string(entry.icon, 'titles');
+    titles.push(entry);
+  }
+  if (skills.length < 10) fail('titles', `expected at least 10 skills for title generation, got ${skills.length}`);
+  if (!staticTitles.length) fail('titles', 'expected at least one static title');
+  return titles;
 }
 
 function extractEquipment(source: string): Record<string, Record<string, unknown>> {
@@ -508,7 +530,7 @@ export function extractRegistries(source: string, archiveFiles: readonly string[
     items, actions, actionGates: rawGates, skills, xp: extractXp(source), tools,
     mapsRegular, mapsDeep, chartSupplyTiers, agilityCourses, bags, machines, boons,
     restorations, recipeMeals, seals, patterns, grandReward, buildings, buildingXp,
-    zones, digsites, achievements, offlineGold, prestigeTitles: extractPrestigeTitles(source), stringsEn,
+    zones, digsites, achievements, offlineGold, titles: extractTitles(source), stringsEn,
     shopItems: shop.items, shopPriceMultiplier: shop.multiplier,
     equipment,
     weapons,

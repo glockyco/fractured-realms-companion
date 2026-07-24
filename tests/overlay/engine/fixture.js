@@ -29,7 +29,7 @@ export function baseModel(overrides = {}) {
       { id: 'B', name: 'B', skillId: 'woodcutting', levelReq: 5, xp: 30, interval: 4000, inputs: {}, outputs: { log: 1 }, automation: 'auto', gate: null },
     ],
     tools: { woodcutting: [{ id: 'tool', name: 'Tool', levelReq: 1, xpBonus: 0, speedBonus: 0, cost: 200 }] },
-    maps: [], chartSupplyTiers: {}, agilityCourses: [], bags: [], machines: [], boons: [], restorations: [], recipeMeals: [], seals: [], patterns: {}, grandReward: {}, buildings: [], buildingXp: {}, zones: [], digsites: [], achievements: [], offlineGold: {}, prestigeTitles: null, stringsEn: {},
+    maps: [], chartSupplyTiers: {}, agilityCourses: [], bags: [], machines: [], boons: [], restorations: [], recipeMeals: [], seals: [], patterns: {}, grandReward: {}, buildings: [], buildingXp: {}, zones: [], digsites: [], achievements: [], offlineGold: {}, titles: [], stringsEn: {},
     ...overrides,
   };
   return model;

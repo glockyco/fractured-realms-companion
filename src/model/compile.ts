@@ -34,7 +34,7 @@ export interface GameModel {
   digsites: unknown[];
   achievements: Array<Record<string, unknown>>;
   offlineGold: Record<string, number>;
-  prestigeTitles: Record<string, string> | null;
+  titles: Array<Record<string, unknown>>;
   stringsEn: Record<string, string>;
   shop: Record<string, number>;
   equipment: Record<string, JsonRecord>;
@@ -137,7 +137,7 @@ export function compileModel(raw: RawGameData, buildId: string): GameModel {
     digsites: raw.digsites,
     achievements: raw.achievements,
     offlineGold: raw.offlineGold,
-    prestigeTitles: raw.prestigeTitles,
+    titles: raw.titles,
     stringsEn: raw.stringsEn,
     shop,
     equipment,

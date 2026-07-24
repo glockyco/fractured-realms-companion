@@ -66,7 +66,7 @@ function schema(db: NonNullable<ReturnType<typeof openDatabase>>): void {
     CREATE TABLE digsites (id TEXT PRIMARY KEY, name TEXT, level_req INTEGER, data_json TEXT NOT NULL);
     CREATE TABLE achievements (id TEXT PRIMARY KEY, name TEXT, icon TEXT, category TEXT, secret INTEGER, desc TEXT, data_json TEXT NOT NULL);
     CREATE TABLE offline_gold (level TEXT PRIMARY KEY, gold_per_min REAL);
-    CREATE TABLE prestige_titles (skill_id TEXT PRIMARY KEY, title TEXT);
+    CREATE TABLE titles (id TEXT PRIMARY KEY, name TEXT, source TEXT, category TEXT, icon TEXT, skill_id TEXT, color TEXT, data_json TEXT NOT NULL);
     CREATE TABLE strings (key TEXT PRIMARY KEY, value TEXT);
     CREATE TABLE xp_table (level INTEGER PRIMARY KEY, xp REAL);
   `);
@@ -162,7 +162,7 @@ function writeRows(db: NonNullable<ReturnType<typeof openDatabase>>, model: Game
   for (const digsite of model.digsites) { const row = asRecord(digsite); insert(db, 'digsites', ['id', 'name', 'level_req', 'data_json'], [scalar(row.id), scalar(row.name), scalar(row.levelReq), json(row)]); }
   for (const achievement of model.achievements) { const row = asRecord(achievement); insert(db, 'achievements', ['id', 'name', 'icon', 'category', 'secret', 'desc', 'data_json'], [scalar(row.id), scalar(row.name), scalar(row.icon), scalar(row.category), row.secret ? 1 : 0, scalar(row.desc), json(row)]); }
   for (const [level, amount] of Object.entries(model.offlineGold)) insert(db, 'offline_gold', ['level', 'gold_per_min'], [level, amount]);
-  if (model.prestigeTitles) for (const [skillId, title] of Object.entries(model.prestigeTitles)) insert(db, 'prestige_titles', ['skill_id', 'title'], [skillId, title]);
+  for (const title of model.titles) { const row = asRecord(title); insert(db, 'titles', ['id', 'name', 'source', 'category', 'icon', 'skill_id', 'color', 'data_json'], [scalar(row.id), scalar(row.name), scalar(row.source), scalar(row.category), scalar(row.icon), scalar(row.skillId), scalar(row.color), json(row)]); }
   for (const [key, value] of Object.entries(model.stringsEn)) insert(db, 'strings', ['key', 'value'], [key, value]);
   model.xpTable.forEach((xp, level) => insert(db, 'xp_table', ['level', 'xp'], [level, xp]));
 }
