@@ -2,6 +2,25 @@ import vm from 'node:vm';
 import { OperationalError } from '../lib/errors.ts';
 import { evalLiteral, sliceEnclosing, sliceLiteral } from './scan.ts';
 
+/** One prestige-capable skill's track: XP curve and the bonuses unlocked per rank. */
+export interface PrestigeSkill {
+  category: string;
+  maxXp: number;
+  thresholds: number[];
+  native: Array<[number, string]>;
+  cross: Array<[number, string]>;
+}
+/** The full prestige system: global rank rules plus the per-skill tracks. */
+export interface PrestigeData {
+  maxRank: number;
+  xpBonusPerRank: number;
+  speedBonusPerRank: number;
+  rankLabels: string[];
+  weights: number[];
+  categoryTotals: Record<string, number>;
+  skills: Record<string, PrestigeSkill>;
+}
+
 export interface RawGameData {
   items: Record<string, Record<string, unknown>>;
   actions: Record<string, unknown[]>;
@@ -28,6 +47,7 @@ export interface RawGameData {
   achievements: Array<Record<string, unknown>>;
   offlineGold: Record<string, number>;
   titles: Array<Record<string, unknown>>;
+  prestige: PrestigeData;
   stringsEn: Record<string, string>;
   shopItems: string[];
   shopPriceMultiplier: number;
@@ -273,6 +293,55 @@ function extractTitles(source: string): Array<Record<string, unknown>> {
   if (skills.length < 10) fail('titles', `expected at least 10 skills for title generation, got ${skills.length}`);
   if (!staticTitles.length) fail('titles', 'expected at least one static title');
   return titles;
+}
+
+function prestigeBonuses(value: unknown, dataset: string): Array<[number, string]> {
+  return array(value, dataset).map((pair) => {
+    const tuple = array(pair, dataset);
+    if (tuple.length !== 2) fail(dataset, 'bonus entry must be a [rank, description] pair');
+    return [number(tuple[0], dataset), string(tuple[1], dataset)];
+  });
+}
+
+// The prestige system, reproduced as the renderer computes it. Once a skill is at
+// the level cap, overflow XP becomes prestige XP for that skill, capped at its
+// category total and converted to a rank 0..maxRank via cumulative thresholds the
+// game derives from a fixed weight distribution (`qf`) scaled by the category
+// total (`K1`). Every rank grants a flat XP and speed bonus; `cb` lists the extra
+// native (same-skill) and cross (related-skill) bonuses unlocked at specific ranks.
+function extractPrestige(source: string): PrestigeData {
+  const config = object(extract(source, 'cb=', 'prestige'), 'prestige');
+  const weights = array(extract(source, 'qf=[60,77,93,110,120,130,140,160,175,192]', 'prestige'), 'prestige').map((weight) => number(weight, 'prestige'));
+  const rawTotals = object(extract(source, 'K1={gathering:129e5,artisan:585e4,cooking:43e5}', 'prestige'), 'prestige');
+  const skillCategory = object(extract(source, 'YA={woodcutting:"gathering"', 'prestige'), 'prestige');
+  const rankLabels = array(extract(source, 'XA=["I","II"', 'prestige'), 'prestige').map((label) => string(label, 'prestige'));
+  const constMatch = /Mm=(\d+),F1=([0-9.]+),ZA=([0-9.]+)/.exec(source.slice(anchor(source, 'Mm=', 'prestige'), anchor(source, 'Mm=', 'prestige') + 22));
+  if (!constMatch) fail('prestige', 'could not parse rank constants');
+  const maxRank = Number(constMatch[1]);
+  const xpBonusPerRank = Number(constMatch[2]);
+  const speedBonusPerRank = Number(constMatch[3]);
+  if (!(maxRank > 0) || !(xpBonusPerRank > 0) || !(speedBonusPerRank > 0)) fail('prestige', 'rank constants are non-positive');
+
+  const weightSum = weights.reduce((sum, weight) => sum + weight, 0);
+  if (weightSum <= 0) fail('prestige', 'weight distribution sums to zero');
+  if (weights.length !== maxRank) fail('prestige', `weight bands (${weights.length}) do not match max rank (${maxRank})`);
+  if (rankLabels.length !== maxRank) fail('prestige', `rank labels (${rankLabels.length}) do not match max rank (${maxRank})`);
+
+  const categoryTotals: Record<string, number> = Object.create(null) as Record<string, number>;
+  for (const [category, total] of Object.entries(rawTotals)) categoryTotals[category] = number(total, 'prestige');
+
+  const skills: Record<string, PrestigeSkill> = Object.create(null) as Record<string, PrestigeSkill>;
+  for (const [id, value] of Object.entries(config)) {
+    const entry = object(value, 'prestige');
+    const category = string(skillCategory[id], 'prestige');
+    const total = categoryTotals[category];
+    if (typeof total !== 'number') fail('prestige', `skill ${id} has unknown category ${category}`);
+    let cumulative = 0;
+    const thresholds = weights.map((weight) => (cumulative += Math.round((weight / weightSum) * total), cumulative));
+    skills[id] = { category, maxXp: thresholds[thresholds.length - 1]!, thresholds, native: prestigeBonuses(entry.native, 'prestige'), cross: prestigeBonuses(entry.cross, 'prestige') };
+  }
+  if (!Object.keys(skills).length) fail('prestige', 'expected at least one prestige skill');
+  return { maxRank, xpBonusPerRank, speedBonusPerRank, rankLabels, weights, categoryTotals, skills };
 }
 
 function extractEquipment(source: string): Record<string, Record<string, unknown>> {
@@ -530,7 +599,7 @@ export function extractRegistries(source: string, archiveFiles: readonly string[
     items, actions, actionGates: rawGates, skills, xp: extractXp(source), tools,
     mapsRegular, mapsDeep, chartSupplyTiers, agilityCourses, bags, machines, boons,
     restorations, recipeMeals, seals, patterns, grandReward, buildings, buildingXp,
-    zones, digsites, achievements, offlineGold, titles: extractTitles(source), stringsEn,
+    zones, digsites, achievements, offlineGold, titles: extractTitles(source), prestige: extractPrestige(source), stringsEn,
     shopItems: shop.items, shopPriceMultiplier: shop.multiplier,
     equipment,
     weapons,

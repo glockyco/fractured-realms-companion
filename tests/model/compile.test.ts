@@ -45,6 +45,7 @@ function rawData(shuffled = false): RawGameData {
     achievements: [{ id: 'achievement', name: 'Achievement', category: 'Goals' }],
     offlineGold: { '1': 10 },
     titles: [{ id: 'max_woodcutting', name: 'Grandmaster Woodcutter', source: 'Reach level 99 in Woodcutting', category: 'Mastery', icon: '\u{1F3C6}', skillId: 'woodcutting' }],
+    prestige: { maxRank: 10, xpBonusPerRank: 0.01, speedBonusPerRank: 0.005, rankLabels: ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X'], weights: [60, 77, 93, 110, 120, 130, 140, 160, 175, 192], categoryTotals: { gathering: 12900000 }, skills: { woodcutting: { category: 'gathering', maxXp: 12900000, thresholds: [615752, 1405967, 2360382, 3489260, 4720764, 6054893, 7491647, 9133652, 10929595, 12900001], native: [[5, '+1% double log']], cross: [[2, '+2% Crafting Speed']] } } },
     stringsEn: { 'name.log': 'Log' },
     shopItems: ['twig', 'log'],
     shopPriceMultiplier: 2,

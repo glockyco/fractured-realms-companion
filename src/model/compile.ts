@@ -1,4 +1,4 @@
-import type { RawGameData } from '../extract/registries.ts';
+import type { PrestigeData, RawGameData } from '../extract/registries.ts';
 
 export type JsonRecord = Record<string, unknown>;
 
@@ -35,6 +35,7 @@ export interface GameModel {
   achievements: Array<Record<string, unknown>>;
   offlineGold: Record<string, number>;
   titles: Array<Record<string, unknown>>;
+  prestige: PrestigeData;
   stringsEn: Record<string, string>;
   shop: Record<string, number>;
   equipment: Record<string, JsonRecord>;
@@ -138,6 +139,7 @@ export function compileModel(raw: RawGameData, buildId: string): GameModel {
     achievements: raw.achievements,
     offlineGold: raw.offlineGold,
     titles: raw.titles,
+    prestige: raw.prestige,
     stringsEn: raw.stringsEn,
     shop,
     equipment,

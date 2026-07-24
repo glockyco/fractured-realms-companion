@@ -67,6 +67,10 @@ function schema(db: NonNullable<ReturnType<typeof openDatabase>>): void {
     CREATE TABLE achievements (id TEXT PRIMARY KEY, name TEXT, icon TEXT, category TEXT, secret INTEGER, desc TEXT, data_json TEXT NOT NULL);
     CREATE TABLE offline_gold (level TEXT PRIMARY KEY, gold_per_min REAL);
     CREATE TABLE titles (id TEXT PRIMARY KEY, name TEXT, source TEXT, category TEXT, icon TEXT, skill_id TEXT, color TEXT, data_json TEXT NOT NULL);
+    CREATE TABLE prestige_config (id INTEGER PRIMARY KEY, max_rank INTEGER, xp_bonus_per_rank REAL, speed_bonus_per_rank REAL, data_json TEXT NOT NULL);
+    CREATE TABLE prestige_tracks (skill_id TEXT PRIMARY KEY, category TEXT, max_xp REAL, data_json TEXT NOT NULL);
+    CREATE TABLE prestige_thresholds (skill_id TEXT, rank INTEGER, cum_xp REAL, PRIMARY KEY(skill_id, rank));
+    CREATE TABLE prestige_bonuses (skill_id TEXT, kind TEXT, rank INTEGER, description TEXT);
     CREATE TABLE strings (key TEXT PRIMARY KEY, value TEXT);
     CREATE TABLE xp_table (level INTEGER PRIMARY KEY, xp REAL);
   `);
@@ -163,6 +167,14 @@ function writeRows(db: NonNullable<ReturnType<typeof openDatabase>>, model: Game
   for (const achievement of model.achievements) { const row = asRecord(achievement); insert(db, 'achievements', ['id', 'name', 'icon', 'category', 'secret', 'desc', 'data_json'], [scalar(row.id), scalar(row.name), scalar(row.icon), scalar(row.category), row.secret ? 1 : 0, scalar(row.desc), json(row)]); }
   for (const [level, amount] of Object.entries(model.offlineGold)) insert(db, 'offline_gold', ['level', 'gold_per_min'], [level, amount]);
   for (const title of model.titles) { const row = asRecord(title); insert(db, 'titles', ['id', 'name', 'source', 'category', 'icon', 'skill_id', 'color', 'data_json'], [scalar(row.id), scalar(row.name), scalar(row.source), scalar(row.category), scalar(row.icon), scalar(row.skillId), scalar(row.color), json(row)]); }
+  const prestige = model.prestige;
+  insert(db, 'prestige_config', ['id', 'max_rank', 'xp_bonus_per_rank', 'speed_bonus_per_rank', 'data_json'], [1, scalar(prestige.maxRank), scalar(prestige.xpBonusPerRank), scalar(prestige.speedBonusPerRank), json(prestige)]);
+  for (const [skillId, track] of Object.entries(prestige.skills)) {
+    insert(db, 'prestige_tracks', ['skill_id', 'category', 'max_xp', 'data_json'], [skillId, scalar(track.category), scalar(track.maxXp), json(track)]);
+    track.thresholds.forEach((cumXp, rank) => insert(db, 'prestige_thresholds', ['skill_id', 'rank', 'cum_xp'], [skillId, rank + 1, cumXp]));
+    for (const [rank, description] of track.native) insert(db, 'prestige_bonuses', ['skill_id', 'kind', 'rank', 'description'], [skillId, 'native', rank, description]);
+    for (const [rank, description] of track.cross) insert(db, 'prestige_bonuses', ['skill_id', 'kind', 'rank', 'description'], [skillId, 'cross', rank, description]);
+  }
   for (const [key, value] of Object.entries(model.stringsEn)) insert(db, 'strings', ['key', 'value'], [key, value]);
   model.xpTable.forEach((xp, level) => insert(db, 'xp_table', ['level', 'xp'], [level, xp]));
 }

@@ -91,7 +91,12 @@ function fixture(): string {
     'function xpGenerator(){const a=new Array(100).fill(0);for(let i=2;i<100;i++)a[i]=i*10+300*Math.pow(2,i/7);return a;}',
     'const Po=[{id:"woodcutting",name:"Woodcutting",category:"gathering"},{id:"mining",name:"Mining",category:"gathering"},{id:"fishing",name:"Fishing",category:"gathering"},{id:"prayer",name:"Prayer",category:"combat"},{id:"bounty",name:"Bounty",category:"combat"},{id:"cooking",name:"Cooking",category:"artisan"},{id:"smithing",name:"Smithing",category:"artisan"},{id:"crafting",name:"Crafting",category:"artisan"},{id:"agility",name:"Agility",category:"support"},{id:"cartography",name:"Cartography",category:"support"},{id:"attack",name:"Attack",category:"combat"},{id:"strength",name:"Strength",category:"combat"}];',
     'const MASTERY={woodcutting:"Grandmaster Woodcutter",mining:"Grandmaster Miner"};',
-    'const cb={woodcutting:{title:"Master of the Grove"},mining:{title:"Lord of the Deep"},prayer:{title:"Saint"},bounty:{title:"Master Hunter"}};',
+    'const cb={woodcutting:{title:"Master of the Grove",cross:[[2,"+2% Crafting Speed"]],native:[[5,"+1% double log"]]},mining:{title:"Lord of the Deep",cross:[],native:[[9,"+2% ore"]]},prayer:{title:"Saint",cross:[],native:[]},bounty:{title:"Master Hunter",cross:[],native:[]}};',
+    'const YA={woodcutting:"gathering",mining:"gathering",prayer:"artisan",bounty:"artisan"};',
+    'const K1={gathering:129e5,artisan:585e4,cooking:43e5};',
+    'const qf=[60,77,93,110,120,130,140,160,175,192];',
+    'const XA=["I","II","III","IV","V","VI","VII","VIII","IX","X"];',
+    'const Mm=10,F1=.01,ZA=.005;',
     'const n5={woodcutting:"Master of the Grove",mining:"Lord of the Deep",prayer:"Saint"};',
     'const s5=[{id:"seal_bearer",name:"Sealbearer",source:"Collect all seals",category:"Collection",icon:"trophy"},{id:"season_11_grandchamp",name:"Season 11 Grand Champion",source:"Earn it",category:"Easter Eggs",icon:"cup",color:"#e8c84a"}];',
   ].join('\n');
@@ -128,6 +133,16 @@ test('extracts every raw registry from a synthetic bundle', () => {
   assert.equal(titleById.has('prestige_fishing_x'), false);
   assert.equal(titleById.get('seal_bearer')?.category, 'Collection');
   assert.equal(titleById.get('season_11_grandchamp')?.color, '#e8c84a');
+  assert.equal(result.prestige.maxRank, 10);
+  assert.equal(result.prestige.xpBonusPerRank, 0.01);
+  assert.equal(result.prestige.speedBonusPerRank, 0.005);
+  assert.equal(result.prestige.rankLabels.length, 10);
+  assert.equal(result.prestige.skills.woodcutting.category, 'gathering');
+  assert.equal(result.prestige.skills.woodcutting.maxXp, 12900001);
+  assert.deepEqual(result.prestige.skills.woodcutting.thresholds, [615752, 1405967, 2360382, 3489260, 4720764, 6054893, 7491647, 9133652, 10929595, 12900001]);
+  assert.deepEqual(result.prestige.skills.woodcutting.native, [[5, '+1% double log']]);
+  assert.deepEqual(result.prestige.skills.woodcutting.cross, [[2, '+2% Crafting Speed']]);
+  assert.equal(result.prestige.skills.prayer.category, 'artisan');
   assert.equal(result.xp.length, 100);
   assert.equal(result.xp[2] > result.xp[1], true);
   assert.deepEqual(result.shopItems.slice(0, 2), ['vial', 'bow_string']);
@@ -160,7 +175,7 @@ test('real v0.3 bundle registries', { skip: !process.env.FR_BUNDLE_ASAR }, () =>
   const bundle = files.find((file) => /^dist\/assets\/index-.*\.js$/.test(file));
   assert.ok(bundle);
   const result = extractRegistries(extractFile(archive, bundle).toString('utf8'), files);
-  const EXPECTED = { skills: 21, items: 548, actionGates: 120, actions: 412, zones: 12, enemies: 48, agilityCourses: 8, mapsRegular: 26, mapsDeep: 20, machines: 10, boons: 4, restorations: 4, recipeMeals: 4, seals: 21, buildings: 24, digsites: 4, titles: 42, tools: { woodcutting: 10, mining: 10, fishing: 7, trapping: 9, archaeology: 7, foraging: 9, smithing: 3, brewing: 3, glyphweaving: 3 }, actionsBySkill: { woodcutting: 11, mining: 13, fishing: 13, foraging: 18, trapping: 15, archaeology: 12, cooking: 35, smithing: 79, crafting: 105, brewing: 25, glyphweaving: 44, prayer: 6, bounty: 36 } };
+  const EXPECTED = { skills: 21, items: 548, actionGates: 120, actions: 412, zones: 12, enemies: 48, agilityCourses: 8, mapsRegular: 26, mapsDeep: 20, machines: 10, boons: 4, restorations: 4, recipeMeals: 4, seals: 21, buildings: 24, digsites: 4, titles: 42, prestige: 14, tools: { woodcutting: 10, mining: 10, fishing: 7, trapping: 9, archaeology: 7, foraging: 9, smithing: 3, brewing: 3, glyphweaving: 3 }, actionsBySkill: { woodcutting: 11, mining: 13, fishing: 13, foraging: 18, trapping: 15, archaeology: 12, cooking: 35, smithing: 79, crafting: 105, brewing: 25, glyphweaving: 44, prayer: 6, bounty: 36 } };
   assert.equal(result.skills.length, EXPECTED.skills);
   assert.equal(Object.keys(result.items).length, EXPECTED.items);
   assert.equal(Object.keys(result.actionGates).length, EXPECTED.actionGates);
@@ -178,6 +193,8 @@ test('real v0.3 bundle registries', { skip: !process.env.FR_BUNDLE_ASAR }, () =>
   assert.equal(result.buildings.length, EXPECTED.buildings);
   assert.equal(result.digsites.length, EXPECTED.digsites);
   assert.equal(result.titles.length, EXPECTED.titles);
+  assert.equal(Object.keys(result.prestige.skills).length, EXPECTED.prestige);
+  assert.equal(result.prestige.maxRank, 10);
   for (const [skill, count] of Object.entries(EXPECTED.tools)) assert.equal(result.tools[skill].length, count);
   for (const [skill, count] of Object.entries(EXPECTED.actionsBySkill)) assert.equal(result.actions[skill].length, count, `actions census for ${skill}`);
 
