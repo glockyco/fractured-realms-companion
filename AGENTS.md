@@ -47,6 +47,8 @@ These commands touch a real game install, so run them deliberately rather than a
 
 Preserve fail-closed fingerprint, metadata, backup, foreign-marker, and source-anchor checks. Never hand-edit a game archive or bypass native-game refusal checks. Never read, write, or depend on the game's native `actionQueue`.
 
+Extraction anchors in `src/extract/registries.ts` must key on game content (ids, object keys, player-visible strings) or literal structure, never on a minified identifier such as `cb=` or `eM=`: the mangler reassigns those on every game rebuild. `anchor()` enforces this and throws `AnchorHygieneError`.
+
 ## Commits and releases
 
 Use Conventional Commits checked by `commitlint.config.cjs`: allowed types are `build`, `chore`, `ci`, `docs`, `feat`, `fix`, `perf`, `refactor`, `revert`, `style`, and `test`; types and scopes are lowercase, subjects have no terminal period, and headers are at most 72 characters. In OMP, create body commits through `bun skill://commit/commit-helper.ts`.

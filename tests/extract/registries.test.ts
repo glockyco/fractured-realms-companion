@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { extractFile, listFiles } from '../../src/lib/asar.ts';
 import { evalLiteral, sliceEnclosing } from '../../src/extract/scan.ts';
-import { extractRegistries } from '../../src/extract/registries.ts';
+import { extractRegistries, anchor, AnchorHygieneError } from '../../src/extract/registries.ts';
 import { compileModel } from '../../src/model/compile.ts';
 import { writeModelDb } from '../../src/model/sqlite.ts';
 import { openDatabase, sqliteAvailable } from '../../src/lib/sqlite.ts';
@@ -21,7 +21,22 @@ function fixture(): string {
     return `${skill}:[{id:"${id}",levelReq:${i + 1},xp:2,interval:100,outputs:{ancient_spore:1}${bounty}}]`;
   }).join(',');
   const gates = '{chop_witherwood:{mapId:"millhaven_village",skillLevel:2}}';
-  const skills = Array.from({ length: 15 }, (_, i) => `{id:"skill_${i}",name:"Skill ${i}",category:"support"}`).join(',');
+  // The bundle has exactly one skills array, and titles are generated from it.
+  const skills = [
+    '{id:"woodcutting",name:"Woodcutting",category:"gathering"}',
+    '{id:"mining",name:"Mining",category:"gathering"}',
+    '{id:"fishing",name:"Fishing",category:"gathering"}',
+    '{id:"prayer",name:"Prayer",category:"combat"}',
+    '{id:"bounty",name:"Bounty",category:"combat"}',
+    '{id:"cooking",name:"Cooking",category:"artisan"}',
+    '{id:"smithing",name:"Smithing",category:"artisan"}',
+    '{id:"crafting",name:"Crafting",category:"artisan"}',
+    '{id:"agility",name:"Agility",category:"support"}',
+    '{id:"cartography",name:"Cartography",category:"support"}',
+    '{id:"attack",name:"Attack",category:"combat"}',
+    '{id:"strength",name:"Strength",category:"combat"}',
+    ...Array.from({ length: 3 }, (_, i) => `{id:"skill_${i}",name:"Skill ${i}",category:"support"}`),
+  ].join(',');
   const tools = [
     'woodcutting:[{id:"bronze_axe",name:"Bronze Axe",levelReq:1,xpBonus:0,speedBonus:0}]',
     'mining:[{id:"bronze_pick",name:"Bronze Pick",levelReq:1,xpBonus:0,speedBonus:0}]',
@@ -89,14 +104,14 @@ function fixture(): string {
     'const K8=new Set(["vial","bow_string"]);const Nz=["wild_berries","venison","woodland_seed","bog_mushroom","plains_seed","ember_spore","ancient_spore"],eM=2,kU=new Set(["vial","bow_string",...Nz]);',
     'const STRINGS={"name.ancient_spore":"Ancient Spore","itemdesc.ancient_spore":"A spore."};',
     'function xpGenerator(){const a=new Array(100).fill(0);for(let i=2;i<100;i++)a[i]=i*10+300*Math.pow(2,i/7);return a;}',
-    'const Po=[{id:"woodcutting",name:"Woodcutting",category:"gathering"},{id:"mining",name:"Mining",category:"gathering"},{id:"fishing",name:"Fishing",category:"gathering"},{id:"prayer",name:"Prayer",category:"combat"},{id:"bounty",name:"Bounty",category:"combat"},{id:"cooking",name:"Cooking",category:"artisan"},{id:"smithing",name:"Smithing",category:"artisan"},{id:"crafting",name:"Crafting",category:"artisan"},{id:"agility",name:"Agility",category:"support"},{id:"cartography",name:"Cartography",category:"support"},{id:"attack",name:"Attack",category:"combat"},{id:"strength",name:"Strength",category:"combat"}];',
     'const MASTERY={woodcutting:"Grandmaster Woodcutter",mining:"Grandmaster Miner"};',
-    'const cb={woodcutting:{title:"Master of the Grove",cross:[[2,"+2% Crafting Speed"]],native:[[5,"+1% double log"]]},mining:{title:"Lord of the Deep",cross:[],native:[[9,"+2% ore"]]},prayer:{title:"Saint",cross:[],native:[]},bounty:{title:"Master Hunter",cross:[],native:[]}};',
+    // `bounty` intentionally omits `title` so the Transcendent name fallback stays covered.
+    'const cb={woodcutting:{title:"Master of the Grove",cross:[[2,"+2% Crafting Speed"]],native:[[5,"+1% double log"]]},mining:{title:"Lord of the Deep",cross:[],native:[[9,"+2% ore"]]},prayer:{title:"Saint",cross:[],native:[]},bounty:{cross:[],native:[]}};',
     'const YA={woodcutting:"gathering",mining:"gathering",prayer:"artisan",bounty:"artisan"};',
     'const K1={gathering:129e5,artisan:585e4,cooking:43e5};',
     'const qf=[60,77,93,110,120,130,140,160,175,192];',
     'const XA=["I","II","III","IV","V","VI","VII","VIII","IX","X"];',
-    'const Mm=10,F1=.01,ZA=.005;',
+    'const RANK_BONUS=["Gold prestige badge on skill"];const Mm=10,F1=.01,ZA=.005;',
     'const n5={woodcutting:"Master of the Grove",mining:"Lord of the Deep",prayer:"Saint"};',
     'const s5=[{id:"seal_bearer",name:"Sealbearer",source:"Collect all seals",category:"Collection",icon:"trophy"},{id:"season_11_grandchamp",name:"Season 11 Grand Champion",source:"Earn it",category:"Easter Eggs",icon:"cup",color:"#e8c84a"}];',
   ].join('\n');
@@ -125,7 +140,7 @@ test('extracts every raw registry from a synthetic bundle', () => {
   assert.equal(result.achievements[0].id, 'secret_millionaire');
   assert.equal(result.achievements[0].secret, true);
   const titleById = new Map(result.titles.map((title) => [title.id as string, title]));
-  assert.equal(result.titles.length, 18);
+  assert.equal(result.titles.length, 22);
   assert.deepEqual(titleById.get('max_woodcutting'), { id: 'max_woodcutting', name: 'Grandmaster Woodcutter', source: 'Reach level 99 in Woodcutting', category: 'Mastery', icon: '\u{1F3C6}', skillId: 'woodcutting' });
   assert.equal(titleById.get('max_fishing')?.name, 'Grandmaster Fishing');
   assert.deepEqual(titleById.get('prestige_woodcutting_x'), { id: 'prestige_woodcutting_x', name: 'Master of the Grove', source: 'Reach Prestige Rank X in Woodcutting', category: 'Prestige', icon: '\u2726', skillId: 'woodcutting' });
@@ -167,6 +182,18 @@ test('fails closed for missing, duplicate, and malformed registry anchors', () =
   const duplicate = fixture() + '\nconst duplicate={witherwood_log:{label:"x",type:"material"}};';
   assert.throws(() => extractRegistries(duplicate, []), /items dataset: anchor is ambiguous/);
   assert.throws(() => extractRegistries(fixture().replace('id:"act_mining"', 'id:undefined'), []), /actions dataset/);
+});
+
+test('an anchor carrying a minified identifier is refused outright', () => {
+  // The guard is what stops a future edit from reintroducing a mangler-dependent
+  // anchor: the minifier reassigns those names on every game rebuild.
+  const source = 'const x={chop_witherwood:{mapId:"m"}};const y=300*Math.pow(2,3);const z=new Set(["vial","bow_string",1]);';
+  for (const bad of ['Po=', 'cb=', 'n5=', 's5=', 'Mm=', 'eM = 2', 'qf=[60,77', 'XA=["I","II"']) {
+    assert.throws(() => anchor(source, bad, 'probe'), (error: unknown) => error instanceof AnchorHygieneError && /minified identifier/.test(error.message), bad);
+  }
+  for (const good of ['={chop_witherwood:{mapId:', '300*Math.pow(2,', 'new Set(["vial","bow_string",']) {
+    assert.doesNotThrow(() => anchor(source, good, 'probe'), good);
+  }
 });
 
 test('real v0.3 bundle registries', { skip: !process.env.FR_BUNDLE_ASAR }, () => {

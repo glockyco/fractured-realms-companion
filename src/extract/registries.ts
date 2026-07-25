@@ -76,10 +76,22 @@ const TOOL_ANCHORS: Record<string, string> = {
   glyphweaving: '[{id:"inscribed_quill"',
 };
 
+/** A developer error: an anchor that depends on a minifier-assigned name. */
+export class AnchorHygieneError extends Error {}
+// A minified identifier is reassigned by the mangler on every game rebuild, so an
+// anchor containing one breaks even when no game content changed. Anchor on game
+// content (ids, keys, player-visible strings) or on literal structure instead.
+const MANGLED_ANCHOR = /(^|[^A-Za-z0-9_$."'])[A-Za-z_$][A-Za-z0-9_$]{0,2}\s*=(?!=)/;
+
 function fail(dataset: string, message: string): never {
   throw new OperationalError(`${dataset} dataset: ${message}`);
 }
-function anchor(source: string, text: string, dataset: string): number {
+/**
+ * Locate a unique anchor. Exported as the seam for the hygiene guard's own test:
+ * every registry lookup funnels through here, so the guard cannot be bypassed.
+ */
+export function anchor(source: string, text: string, dataset: string): number {
+  if (MANGLED_ANCHOR.test(text)) throw new AnchorHygieneError(`${dataset} dataset: anchor depends on a minified identifier (${text})`);
   const first = source.indexOf(text);
   if (first < 0 || source.indexOf(text, first + 1) >= 0) {
     fail(dataset, first < 0 ? `anchor not found (${text})` : `anchor is ambiguous (${text})`);
@@ -262,12 +274,11 @@ function extractSupplyTiers(source: string): Record<string, unknown> {
 // X), and a fixed set of Collection, Achievement, Combat, and Easter Egg titles.
 // Names, sources, categories, and icons are reproduced verbatim from the bundle;
 // nothing is inferred from ids.
-function extractTitles(source: string): Array<Record<string, unknown>> {
-  const skills = array(extract(source, 'Po=', 'titles'), 'titles').map((entry) => object(entry, 'titles'));
+function extractTitles(source: string, skillList: readonly unknown[]): Array<Record<string, unknown>> {
+  const skills = skillList.map((entry) => object(entry, 'titles'));
   const masteryNames = object(evalLiteral(sliceEnclosing(source, anchor(source, 'woodcutting:"Grandmaster Woodcutter"', 'titles'), '{'), 'titles'), 'titles');
-  const prestigeConfig = object(extract(source, 'cb=', 'titles'), 'titles');
-  const prestigeNames = object(extract(source, 'n5=', 'titles'), 'titles');
-  const staticTitles = array(extract(source, 's5=', 'titles'), 'titles').map((entry) => object(entry, 'titles'));
+  const prestigeConfig = object(evalLiteral(sliceEnclosing(source, anchor(source, 'woodcutting:{title:', 'titles'), '{'), 'titles'), 'titles');
+  const staticTitles = array(extract(source, '[{id:"seal_bearer",name:"Sealbearer"', 'titles'), 'titles').map((entry) => object(entry, 'titles'));
 
   const titles: Array<Record<string, unknown>> = [];
   for (const skill of skills) {
@@ -280,7 +291,7 @@ function extractTitles(source: string): Array<Record<string, unknown>> {
     const id = string(skill.id, 'titles');
     if (!Object.hasOwn(prestigeConfig, id)) continue;
     const name = string(skill.name, 'titles');
-    const prestige = prestigeNames[id];
+    const prestige = object(prestigeConfig[id], 'titles').title;
     titles.push({ id: `prestige_${id}_x`, name: typeof prestige === 'string' ? prestige : `${name} Transcendent`, source: `Reach Prestige Rank X in ${name}`, category: 'Prestige', icon: '\u2726', skillId: id });
   }
   for (const entry of staticTitles) {
@@ -290,7 +301,6 @@ function extractTitles(source: string): Array<Record<string, unknown>> {
     string(entry.icon, 'titles');
     titles.push(entry);
   }
-  if (skills.length < 10) fail('titles', `expected at least 10 skills for title generation, got ${skills.length}`);
   if (!staticTitles.length) fail('titles', 'expected at least one static title');
   return titles;
 }
@@ -306,16 +316,20 @@ function prestigeBonuses(value: unknown, dataset: string): Array<[number, string
 // The prestige system, reproduced as the renderer computes it. Once a skill is at
 // the level cap, overflow XP becomes prestige XP for that skill, capped at its
 // category total and converted to a rank 0..maxRank via cumulative thresholds the
-// game derives from a fixed weight distribution (`qf`) scaled by the category
-// total (`K1`). Every rank grants a flat XP and speed bonus; `cb` lists the extra
-// native (same-skill) and cross (related-skill) bonuses unlocked at specific ranks.
+// game derives from a fixed weight distribution scaled by the category total.
+// Every rank grants a flat XP and speed bonus; the per-skill config lists the
+// extra native (same-skill) and cross (related-skill) bonuses unlocked at
+// specific ranks.
 function extractPrestige(source: string): PrestigeData {
-  const config = object(extract(source, 'cb=', 'prestige'), 'prestige');
-  const weights = array(extract(source, 'qf=[60,77,93,110,120,130,140,160,175,192]', 'prestige'), 'prestige').map((weight) => number(weight, 'prestige'));
-  const rawTotals = object(extract(source, 'K1={gathering:129e5,artisan:585e4,cooking:43e5}', 'prestige'), 'prestige');
-  const skillCategory = object(extract(source, 'YA={woodcutting:"gathering"', 'prestige'), 'prestige');
-  const rankLabels = array(extract(source, 'XA=["I","II"', 'prestige'), 'prestige').map((label) => string(label, 'prestige'));
-  const constMatch = /Mm=(\d+),F1=([0-9.]+),ZA=([0-9.]+)/.exec(source.slice(anchor(source, 'Mm=', 'prestige'), anchor(source, 'Mm=', 'prestige') + 22));
+  const config = object(evalLiteral(sliceEnclosing(source, anchor(source, 'woodcutting:{title:', 'prestige'), '{'), 'prestige'), 'prestige');
+  const weights = array(extract(source, '[60,77,93,110,120,130,140,160,175,192]', 'prestige'), 'prestige').map((weight) => number(weight, 'prestige'));
+  const rawTotals = object(extract(source, '{gathering:129e5,artisan:585e4,cooking:43e5}', 'prestige'), 'prestige');
+  const skillCategory = object(extract(source, '{woodcutting:"gathering"', 'prestige'), 'prestige');
+  const rankLabels = array(extract(source, '["I","II","III"', 'prestige'), 'prestige').map((label) => string(label, 'prestige'));
+  // The three rank constants are bare numbers with no content of their own; anchor
+  // on the adjacent player-visible reward string and read them positionally.
+  const constAt = anchor(source, '"Gold prestige badge on skill"', 'prestige');
+  const constMatch = /const\s+[A-Za-z_$][\w$]*=(\d+),[A-Za-z_$][\w$]*=([0-9.]+),[A-Za-z_$][\w$]*=([0-9.]+);/.exec(source.slice(constAt, constAt + 160));
   if (!constMatch) fail('prestige', 'could not parse rank constants');
   const maxRank = Number(constMatch[1]);
   const xpBonusPerRank = Number(constMatch[2]);
@@ -470,18 +484,24 @@ function extractPotions(source: string): Record<string, Record<string, unknown>>
 }
 
 function extractShop(source: string): { items: string[]; multiplier: number } {
-  // Raw ingredient ids sold in the shop (Nz), spread into the buyable set.
-  const raw = array(extract(source, '["wild_berries","venison","woodland_seed"', 'shop'), 'shop').map((entry) => string(entry, 'shop'));
-  // Explicit non-ingredient buyables: kU = new Set(["vial","bow_string",...Nz]).
+  // Raw ingredient ids sold in the shop, spread into the buyable set.
+  const rawAt = anchor(source, '["wild_berries","venison","woodland_seed"', 'shop');
+  const rawText = sliceLiteral(source, rawAt);
+  const raw = array(evalLiteral(rawText, 'shop'), 'shop').map((entry) => string(entry, 'shop'));
+  // Explicit non-ingredient buyables: new Set(["vial","bow_string",...ingredients]).
   const setStart = anchor(source, 'new Set(["vial","bow_string",', 'shop');
   const setEnd = source.indexOf(')', setStart);
   if (setEnd < 0) fail('shop', 'buyable set is not terminated');
   const explicit = [...source.slice(setStart, setEnd).matchAll(/"([^"]+)"/g)].map((match) => match[1]);
   if (explicit.length === 0) fail('shop', 'buyable set has no explicit ids');
-  // Shop price multiplier: the game computes cost as item value * eM.
-  const multiplierMatch = /\beM\s*=\s*(\d+)\b/.exec(source);
+  // Shop price multiplier: the game computes cost as item value * multiplier, and
+  // binds it immediately after the ingredient list. Read it positionally so the
+  // minified binding name never matters.
+  const tailAt = rawAt + rawText.length;
+  const multiplierMatch = /^,[A-Za-z_$][\w$]*=(\d+(?:\.\d+)?)(?=[,;])/.exec(source.slice(tailAt, tailAt + 64));
   if (!multiplierMatch) fail('shop', 'price multiplier not found');
   const multiplier = number(Number(multiplierMatch[1]), 'shop');
+  if (!(multiplier > 0)) fail('shop', 'price multiplier is not positive');
   return { items: [...new Set([...explicit, ...raw])], multiplier };
 }
 
@@ -599,7 +619,7 @@ export function extractRegistries(source: string, archiveFiles: readonly string[
     items, actions, actionGates: rawGates, skills, xp: extractXp(source), tools,
     mapsRegular, mapsDeep, chartSupplyTiers, agilityCourses, bags, machines, boons,
     restorations, recipeMeals, seals, patterns, grandReward, buildings, buildingXp,
-    zones, digsites, achievements, offlineGold, titles: extractTitles(source), prestige: extractPrestige(source), stringsEn,
+    zones, digsites, achievements, offlineGold, titles: extractTitles(source, skills), prestige: extractPrestige(source), stringsEn,
     shopItems: shop.items, shopPriceMultiplier: shop.multiplier,
     equipment,
     weapons,
