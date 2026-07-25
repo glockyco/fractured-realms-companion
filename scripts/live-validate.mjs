@@ -151,8 +151,15 @@ async function main() {
     const actionCount = model.actions.length;
     if (model.schema_version !== 1) throw new Error(`schema_version=${model.schema_version}`);
     if (model.xpTable.length !== 100) throw new Error(`xpTable.length=${model.xpTable.length}`);
-    if (itemCount !== 548) throw new Error(`items=${itemCount}`);
-    if (actionCount !== 412) throw new Error(`actions=${actionCount}`);
+    // Floors, not exact counts: content grows with every game update, but a collapse
+    // means extraction broke.
+    if (itemCount < 400) throw new Error(`items=${itemCount}`);
+    if (actionCount < 300) throw new Error(`actions=${actionCount}`);
+    // The CLI treats a gap as a warning so players keep a working companion; this
+    // gate exists to tell the maintainer an anchor needs fixing, so it fails hard.
+    const unavailable = (model.extraction?.unavailable ?? []).map((gap) => gap.dataset);
+    const integrity = (model.extraction?.integrity ?? []).map((finding) => finding.check);
+    if (unavailable.length || integrity.length) throw new Error(`incomplete model: unavailable=[${unavailable.join(',')}] integrity=[${integrity.join(',')}]`);
     pass('pack-coherence');
   } catch (error) {
     fail('pack-coherence', error instanceof Error ? error.message : String(error));
