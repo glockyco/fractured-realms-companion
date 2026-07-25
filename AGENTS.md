@@ -47,7 +47,7 @@ These commands touch a real game install, so run them deliberately rather than a
 
 Preserve fail-closed fingerprint, metadata, backup, foreign-marker, and source-anchor checks. Never hand-edit a game archive or bypass native-game refusal checks. Never read, write, or depend on the game's native `actionQueue`.
 
-Extraction anchors in `src/extract/registries.ts` must key on game content (ids, object keys, player-visible strings) or literal structure, never on a minified identifier such as `cb=` or `eM=`: the mangler reassigns those on every game rebuild. `anchor()` enforces this and throws `AnchorHygieneError`.
+Extraction anchors in `src/extract/registries.ts` must key on game content (ids, object keys, player-visible strings) or literal structure, never on a minified identifier such as `cb=` or `eM=`: the mangler reassigns those on every game rebuild. `anchor()` enforces this and throws `AnchorHygieneError`. Extraction is deliberately not fail-closed — only `items`, `actions`, `actionGates`, `skills`, and `xp` abort a refresh; every other registry degrades to empty and is reported through `model.extraction`. Patching stays strictly fail-closed.
 
 ## Commits and releases
 

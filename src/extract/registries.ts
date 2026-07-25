@@ -21,6 +21,12 @@ export interface PrestigeData {
   skills: Record<string, PrestigeSkill>;
 }
 
+/** One registry the current game build did not yield, and why. */
+export interface ExtractionGap {
+  readonly dataset: string;
+  readonly reason: string;
+}
+
 export interface RawGameData {
   items: Record<string, Record<string, unknown>>;
   actions: Record<string, unknown[]>;
@@ -47,7 +53,7 @@ export interface RawGameData {
   achievements: Array<Record<string, unknown>>;
   offlineGold: Record<string, number>;
   titles: Array<Record<string, unknown>>;
-  prestige: PrestigeData;
+  prestige: PrestigeData | null;
   stringsEn: Record<string, string>;
   shopItems: string[];
   shopPriceMultiplier: number;
@@ -58,6 +64,8 @@ export interface RawGameData {
   secretItems: string[];
   enemyAttacks: Record<string, unknown[]>;
   potions: Record<string, Record<string, unknown>>;
+  /** Registries this build did not yield, sorted by dataset. Empty when complete. */
+  unavailable: ExtractionGap[];
 }
 
 const ACTION_SKILLS = [
@@ -506,6 +514,22 @@ function extractShop(source: string): { items: string[]; multiplier: number } {
 }
 
 export function extractRegistries(source: string, archiveFiles: readonly string[]): RawGameData {
+  // Extraction is deliberately not all-or-nothing. The five critical registries
+  // below abort the refresh because nothing works without them; every other
+  // registry degrades to an empty value and is named in `unavailable`, so a game
+  // update that reshapes one table costs that table instead of the whole product.
+  const unavailable: ExtractionGap[] = [];
+  function optional<T>(dataset: string, produce: () => T, fallback: T): T {
+    try {
+      return produce();
+    } catch (error) {
+      // A hygiene violation is our bug, not a game change, so it must never degrade.
+      if (error instanceof AnchorHygieneError) throw error;
+      unavailable.push({ dataset, reason: error instanceof Error ? error.message : String(error) });
+      return fallback;
+    }
+  }
+
   const itemAt = anchor(source, 'witherwood_log:{label:', 'items');
   const rawItems = object(evalLiteral(sliceEnclosing(source, itemAt, '{'), 'items'), 'items');
   const archive = new Set(archiveFiles);
@@ -539,13 +563,16 @@ export function extractRegistries(source: string, archiveFiles: readonly string[
 
   const tools: Record<string, unknown[]> = Object.create(null) as Record<string, unknown[]>;
   for (const [skill, marker] of Object.entries(TOOL_ANCHORS)) {
-    const list = array(extract(source, marker, `tools.${skill}`), `tools.${skill}`);
-    for (const entry of list) {
-      const item = object(entry, `tools.${skill}`);
-      string(item.id, `tools.${skill}`); string(item.name, `tools.${skill}`); number(item.levelReq, `tools.${skill}`); number(item.xpBonus, `tools.${skill}`); number(item.speedBonus, `tools.${skill}`);
-      if (item.cost !== undefined) number(item.cost, `tools.${skill}`);
-    }
-    tools[skill] = list;
+    const dataset = `tools.${skill}`;
+    tools[skill] = optional(dataset, () => {
+      const list = array(extract(source, marker, dataset), dataset);
+      for (const entry of list) {
+        const item = object(entry, dataset);
+        string(item.id, dataset); string(item.name, dataset); number(item.levelReq, dataset); number(item.xpBonus, dataset); number(item.speedBonus, dataset);
+        if (item.cost !== undefined) number(item.cost, dataset);
+      }
+      return list;
+    }, []);
   }
 
   function mapList(marker: string, dataset: string): unknown[] {
@@ -553,73 +580,116 @@ export function extractRegistries(source: string, archiveFiles: readonly string[
     for (const entry of list) { const item = object(entry, dataset); string(item.id, dataset); string(item.name, dataset); string(item.tier, dataset); number(item.levelReq, dataset); number(item.xp, dataset); number(item.interval, dataset); number(item.actionsToChart, dataset); }
     return list;
   }
-  const mapsRegular = mapList('[{id:"millhaven_village",name:"Millhaven Village Map"', 'mapsRegular');
-  const mapsDeep = mapList('[{id:"ds_veiled_shores"', 'mapsDeep');
-  const chartSupplyTiers = extractSupplyTiers(source);
+  const mapsRegular = optional('mapsRegular', () => mapList('[{id:"millhaven_village",name:"Millhaven Village Map"', 'mapsRegular'), []);
+  const mapsDeep = optional('mapsDeep', () => mapList('[{id:"ds_veiled_shores"', 'mapsDeep'), []);
+  const chartSupplyTiers = optional('chartSupplyTiers', () => extractSupplyTiers(source), {});
 
-  const agilityCourses = array(extract(source, '[{id:"millhaven_rooftops"', 'agilityCourses'), 'agilityCourses');
-  for (const entry of agilityCourses) { const item = object(entry, 'agilityCourses'); validateIdName(item, 'agilityCourses'); number(item.levelReq, 'agilityCourses'); number(item.lapXp, 'agilityCourses'); for (const obstacle of array(item.obstacles, 'agilityCourses')) { const o = object(obstacle, 'agilityCourses'); validateIdName(o, 'agilityCourses'); number(o.xp, 'agilityCourses'); number(o.interval, 'agilityCourses'); } }
+  const agilityCourses = optional('agilityCourses', () => {
+    const list = array(extract(source, '[{id:"millhaven_rooftops"', 'agilityCourses'), 'agilityCourses');
+    for (const entry of list) { const item = object(entry, 'agilityCourses'); validateIdName(item, 'agilityCourses'); number(item.levelReq, 'agilityCourses'); number(item.lapXp, 'agilityCourses'); for (const obstacle of array(item.obstacles, 'agilityCourses')) { const o = object(obstacle, 'agilityCourses'); validateIdName(o, 'agilityCourses'); number(o.xp, 'agilityCourses'); number(o.interval, 'agilityCourses'); } }
+    return list;
+  }, []);
 
-  const bagAt = anchor(source, '"travellers_pouch",size:60', 'bags');
-  const bags = array(evalLiteral(sliceEnclosing(source, bagAt, '['), 'bags'), 'bags');
-  for (const entry of bags) { const item = object(entry, 'bags'); string(item.id, 'bags'); number(item.size, 'bags'); number(item.cost, 'bags'); number(item.agilityReq, 'bags'); }
-  const machines = array(extract(source, '[{id:"whetstone_engine"', 'machines'), 'machines');
-  for (const entry of machines) { const item = object(entry, 'machines'); validateIdName(item, 'machines'); const buff = object(item.buff, 'machines'); string(buff.type, 'machines'); if (buff.value !== undefined) number(buff.value, 'machines'); const cost = object(item.cost, 'machines'); for (const value of Object.values(cost)) number(value, 'machines'); }
-  const boons = array(extract(source, '[{id:"consecrate_totem"', 'boons'), 'boons');
-  for (const entry of boons) { const item = object(entry, 'boons'); validateIdName(item, 'boons'); string(item.input, 'boons'); number(item.levelReq, 'boons'); number(item.xp, 'boons'); object(item.boon, 'boons'); }
-  const restorations = array(extract(source, '[{id:"restore_totem"', 'restorations'), 'restorations');
-  for (const entry of restorations) { const item = object(entry, 'restorations'); validateIdName(item, 'restorations'); string(item.input, 'restorations'); number(item.inputQty, 'restorations'); string(item.output, 'restorations'); number(item.levelReq, 'restorations'); number(item.xp, 'restorations'); object(item.materials, 'restorations'); }
-  const recipeMeals = array(extract(source, '[{id:"meal_hunters_stew"', 'recipeMeals'), 'recipeMeals');
-  for (const entry of recipeMeals) { const item = object(entry, 'recipeMeals'); validateIdName(item, 'recipeMeals'); string(item.recipeScroll, 'recipeMeals'); number(item.levelReq, 'recipeMeals'); number(item.xp, 'recipeMeals'); number(item.interval, 'recipeMeals'); object(item.inputs, 'recipeMeals'); string(item.output, 'recipeMeals'); }
-  const seals = array(extract(source, '[{id:"seal_woodcutting"', 'seals'), 'seals');
-  for (const entry of seals) { const item = object(entry, 'seals'); string(item.id, 'seals'); string(item.skillId, 'seals'); array(item.buffs, 'seals'); }
-  const patterns = object(extract(source, '{pattern_earthen_script:{id:', 'patterns'), 'patterns');
-  const grandReward = object(extract(source, '{name:"The Shattered Crown"', 'grandReward'), 'grandReward');
-  const buildings = array(extract(source, '[{id:"townHall"', 'buildings'), 'buildings');
-  for (const entry of buildings) { const item = object(entry, 'buildings'); validateIdName(item, 'buildings'); array(item.upgrades, 'buildings'); }
-  const rawBuildingXp = object(extract(source, '{woodcuttersHut:{1:', 'buildingXp'), 'buildingXp');
-  const buildingXp: Record<string, Record<string, Record<string, number>>> = Object.create(null) as Record<string, Record<string, Record<string, number>>>;
-  for (const [buildingId, levelsValue] of Object.entries(rawBuildingXp)) {
-    const levels = object(levelsValue, 'buildingXp');
-    buildingXp[buildingId] = Object.create(null) as Record<string, Record<string, number>>;
-    for (const [level, bonusesValue] of Object.entries(levels)) {
-      const bonuses = object(bonusesValue, 'buildingXp');
-      buildingXp[buildingId][level] = Object.create(null) as Record<string, number>;
-      for (const [skillId, bonus] of Object.entries(bonuses)) buildingXp[buildingId][level][skillId] = number(bonus, 'buildingXp');
+  const bags = optional('bags', () => {
+    const bagAt = anchor(source, '"travellers_pouch",size:60', 'bags');
+    const list = array(evalLiteral(sliceEnclosing(source, bagAt, '['), 'bags'), 'bags');
+    for (const entry of list) { const item = object(entry, 'bags'); string(item.id, 'bags'); number(item.size, 'bags'); number(item.cost, 'bags'); number(item.agilityReq, 'bags'); }
+    return list;
+  }, []);
+  const machines = optional('machines', () => {
+    const list = array(extract(source, '[{id:"whetstone_engine"', 'machines'), 'machines');
+    for (const entry of list) { const item = object(entry, 'machines'); validateIdName(item, 'machines'); const buff = object(item.buff, 'machines'); string(buff.type, 'machines'); if (buff.value !== undefined) number(buff.value, 'machines'); const cost = object(item.cost, 'machines'); for (const value of Object.values(cost)) number(value, 'machines'); }
+    return list;
+  }, []);
+  const boons = optional('boons', () => {
+    const list = array(extract(source, '[{id:"consecrate_totem"', 'boons'), 'boons');
+    for (const entry of list) { const item = object(entry, 'boons'); validateIdName(item, 'boons'); string(item.input, 'boons'); number(item.levelReq, 'boons'); number(item.xp, 'boons'); object(item.boon, 'boons'); }
+    return list;
+  }, []);
+  const restorations = optional('restorations', () => {
+    const list = array(extract(source, '[{id:"restore_totem"', 'restorations'), 'restorations');
+    for (const entry of list) { const item = object(entry, 'restorations'); validateIdName(item, 'restorations'); string(item.input, 'restorations'); number(item.inputQty, 'restorations'); string(item.output, 'restorations'); number(item.levelReq, 'restorations'); number(item.xp, 'restorations'); object(item.materials, 'restorations'); }
+    return list;
+  }, []);
+  const recipeMeals = optional('recipeMeals', () => {
+    const list = array(extract(source, '[{id:"meal_hunters_stew"', 'recipeMeals'), 'recipeMeals');
+    for (const entry of list) { const item = object(entry, 'recipeMeals'); validateIdName(item, 'recipeMeals'); string(item.recipeScroll, 'recipeMeals'); number(item.levelReq, 'recipeMeals'); number(item.xp, 'recipeMeals'); number(item.interval, 'recipeMeals'); object(item.inputs, 'recipeMeals'); string(item.output, 'recipeMeals'); }
+    return list;
+  }, []);
+  const seals = optional('seals', () => {
+    const list = array(extract(source, '[{id:"seal_woodcutting"', 'seals'), 'seals');
+    for (const entry of list) { const item = object(entry, 'seals'); string(item.id, 'seals'); string(item.skillId, 'seals'); array(item.buffs, 'seals'); }
+    return list;
+  }, []);
+  const patterns = optional('patterns', () => object(extract(source, '{pattern_earthen_script:{id:', 'patterns'), 'patterns'), {});
+  const grandReward = optional('grandReward', () => object(extract(source, '{name:"The Shattered Crown"', 'grandReward'), 'grandReward'), {});
+  const buildings = optional('buildings', () => {
+    const list = array(extract(source, '[{id:"townHall"', 'buildings'), 'buildings');
+    for (const entry of list) { const item = object(entry, 'buildings'); validateIdName(item, 'buildings'); array(item.upgrades, 'buildings'); }
+    return list;
+  }, []);
+  const buildingXp = optional('buildingXp', () => {
+    const rawBuildingXp = object(extract(source, '{woodcuttersHut:{1:', 'buildingXp'), 'buildingXp');
+    const output: Record<string, Record<string, Record<string, number>>> = Object.create(null) as Record<string, Record<string, Record<string, number>>>;
+    for (const [buildingId, levelsValue] of Object.entries(rawBuildingXp)) {
+      const levels = object(levelsValue, 'buildingXp');
+      output[buildingId] = Object.create(null) as Record<string, Record<string, number>>;
+      for (const [level, bonusesValue] of Object.entries(levels)) {
+        const bonuses = object(bonusesValue, 'buildingXp');
+        output[buildingId][level] = Object.create(null) as Record<string, number>;
+        for (const [skillId, bonus] of Object.entries(bonuses)) output[buildingId][level][skillId] = number(bonus, 'buildingXp');
+      }
     }
-  }
+    return output;
+  }, {});
 
-  const zoneAnchor = anchor(source, '[{id:"thornwood",name:"Thornwood Outskirts"', 'zones');
-  const species: Record<string, string> = Object.create(null) as Record<string, string>;
-  for (const match of source.slice(Math.max(0, zoneAnchor - 600), zoneAnchor).matchAll(/(\w+)="(vermin|undead|beast|humanoid|elemental|demon|dragon)"/g)) species[match[1]] = match[2];
-  const zones = array(evalLiteral(sliceLiteral(source, zoneAnchor), 'zones', species), 'zones');
-  for (const zone of zones) { const item = object(zone, 'zones'); string(item.id, 'zones'); array(item.enemies, 'zones'); for (const enemy of array(item.enemies, 'zones')) { const e = object(enemy, 'zones'); string(e.id, 'zones'); if (!('hp' in e)) fail('zones', 'enemy lacks hp'); array(e.drops, 'zones'); } }
+  const zones = optional('zones', () => {
+    const zoneAnchor = anchor(source, '[{id:"thornwood",name:"Thornwood Outskirts"', 'zones');
+    const species: Record<string, string> = Object.create(null) as Record<string, string>;
+    for (const match of source.slice(Math.max(0, zoneAnchor - 600), zoneAnchor).matchAll(/(\w+)="(vermin|undead|beast|humanoid|elemental|demon|dragon)"/g)) species[match[1]] = match[2];
+    const list = array(evalLiteral(sliceLiteral(source, zoneAnchor), 'zones', species), 'zones');
+    for (const zone of list) { const item = object(zone, 'zones'); string(item.id, 'zones'); array(item.enemies, 'zones'); for (const enemy of array(item.enemies, 'zones')) { const e = object(enemy, 'zones'); string(e.id, 'zones'); if (!('hp' in e)) fail('zones', 'enemy lacks hp'); array(e.drops, 'zones'); } }
+    return list;
+  }, []);
 
-  const achievements = metadataAchievements(source);
-  const digsites = array(extract(source, '[{id:"millhaven_ruins"', 'digsites'), 'digsites');
-  for (const entry of digsites) { const item = object(entry, 'digsites'); validateIdName(item, 'digsites'); number(item.levelReq, 'digsites'); }
-  const rawOffline = object(extract(source, '{1:10,2:30,3:100}', 'offlineGold'), 'offlineGold');
-  const offlineGold: Record<string, number> = Object.create(null) as Record<string, number>;
-  for (const [level, value] of Object.entries(rawOffline)) offlineGold[level] = number(value, 'offlineGold');
-  const rawStrings = object(extract(source, '"name.ancient_spore":"Ancient Spore"', 'stringsEn'), 'stringsEn');
-  const stringsEn: Record<string, string> = Object.create(null) as Record<string, string>;
-  let names = 0; let descriptions = 0;
-  for (const [key, value] of Object.entries(rawStrings)) { stringsEn[key] = string(value, 'stringsEn'); if (key.startsWith('name.')) names++; if (key.startsWith('itemdesc.')) descriptions++; }
-  if (!names || !descriptions) fail('stringsEn', 'catalog lacks name.* or itemdesc.* keys');
+  const achievements = optional('achievements', () => metadataAchievements(source), []);
+  const digsites = optional('digsites', () => {
+    const list = array(extract(source, '[{id:"millhaven_ruins"', 'digsites'), 'digsites');
+    for (const entry of list) { const item = object(entry, 'digsites'); validateIdName(item, 'digsites'); number(item.levelReq, 'digsites'); }
+    return list;
+  }, []);
+  const offlineGold = optional('offlineGold', () => {
+    const rawOffline = object(extract(source, '{1:10,2:30,3:100}', 'offlineGold'), 'offlineGold');
+    const output: Record<string, number> = Object.create(null) as Record<string, number>;
+    for (const [level, value] of Object.entries(rawOffline)) output[level] = number(value, 'offlineGold');
+    return output;
+  }, {});
+  const stringsEn = optional('stringsEn', () => {
+    const rawStrings = object(extract(source, '"name.ancient_spore":"Ancient Spore"', 'stringsEn'), 'stringsEn');
+    const output: Record<string, string> = Object.create(null) as Record<string, string>;
+    let names = 0; let descriptions = 0;
+    for (const [key, value] of Object.entries(rawStrings)) { output[key] = string(value, 'stringsEn'); if (key.startsWith('name.')) names++; if (key.startsWith('itemdesc.')) descriptions++; }
+    if (!names || !descriptions) fail('stringsEn', 'catalog lacks name.* or itemdesc.* keys');
+    return output;
+  }, {});
 
-  const shop = extractShop(source);
-  const equipment = extractEquipment(source);
-  const weapons = extractWeapons(source);
-  const equipRequirements = extractEquipRequirements(source);
-  const foodHeal = extractFoodHeal(source);
-  const secretItems = extractSecretItems(source);
-  const enemyAttacks = extractEnemyAttacks(source);
-  const potions = extractPotions(source);
+  // The buyable id list and its price multiplier are one unit: a surviving id list
+  // with a failed multiplier would price every shop item at zero.
+  const shop = optional('shop', () => extractShop(source), { items: [] as string[], multiplier: 0 });
+  const equipment = optional('equipment', () => extractEquipment(source), {});
+  const weapons = optional('weapons', () => extractWeapons(source), {});
+  const equipRequirements = optional('equipRequirements', () => extractEquipRequirements(source), {});
+  const foodHeal = optional('foodHeal', () => extractFoodHeal(source), {});
+  const secretItems = optional('secretItems', () => extractSecretItems(source), []);
+  const enemyAttacks = optional('enemyAttacks', () => extractEnemyAttacks(source), {});
+  const potions = optional('potions', () => extractPotions(source), {});
+  const titles = optional('titles', () => extractTitles(source, skills), []);
+  const prestige = optional<PrestigeData | null>('prestige', () => extractPrestige(source), null);
   return {
     items, actions, actionGates: rawGates, skills, xp: extractXp(source), tools,
     mapsRegular, mapsDeep, chartSupplyTiers, agilityCourses, bags, machines, boons,
     restorations, recipeMeals, seals, patterns, grandReward, buildings, buildingXp,
-    zones, digsites, achievements, offlineGold, titles: extractTitles(source, skills), prestige: extractPrestige(source), stringsEn,
+    zones, digsites, achievements, offlineGold, titles, prestige, stringsEn,
     shopItems: shop.items, shopPriceMultiplier: shop.multiplier,
     equipment,
     weapons,
@@ -628,5 +698,8 @@ export function extractRegistries(source: string, archiveFiles: readonly string[
     secretItems,
     enemyAttacks,
     potions,
+    // Sorted: serializeModel orders object keys but preserves array order, so this
+    // sort is what keeps model.json byte-stable across runs.
+    unavailable: unavailable.sort((a, b) => a.dataset.localeCompare(b.dataset)),
   };
 }

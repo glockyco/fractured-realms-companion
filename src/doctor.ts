@@ -176,6 +176,32 @@ function validPack(state: string, buildId: string, fs: Required<DoctorFileSystem
   }
 }
 
+/**
+ * Model completeness, reported only once the pack itself is sound. A build that
+ * cost the companion one registry still works, so gaps warn rather than block;
+ * only an unreadable model is a failure.
+ */
+function modelCompleteness(state: string, buildId: string, fs: Required<DoctorFileSystem>): DoctorRow {
+  const path = join(state, 'pack', 'data', 'model.json');
+  let model: AnyRecord | undefined;
+  try {
+    const value = readJson(path, fs);
+    if (!record(value)) return row('FAIL', 'model', `Companion model could not be read: ${path} is not a JSON object`);
+    model = value;
+  } catch (error) {
+    return row('FAIL', 'model', `Companion model could not be read: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  const extraction = model.extraction;
+  if (!record(extraction)) return row('WARN', 'model', "Companion model predates extraction reporting; run 'fractured-companion refresh'");
+  const unavailable = Array.isArray(extraction.unavailable) ? extraction.unavailable.map((gap) => (record(gap) ? String(gap.dataset) : '?')) : [];
+  const integrity = Array.isArray(extraction.integrity) ? extraction.integrity.map((finding) => (record(finding) ? String(finding.check) : '?')) : [];
+  const clauses: string[] = [];
+  if (unavailable.length) clauses.push(`${unavailable.length} ${unavailable.length === 1 ? 'registry' : 'registries'} unavailable (${unavailable.join(', ')})`);
+  if (integrity.length) clauses.push(`${integrity.length} integrity ${integrity.length === 1 ? 'check' : 'checks'} failed (${integrity.join(', ')})`);
+  if (clauses.length) return row('WARN', 'model', `Companion model is incomplete for Steam build ${buildId}: ${clauses.join('; ')}`);
+  return row('PASS', 'model', `Companion model is complete for Steam build ${buildId}`);
+}
+
 function metadataRecord(path: string, fs: Required<DoctorFileSystem>): AnyRecord | undefined {
   try {
     const value = readJson(path, fs);
@@ -357,7 +383,10 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorResu
     } catch (error) {
       rows.push(row('FAIL', 'archive', `Archive could not be fingerprinted: ${error instanceof Error ? error.message : String(error)}`));
     }
-    rows.push((() => { const result = validPack(state!, manifest!.buildid, fs); return row(result.ok ? 'PASS' : 'FAIL', 'pack', result.message); })());
+    const pack = validPack(state!, manifest!.buildid, fs);
+    rows.push(row(pack.ok ? 'PASS' : 'FAIL', 'pack', pack.message));
+    // A broken pack already explains itself; a second failure row would only add noise.
+    if (pack.ok) rows.push(modelCompleteness(state!, manifest!.buildid, fs));
   } else {
     rows.push(row('FAIL', 'archive', 'Archive cannot be checked because Steam discovery or manifest validation failed'));
     rows.push(row('FAIL', 'pack', 'Companion pack cannot be checked because Steam discovery or manifest validation failed'));

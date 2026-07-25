@@ -22,14 +22,14 @@ function fixture(bytes = 'pristine archive'): Fixture {
   return { root, archive, state, install };
 }
 
-function pack(state: string, buildId = 'build-1'): void {
+function pack(state: string, buildId = 'build-1', model: unknown = { extraction: { unavailable: [], integrity: [] } }): void {
   const directory = join(state, 'pack');
   mkdirSync(join(directory, 'engine'), { recursive: true });
   mkdirSync(join(directory, 'data'), { recursive: true });
   writeFileSync(join(directory, 'pack.json'), JSON.stringify({ schema_version: 2, build_id: buildId, generated_at: '2026-01-01T00:00:00.000Z' }));
   for (const name of ['overlay.js', 'executor.js']) writeFileSync(join(directory, name), '');
   for (const name of ['model.js', 'formulas.js', 'closure.js', 'expand.js', 'simulate.js', 'queue.js']) writeFileSync(join(directory, 'engine', name), '');
-  writeFileSync(join(directory, 'data', 'model.json'), '{}');
+  writeFileSync(join(directory, 'data', 'model.json'), typeof model === 'string' ? model : JSON.stringify(model));
 }
 
 function base(f: Fixture, extra: Partial<DoctorOptions> = {}): DoctorOptions {
@@ -94,6 +94,41 @@ test('verified own patch passes and stale or missing pack fails', async () => {
   const missing = fixture(`patched ${MARKER}`);
   ownMetadata(missing);
   assert.equal((await runDoctor(base(missing))).rows.find((value) => value.check === 'pack')?.status, 'FAIL');
+  // A broken pack already explains itself, so the model row is withheld entirely.
+  assert.equal((await runDoctor(base(missing))).rows.some((value) => value.check === 'model'), false);
+});
+
+test('model gaps warn without blocking, and an unreadable model fails', async () => {
+  const modelRow = async (f: Fixture) => (await runDoctor(base(f))).rows.find((value) => value.check === 'model');
+
+  const complete = fixture(`patched ${MARKER}`);
+  ownMetadata(complete);
+  pack(complete.state);
+  const completeResult = await runDoctor(base(complete));
+  assert.equal(completeResult.rows.find((value) => value.check === 'model')?.status, 'PASS');
+  assert.match(completeResult.rows.find((value) => value.check === 'model')?.message ?? '', /complete for Steam build build-1/);
+  assert.equal(completeResult.blocking, false);
+
+  // An incomplete model still leaves a usable companion, so it must never block launch.
+  const degraded = fixture(`patched ${MARKER}`);
+  ownMetadata(degraded);
+  pack(degraded.state, 'build-1', { extraction: { unavailable: [{ dataset: 'potions', reason: 'x' }, { dataset: 'prestige', reason: 'y' }], integrity: [{ check: 'shop-prices', detail: 'z' }] } });
+  const degradedResult = await runDoctor(base(degraded));
+  assert.equal(degradedResult.rows.find((value) => value.check === 'model')?.status, 'WARN');
+  assert.match(degradedResult.rows.find((value) => value.check === 'model')?.message ?? '', /2 registries unavailable \(potions, prestige\); 1 integrity check failed \(shop-prices\)/);
+  assert.equal(degradedResult.blocking, false);
+
+  const legacy = fixture(`patched ${MARKER}`);
+  ownMetadata(legacy);
+  pack(legacy.state, 'build-1', {});
+  assert.equal((await modelRow(legacy))?.status, 'WARN');
+
+  const unreadable = fixture(`patched ${MARKER}`);
+  ownMetadata(unreadable);
+  pack(unreadable.state, 'build-1', 'not json');
+  const unreadableResult = await runDoctor(base(unreadable));
+  assert.equal(unreadableResult.rows.find((value) => value.check === 'model')?.status, 'FAIL');
+  assert.equal(unreadableResult.blocking, true);
 });
 
 

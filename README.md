@@ -240,7 +240,8 @@ Then return to this package and run `fractured-companion refresh`. This package 
 
 ## Limitations
 
-- Extraction and patching are build-sensitive. A changed game bundle or entrypoint anchor requires a compatibility update before that build can be patched.
+- Patching is build-sensitive. A changed entrypoint anchor requires a compatibility update before that build can be patched, and `refresh` names the anchor it could not match.
+- Extraction degrades instead of failing whole. If a game update reshapes one registry, `refresh` still publishes the model, `doctor` reports a non-blocking `model` warning naming the missing registries, and the overlay shows a banner. Plans may then omit bonuses that depend on the missing data.
 - Rare-attempt counts and completion times are estimates, not guarantees. A multi-quantity rare drop may exceed the requested inventory target by one drop batch.
 - Required Shop tools are permanent unlocks and must already be purchased. The engine represents these as manual unlock steps; it does not auto-purchase them.
 - A new item target may be blocked when the bag has no free slot. A direct action may also be refused by the game. The scheduler waits only when no action is runnable, resumes on live-state changes, and surfaces these states rather than bypassing game checks.

@@ -1,6 +1,18 @@
-import type { PrestigeData, RawGameData } from '../extract/registries.ts';
+import type { ExtractionGap, PrestigeData, RawGameData } from '../extract/registries.ts';
 
 export type JsonRecord = Record<string, unknown>;
+
+/** One cross-registry invariant the compiled model violates. */
+export interface IntegrityFinding {
+  readonly check: string;
+  readonly detail: string;
+}
+
+/** What this build failed to yield, and where the result is internally inconsistent. */
+export interface ExtractionReport {
+  readonly unavailable: readonly ExtractionGap[];
+  readonly integrity: readonly IntegrityFinding[];
+}
 
 export interface ActionRecord extends JsonRecord {
   id: string;
@@ -35,7 +47,7 @@ export interface GameModel {
   achievements: Array<Record<string, unknown>>;
   offlineGold: Record<string, number>;
   titles: Array<Record<string, unknown>>;
-  prestige: PrestigeData;
+  prestige: PrestigeData | null;
   stringsEn: Record<string, string>;
   shop: Record<string, number>;
   equipment: Record<string, JsonRecord>;
@@ -43,6 +55,7 @@ export interface GameModel {
   foodHeal: Record<string, number>;
   enemyAttacks: Record<string, unknown[]>;
   potions: Record<string, JsonRecord>;
+  extraction: ExtractionReport;
 }
 
 function record(value: unknown): JsonRecord {
@@ -56,6 +69,56 @@ function actionGate(raw: unknown): ActionRecord['gate'] {
   if (typeof skillLevel !== 'number') return null;
   const mapId = value.mapId;
   return { mapId: mapId === null || mapId === undefined ? null : String(mapId), skillLevel };
+}
+
+/**
+ * Cross-registry invariants. An anchor that slides onto a decoy literal yields a
+ * plausible-looking registry, so shape validation alone cannot catch it; these
+ * checks compare registries against each other. They report rather than throw,
+ * because a degraded registry is already accounted for in `unavailable`.
+ */
+function integrityFindings(model: Omit<GameModel, 'extraction'>): IntegrityFinding[] {
+  const findings: IntegrityFinding[] = [];
+  const names = (ids: Iterable<string>): string => {
+    const sorted = [...new Set(ids)].sort();
+    return sorted.length > 6 ? `${sorted.slice(0, 6).join(', ')} (+${sorted.length - 6} more)` : sorted.join(', ');
+  };
+
+  // Weapons carry the unarmed pseudo-entry `fists` and tool ids are equipment-slot
+  // ids, so neither collection is expected to resolve against `items`.
+  const missingItems = new Set<string>();
+  const requireItem = (id: unknown): void => {
+    if (typeof id !== 'string' || id === '' || id === 'gold') return;
+    if (!Object.hasOwn(model.items, id)) missingItems.add(id);
+  };
+  for (const action of model.actions) {
+    for (const id of Object.keys(record(action.inputs))) requireItem(id);
+    for (const id of Object.keys(record(action.outputs))) requireItem(id);
+    for (const rare of Array.isArray(action.rareOutputs) ? action.rareOutputs : []) requireItem(record(rare).item);
+  }
+  for (const id of Object.keys(model.shop)) requireItem(id);
+  for (const id of Object.keys(model.equipment)) requireItem(id);
+  if (missingItems.size) findings.push({ check: 'item-refs', detail: `${missingItems.size} referenced item ids are absent from items: ${names(missingItems)}` });
+
+  const skillIds = new Set(model.skills.map((skill) => String(record(skill).id ?? '')));
+  const missingSkills = new Set(model.actions.map((action) => action.skillId).filter((id) => !skillIds.has(id)));
+  if (missingSkills.size) findings.push({ check: 'skill-refs', detail: `${missingSkills.size} action skill ids are absent from skills: ${names(missingSkills)}` });
+
+  const badPrices = new Set(Object.entries(model.shop).filter(([, price]) => !(Number.isFinite(price) && price > 0)).map(([id]) => id));
+  if (badPrices.size) findings.push({ check: 'shop-prices', detail: `${badPrices.size} shop entries are not priced above zero: ${names(badPrices)}` });
+
+  const xp = model.xpTable;
+  const xpProblem = !Array.isArray(xp) || xp.length < 100
+    ? `expected at least 100 thresholds, got ${Array.isArray(xp) ? xp.length : 'none'}`
+    : xp[1] !== 0
+      ? `level 1 must cost 0 xp, got ${xp[1]}`
+      : (() => {
+        for (let level = 2; level < xp.length; level += 1) if (!(xp[level]! > xp[level - 1]!)) return `curve stops increasing at level ${level}`;
+        return '';
+      })();
+  if (xpProblem) findings.push({ check: 'xp-curve', detail: xpProblem });
+
+  return findings;
 }
 
 /**
@@ -113,7 +176,7 @@ export function compileModel(raw: RawGameData, buildId: string): GameModel {
     weapons[id] = { ...row, kind: 'weapon', secret: secretGear.has(id), ...equipReq(id, typeof row.type === 'string' ? row.type : 'attack') };
   }
 
-  return {
+  const compiled: Omit<GameModel, 'extraction'> = {
     schema_version: 1,
     build_id: buildId,
     xpTable: raw.xp,
@@ -148,6 +211,7 @@ export function compileModel(raw: RawGameData, buildId: string): GameModel {
     enemyAttacks: raw.enemyAttacks,
     potions: raw.potions,
   };
+  return { ...compiled, extraction: { unavailable: raw.unavailable ?? [], integrity: integrityFindings(compiled) } };
 }
 
 function sorted(value: unknown): unknown {

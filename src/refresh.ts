@@ -68,6 +68,10 @@ export interface RefreshResult {
   readonly buildId: string;
   readonly original: { sha256: string; size: number };
   readonly changed: boolean;
+  /** Registries this build did not yield. Empty when the model is complete. */
+  readonly unavailable: readonly string[];
+  /** Cross-registry checks the compiled model failed. Empty when consistent. */
+  readonly integrity: readonly string[];
 }
 
 export interface RefreshDependencies {
@@ -368,7 +372,9 @@ export function refreshCompanion(options: RefreshOptions = {}): RefreshResult {
   if (!writeModelDb(model, join(state, 'model.db'))) console.warn('model.db unavailable; continuing with model.json pack');
 
   const expectedOriginal = { sha256: original.sha256.toLowerCase(), size: original.size };
-  if (options.noPatch) return { install, stateDirectory: state, packDirectory: pack, buildId: manifest.buildid, original: expectedOriginal, changed: false };
+  const unavailable = model.extraction.unavailable.map((gap) => gap.dataset);
+  const integrity = model.extraction.integrity.map((finding) => finding.check);
+  if (options.noPatch) return { install, stateDirectory: state, packDirectory: pack, buildId: manifest.buildid, original: expectedOriginal, changed: false, unavailable, integrity };
   const patchManager = options.patchManager ?? options.dependencies?.patchManager ?? new PatchManager({ clock: options.clock });
   const applyFactory = dependency(options, 'createApply', createFracturedApply);
   const patch = patchManager.patch({
@@ -380,5 +386,5 @@ export function refreshCompanion(options: RefreshOptions = {}): RefreshResult {
     payloadRevision,
     apply: applyFactory({ buildId: manifest.buildid, packDirectory: pack, payloadRevision }),
   });
-  return { install, stateDirectory: state, packDirectory: pack, buildId: manifest.buildid, original: expectedOriginal, changed: patch.changed };
+  return { install, stateDirectory: state, packDirectory: pack, buildId: manifest.buildid, original: expectedOriginal, changed: patch.changed, unavailable, integrity };
 }

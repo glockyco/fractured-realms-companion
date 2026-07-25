@@ -184,9 +184,31 @@ test('fails closed for missing, duplicate, and malformed registry anchors', () =
   assert.throws(() => extractRegistries(fixture().replace('id:"act_mining"', 'id:undefined'), []), /actions dataset/);
 });
 
+test('degrades one optional registry and keeps the rest', () => {
+  const raw = extractRegistries(fixture().replace('weak_str_potion:{slot:"damage"', 'weak_str_potion:{slot:"dmg"'), []);
+  assert.deepEqual(raw.unavailable.map((gap) => gap.dataset), ['potions']);
+  assert.match(raw.unavailable[0].reason, /potions dataset/);
+  assert.equal(Object.keys(raw.potions).length, 0);
+  assert.equal(Object.keys(raw.items).length, 400);
+  assert.equal(raw.prestige?.maxRank, 10);
+  assert.equal(raw.titles.length, 22);
+});
+
+test('degrades one tool ladder without costing the others', () => {
+  const raw = extractRegistries(fixture().replace('[{id:"bronze_axe"', '[{id:"copper_axe"'), []);
+  assert.deepEqual(raw.unavailable.map((gap) => gap.dataset), ['tools.woodcutting']);
+  assert.equal(raw.tools.woodcutting.length, 0);
+  assert.equal(raw.tools.mining.length, 1);
+});
+
+test('a critical registry still aborts extraction', () => {
+  assert.throws(() => extractRegistries(fixture().replace('witherwood_log:{label:', 'other_log:{label:'), []), /items dataset: anchor not found/);
+  assert.throws(() => extractRegistries(fixture().replace('const SKILLS=[{id:"hitpoints"', 'const SKILLS=[{id:"health"'), []), /skills dataset/);
+});
+
 test('an anchor carrying a minified identifier is refused outright', () => {
   // The guard is what stops a future edit from reintroducing a mangler-dependent
-  // anchor: the minifier reassigns those names on every game rebuild.
+  // anchor, and it must never be absorbed as a degraded registry.
   const source = 'const x={chop_witherwood:{mapId:"m"}};const y=300*Math.pow(2,3);const z=new Set(["vial","bow_string",1]);';
   for (const bad of ['Po=', 'cb=', 'n5=', 's5=', 'Mm=', 'eM = 2', 'qf=[60,77', 'XA=["I","II"']) {
     assert.throws(() => anchor(source, bad, 'probe'), (error: unknown) => error instanceof AnchorHygieneError && /minified identifier/.test(error.message), bad);
@@ -196,37 +218,58 @@ test('an anchor carrying a minified identifier is refused outright', () => {
   }
 });
 
-test('real v0.3 bundle registries', { skip: !process.env.FR_BUNDLE_ASAR }, () => {
+// Content grows with every game update, so exact counts would fail on legitimate
+// additions and train the maintainer to ignore this test. Real extraction breakage
+// is caught build-independently instead: nothing may silently vanish, no anchor may
+// degrade, and the compiled model must be internally consistent.
+test('real bundle registries extract completely and consistently', { skip: !process.env.FR_BUNDLE_ASAR }, () => {
   const archive = process.env.FR_BUNDLE_ASAR!;
   const files = listFiles(archive);
   const bundle = files.find((file) => /^dist\/assets\/index-.*\.js$/.test(file));
   assert.ok(bundle);
   const result = extractRegistries(extractFile(archive, bundle).toString('utf8'), files);
-  const EXPECTED = { skills: 21, items: 548, actionGates: 120, actions: 412, zones: 12, enemies: 48, agilityCourses: 8, mapsRegular: 26, mapsDeep: 20, machines: 10, boons: 4, restorations: 4, recipeMeals: 4, seals: 21, buildings: 24, digsites: 4, titles: 42, prestige: 14, tools: { woodcutting: 10, mining: 10, fishing: 7, trapping: 9, archaeology: 7, foraging: 9, smithing: 3, brewing: 3, glyphweaving: 3 }, actionsBySkill: { woodcutting: 11, mining: 13, fishing: 13, foraging: 18, trapping: 15, archaeology: 12, cooking: 35, smithing: 79, crafting: 105, brewing: 25, glyphweaving: 44, prayer: 6, bounty: 36 } };
-  assert.equal(result.skills.length, EXPECTED.skills);
-  assert.equal(Object.keys(result.items).length, EXPECTED.items);
-  assert.equal(Object.keys(result.actionGates).length, EXPECTED.actionGates);
-  assert.equal(Object.values(result.actions).reduce((sum, list) => sum + list.length, 0), EXPECTED.actions);
-  assert.equal(result.zones.length, EXPECTED.zones);
-  assert.equal(result.zones.reduce((sum, zone) => sum + ((zone as Record<string, unknown>).enemies as unknown[]).length, 0), EXPECTED.enemies);
-  assert.equal(result.agilityCourses.length, EXPECTED.agilityCourses);
-  assert.equal(result.mapsRegular.length, EXPECTED.mapsRegular);
-  assert.equal(result.mapsDeep.length, EXPECTED.mapsDeep);
-  assert.equal(result.machines.length, EXPECTED.machines);
-  assert.equal(result.boons.length, EXPECTED.boons);
-  assert.equal(result.restorations.length, EXPECTED.restorations);
-  assert.equal(result.recipeMeals.length, EXPECTED.recipeMeals);
-  assert.equal(result.seals.length, EXPECTED.seals);
-  assert.equal(result.buildings.length, EXPECTED.buildings);
-  assert.equal(result.digsites.length, EXPECTED.digsites);
-  assert.equal(result.titles.length, EXPECTED.titles);
-  assert.equal(Object.keys(result.prestige.skills).length, EXPECTED.prestige);
-  assert.equal(result.prestige.maxRank, 10);
-  for (const [skill, count] of Object.entries(EXPECTED.tools)) assert.equal(result.tools[skill].length, count);
-  for (const [skill, count] of Object.entries(EXPECTED.actionsBySkill)) assert.equal(result.actions[skill].length, count, `actions census for ${skill}`);
+
+  assert.deepEqual(result.unavailable, [], 'every registry anchor must still resolve');
+  assert.ok(result.prestige, 'prestige must extract');
+
+  const actionTotal = Object.values(result.actions).reduce((sum, list) => sum + list.length, 0);
+  const enemyTotal = result.zones.reduce((sum, zone) => sum + ((zone as Record<string, unknown>).enemies as unknown[]).length, 0);
+  const FLOORS: Record<string, [number, number]> = {
+    skills: [result.skills.length, 15],
+    items: [Object.keys(result.items).length, 400],
+    actionGates: [Object.keys(result.actionGates).length, 50],
+    actions: [actionTotal, 300],
+    zones: [result.zones.length, 5],
+    enemies: [enemyTotal, 20],
+    seals: [result.seals.length, 10],
+    buildings: [result.buildings.length, 5],
+    titles: [result.titles.length, 10],
+    prestigeSkills: [Object.keys(result.prestige!.skills).length, 5],
+    agilityCourses: [result.agilityCourses.length, 1],
+    mapsRegular: [result.mapsRegular.length, 1],
+    mapsDeep: [result.mapsDeep.length, 1],
+    machines: [result.machines.length, 1],
+    boons: [result.boons.length, 1],
+    restorations: [result.restorations.length, 1],
+    recipeMeals: [result.recipeMeals.length, 1],
+    digsites: [result.digsites.length, 1],
+  };
+  for (const [name, [observed, floor]] of Object.entries(FLOORS)) {
+    assert.ok(observed >= floor, `${name} census collapsed: ${observed} < ${floor}`);
+  }
+  for (const skill of ACTION_SKILLS) assert.ok(result.actions[skill].length >= 1, `no actions extracted for ${skill}`);
+  for (const skill of Object.keys(result.tools)) assert.ok(result.tools[skill].length >= 1, `no tools extracted for ${skill}`);
+  assert.equal(result.prestige!.maxRank, 10);
 
   const model = compileModel(result, 'test-build');
-  assert.equal(model.actions.length, EXPECTED.actions);
+  assert.deepEqual(model.extraction.integrity, [], 'compiled model must be internally consistent');
+  assert.equal(model.actions.length, actionTotal);
+
+  // Printed, not asserted: drift stays visible without failing on new content.
+  console.log('registry census:', JSON.stringify(Object.fromEntries(Object.entries(FLOORS).map(([name, [observed]]) => [name, observed]))));
+  console.log('tools census:', JSON.stringify(Object.fromEntries(Object.entries(result.tools).map(([skill, list]) => [skill, list.length]))));
+  console.log('actions by skill:', JSON.stringify(Object.fromEntries(ACTION_SKILLS.map((skill) => [skill, result.actions[skill].length]))));
+
   if (sqliteAvailable()) {
     const dir = mkdtempSync(join(tmpdir(), 'fr-model-'));
     try {
@@ -235,7 +278,7 @@ test('real v0.3 bundle registries', { skip: !process.env.FR_BUNDLE_ASAR }, () =>
       const db = openDatabase(dbPath);
       assert.ok(db);
       const rows = db!.all('SELECT COUNT(*) AS n FROM items') as Array<{ n: number }>;
-      assert.equal(Number(rows[0]!.n), EXPECTED.items);
+      assert.equal(Number(rows[0]!.n), Object.keys(result.items).length);
       db!.close();
     } finally {
       rmSync(dir, { recursive: true, force: true });

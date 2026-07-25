@@ -367,3 +367,29 @@ test('a worker plan error falls back to synchronous planning', async () => {
   assert.ok(Array.isArray(result.app.state.resolvedQueue.steps), 'synchronous fallback produced a plan');
   assert.notEqual(result.shell.host.dataset.planWorker, 'active', 'error reply does not mark the worker active');
 });
+
+test('a registry the build did not yield is named in a non-blocking banner', async () => {
+  // The engine treats a missing registry as a zero bonus rather than failing, so the
+  // gap must be stated or the player sees confidently wrong estimates.
+  const complete = await bootOverlay({ document: new FakeDocument(), window: { __frCompanion: fakeApi() }, fetch: fetchFor(model()) });
+  assert.equal(complete.shell.gaps.hidden, true);
+
+  const degraded = await bootOverlay({
+    document: new FakeDocument(),
+    window: { __frCompanion: fakeApi() },
+    fetch: fetchFor({ ...model(), extraction: { unavailable: [{ dataset: 'prestige', reason: 'x' }, { dataset: 'potions', reason: 'y' }], integrity: [] } }),
+  });
+  assert.equal(degraded.shell.gaps.hidden, false);
+  assert.match(degraded.shell.gaps.textContent, /Game data incomplete for this build: prestige, potions\. Plans may miss related bonuses\./);
+  assert.equal(degraded.shell.gaps.getAttribute('role'), 'status');
+  // The rest of the overlay stays fully usable.
+  assert.equal(degraded.model.items.log.label, 'Log');
+
+  const inconsistent = await bootOverlay({
+    document: new FakeDocument(),
+    window: { __frCompanion: fakeApi() },
+    fetch: fetchFor({ ...model(), extraction: { unavailable: [], integrity: [{ check: 'shop-prices', detail: 'z' }] } }),
+  });
+  assert.equal(inconsistent.shell.gaps.hidden, false);
+  assert.match(inconsistent.shell.gaps.textContent, /inconsistent for this build: shop-prices/);
+});

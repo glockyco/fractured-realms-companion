@@ -15,10 +15,15 @@ function rawData(shuffled = false): RawGameData {
     ['bounty', [{ id: 'hunt', name: 'Hunt', levelReq: 1, xp: 20, interval: 2000, outputs: { gold: 5 }, targetId: 'rat', killCount: 2, combatReq: 1 }]],
   ];
   for (const [key, value] of entries) actions[key] = value;
-  const xp = Array.from({ length: 100 }, (_, level) => level * 100);
+  // Level 1 must cost 0 xp for the curve to be expressible.
+  const xp = Array.from({ length: 100 }, (_, level) => (level < 2 ? 0 : level * 100));
+  const gear = {
+    bronze_helm: { label: 'Bronze Helm', type: 'Equipment', value: 10, art: false },
+    iron_helm: { label: 'Iron Helm', type: 'Equipment', value: 20, art: false },
+  };
   const items = shuffled
-    ? { log: { label: 'Log', type: 'Resource', value: 2, art: false }, twig: { label: 'Twig', type: 'Resource', value: 1, art: false } }
-    : { twig: { label: 'Twig', type: 'Resource', value: 1, art: false }, log: { label: 'Log', type: 'Resource', value: 2, art: false } };
+    ? { log: { label: 'Log', type: 'Resource', value: 2, art: false }, ...gear, twig: { label: 'Twig', type: 'Resource', value: 1, art: false } }
+    : { twig: { label: 'Twig', type: 'Resource', value: 1, art: false }, log: { label: 'Log', type: 'Resource', value: 2, art: false }, ...gear };
   return {
     items,
     actions,
@@ -56,6 +61,7 @@ function rawData(shuffled = false): RawGameData {
     secretItems: ['dragonfang_greatblade'],
     enemyAttacks: { rat: [{ name: 'Gnaw', weight: 60, mult: 1, msg: 'gnaws', icon: '🐀' }] },
     potions: { weak_str_potion: { slot: 'damage', mult: 0.02, durMs: 120000, cdMs: 240000, family: 'strength' } },
+    unavailable: [],
   };
 }
 
@@ -89,7 +95,7 @@ test('writeModelDb creates the derived projection', () => {
     assert.equal(written, true);
     const db = openDatabase(path);
     assert.ok(db);
-    assert.equal((db.all('SELECT COUNT(*) AS count FROM items')[0] as { count: number }).count, 2);
+    assert.equal((db.all('SELECT COUNT(*) AS count FROM items')[0] as { count: number }).count, 4);
     assert.equal((db.all('SELECT item_id, price FROM shop WHERE item_id=?', 'log')[0] as { item_id: string; price: number }).price, 4);
     assert.equal((db.all('SELECT def FROM equipment WHERE item_id=?', 'bronze_helm')[0] as { def: number }).def, 5);
     assert.equal((db.all('SELECT kind, req_skill, req_level FROM equipment WHERE item_id=?', 'bronze_helm')[0] as { kind: string; req_skill: string; req_level: number }).req_skill, 'defence');
@@ -102,6 +108,68 @@ test('writeModelDb creates the derived projection', () => {
     assert.equal((db.all('SELECT COUNT(*) AS count FROM action_inputs WHERE action_id=? AND item_id=?', 'chop', 'twig')[0] as { count: number }).count, 1);
     assert.equal((db.all('SELECT qty FROM action_outputs WHERE action_id=? AND item_id=?', 'chop', 'log')[0] as { qty: number }).qty, 2);
     assert.equal((db.all('SELECT COUNT(*) AS count FROM xp_table')[0] as { count: number }).count, 100);
+    db.close();
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('reports no integrity findings for consistent raw data', () => {
+  const model = compileModel(rawData(), 'build-test');
+  assert.deepEqual(model.extraction.integrity, []);
+  assert.deepEqual(model.extraction.unavailable, []);
+});
+
+test('reports a referenced item id that is absent from items', () => {
+  const raw = rawData();
+  raw.items = Object.fromEntries(Object.entries(raw.items).filter(([id]) => id !== 'log'));
+  const findings = compileModel(raw, 'build-test').extraction.integrity;
+  const itemRefs = findings.find((finding) => finding.check === 'item-refs');
+  assert.ok(itemRefs, 'expected an item-refs finding');
+  assert.match(itemRefs.detail, /\blog\b/);
+});
+
+test('reports shop entries that are not priced above zero', () => {
+  const raw = rawData();
+  raw.shopPriceMultiplier = 0;
+  const findings = compileModel(raw, 'build-test').extraction.integrity;
+  assert.ok(findings.some((finding) => finding.check === 'shop-prices'), 'expected a shop-prices finding');
+});
+
+test('reports an action skill id that is absent from skills', () => {
+  const raw = rawData();
+  raw.skills = raw.skills.filter((skill) => (skill as { id: string }).id !== 'bounty');
+  const findings = compileModel(raw, 'build-test').extraction.integrity;
+  const skillRefs = findings.find((finding) => finding.check === 'skill-refs');
+  assert.ok(skillRefs, 'expected a skill-refs finding');
+  assert.match(skillRefs.detail, /bounty/);
+});
+
+test('reports an xp curve that does not increase', () => {
+  const raw = rawData();
+  raw.xp = raw.xp.map((value, level) => (level === 40 ? 0 : value));
+  const findings = compileModel(raw, 'build-test').extraction.integrity;
+  const curve = findings.find((finding) => finding.check === 'xp-curve');
+  assert.ok(curve, 'expected an xp-curve finding');
+  assert.match(curve.detail, /level 40/);
+});
+
+test('a degraded prestige registry still yields a projection', () => {
+  const raw = rawData();
+  raw.prestige = null;
+  raw.unavailable = [{ dataset: 'prestige', reason: 'prestige dataset: anchor not found (x)' }];
+  const model = compileModel(raw, 'build-test');
+  assert.equal(model.prestige, null);
+  assert.deepEqual(model.extraction.unavailable.map((gap) => gap.dataset), ['prestige']);
+  if (!sqliteAvailable()) return;
+  const directory = mkdtempSync(join(tmpdir(), 'fr-sqlite-'));
+  try {
+    const path = join(directory, 'model.db');
+    assert.equal(writeModelDb(model, path), true);
+    const db = openDatabase(path);
+    assert.ok(db);
+    assert.equal((db.all('SELECT COUNT(*) AS count FROM prestige_tracks')[0] as { count: number }).count, 0);
+    assert.equal((db.all('SELECT COUNT(*) AS count FROM items')[0] as { count: number }).count, 4);
     db.close();
   } finally {
     rmSync(directory, { recursive: true, force: true });

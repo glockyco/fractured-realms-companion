@@ -16,6 +16,7 @@ import {
   OVERLAY_SOURCE,
 } from '../src/generated/embedded.ts';
 import { refreshCompanion, resolveBackupPath } from '../src/refresh.ts';
+import type { RawGameData } from '../src/extract/registries.ts';
 import { sqliteAvailable } from '../src/lib/sqlite.ts';
 
 const DATA = {
@@ -23,11 +24,13 @@ const DATA = {
   actions: { archaeology: [{ id: 'dig_ancient_cairn', levelReq: 1, xp: 1, interval: 1, outputs: { ancient_spore: 1 } }] },
   actionGates: {},
   skills: [{ id: 'archaeology', name: 'Archaeology', category: 'gathering' }],
-  xp: [0, 0, 1],
+  xp: Array.from({ length: 100 }, (_, level) => (level < 2 ? 0 : level * 100)),
   tools: {}, mapsRegular: [], mapsDeep: [], chartSupplyTiers: {}, agilityCourses: [], bags: [], machines: [], boons: [], restorations: [], recipeMeals: [], seals: [], patterns: {}, grandReward: {}, buildings: [], buildingXp: {}, zones: [], digsites: [], achievements: [], offlineGold: {}, titles: [], prestige: { maxRank: 10, xpBonusPerRank: 0.01, speedBonusPerRank: 0.005, rankLabels: [], weights: [], categoryTotals: {}, skills: {} },
   shopItems: [], shopPriceMultiplier: 2,
   stringsEn: { 'name.fossil_tracks': 'Fossil Tracks', 'itemdesc.ancient_spore': 'Ancient Spore' },
-} as any;
+  equipment: {}, weapons: {}, equipRequirements: {}, foodHeal: {}, secretItems: [], enemyAttacks: {}, potions: {},
+  unavailable: [],
+} satisfies RawGameData;
 
 function fixture(): { root: string; archive: string; manifest: string; state: string } {
   const root = mkdtempSync(join(tmpdir(), 'fr-refresh-test-'));

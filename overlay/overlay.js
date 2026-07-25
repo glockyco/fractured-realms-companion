@@ -776,6 +776,10 @@ export function createOverlayShell(documentRef) {
   const loading = makeElement(documentRef, 'div', { class: 'loading-line', 'aria-label': 'Loading companion data' });
   const error = makeElement(documentRef, 'div', { class: 'banner', role: 'alert' });
   error.hidden = true;
+  // A registry the current build did not yield makes the engine silently understate
+  // bonuses, so the gap has to be stated rather than absorbed.
+  const gaps = makeElement(documentRef, 'div', { class: 'banner warning', role: 'status' });
+  gaps.hidden = true;
   const tabs = makeElement(documentRef, 'div', { class: 'tabs', role: 'tablist', 'aria-label': 'Companion sections' });
   const tabButtons = TAB_IDS.map((tabId, index) => {
     const button = makeElement(documentRef, 'button', {
@@ -807,7 +811,7 @@ export function createOverlayShell(documentRef) {
   });
   const tabbar = makeElement(documentRef, 'div', { class: 'tabbar' });
   tabbar.append(tabs, queueControls);
-  panel.append(header, loading, error, tabbar, tabpanels, compactStrip);
+  panel.append(header, loading, error, gaps, tabbar, tabpanels, compactStrip);
   shadow.append(style, launcher, panel);
   documentRef.body.append(host);
 
@@ -936,7 +940,7 @@ export function createOverlayShell(documentRef) {
     if (!panel.hidden) fitPanel();
   });
 
-  return { host, shadow, launcher, panel, header, identity, compactToggle, compactStrip, close, loading, error, tabs, tabbar, queueControls, tabButtons, panels, setOpen, setCompact, selectTab, showError };
+  return { host, shadow, launcher, panel, header, identity, compactToggle, compactStrip, close, loading, error, gaps, tabs, tabbar, queueControls, tabButtons, panels, setOpen, setCompact, selectTab, showError };
 }
 
 function blockedText(blocked) {
@@ -1023,9 +1027,30 @@ export function buildIndexes(model) {
   return { sourcesOf, usesOf };
 }
 
+/**
+ * Name the registries this game build did not yield. The engine treats a missing
+ * registry as zero rather than failing, so without this the player would see
+ * confidently wrong estimates with nothing to explain them.
+ */
+function renderDataGaps(shell, modelJson) {
+  const banner = shell.gaps;
+  if (!banner) return;
+  const extraction = modelJson && typeof modelJson === 'object' ? modelJson.extraction : null;
+  const unavailable = Array.isArray(extraction?.unavailable) ? extraction.unavailable.map((gap) => gap?.dataset).filter(Boolean) : [];
+  const integrity = Array.isArray(extraction?.integrity) ? extraction.integrity.map((finding) => finding?.check).filter(Boolean) : [];
+  const named = unavailable.length ? unavailable : integrity;
+  if (!named.length) { banner.hidden = true; banner.textContent = ''; return; }
+  const shown = named.slice(0, 4).join(', ');
+  const extra = named.length > 4 ? ` +${named.length - 4} more` : '';
+  const subject = unavailable.length ? 'Game data incomplete for this build' : 'Game data looks inconsistent for this build';
+  banner.textContent = `${subject}: ${shown}${extra}. Plans may miss related bonuses.`;
+  banner.hidden = false;
+}
+
 function createApplication(shell, modelJson, api) {
   const documentRef = shell.panel.ownerDocument;
   const model = indexModel(modelJson || {});
+  renderDataGaps(shell, modelJson);
   const datasets = model;
   const indexes = buildIndexes(model);
   const items = model.items || {};

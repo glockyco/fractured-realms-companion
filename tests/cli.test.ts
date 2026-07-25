@@ -87,7 +87,7 @@ test('dispatches every command and forwards global/command options', async () =>
   const deps = {
     ...output,
     runDoctor: async (options: any) => { seen.doctor = options; return { rows: [{ status: 'PASS', check: 'x', message: 'ok' }], blocking: false }; },
-    refreshCompanion: async (options: any) => { seen.refresh = options; return { buildId: 'b', changed: true }; },
+    refreshCompanion: async (options: any) => { seen.refresh = options; return { buildId: 'b', changed: true, unavailable: [], integrity: [] }; },
     restoreCompanion: async (options: any) => { seen.restore = options; return { archivePath: '/a', buildId: 'b', stateDirectory: '/s' }; },
     launchCompanion: async (options: any) => { seen.launch = options; return { url: 'http://127.0.0.1:48766/', command: 'steam', args: [] }; },
     relaunchCompanion: async (options: any) => { seen.relaunch = options; return { url: 'http://127.0.0.1:48766/', command: 'steam', args: [] }; },
@@ -103,6 +103,24 @@ test('dispatches every command and forwards global/command options', async () =>
   assert.deepEqual(seen.launch, { steamRoot: '/root', noOpen: true });
   assert.equal(await main(['relaunch', '--steam-root', '/root', '--no-open'], deps), 0);
   assert.deepEqual(seen.relaunch, { steamRoot: '/root', noOpen: true });
+});
+
+test('refresh names incomplete registries without failing the command', async () => {
+  const complete = io();
+  assert.equal(await main(['refresh'], { ...complete, refreshCompanion: async () => ({ buildId: 'b', changed: true, unavailable: [], integrity: [] }) as never }), 0);
+  assert.match(complete.out.join(''), /Refreshed Fractured Realms build b \(patched\)\./);
+  assert.doesNotMatch(complete.out.join(''), /Incomplete game data/);
+
+  // A build that costs one registry still yields a usable companion, so the gap is
+  // reported on stdout and the exit code stays successful.
+  const degraded = io();
+  assert.equal(await main(['refresh'], { ...degraded, refreshCompanion: async () => ({ buildId: 'b', changed: false, unavailable: ['potions', 'prestige'], integrity: ['shop-prices'] }) as never }), 0);
+  assert.match(degraded.out.join(''), /Incomplete game data for this build: 2 registries unavailable \(potions, prestige\); 1 integrity check failed \(shop-prices\)\. Run 'fractured-companion doctor' for detail\./);
+  assert.deepEqual(degraded.err, []);
+
+  const single = io();
+  assert.equal(await main(['refresh'], { ...single, refreshCompanion: async () => ({ buildId: 'b', changed: false, unavailable: ['potions'], integrity: [] }) as never }), 0);
+  assert.match(single.out.join(''), /1 registry unavailable \(potions\)/);
 });
 
 test('npm bin symlink is recognized as the CLI entrypoint', () => {

@@ -157,6 +157,18 @@ function modelRecord(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>;
 }
 
+/**
+ * One clause per non-empty gap list, or '' when the model is complete. A partial
+ * model is reported, never treated as a failure: a companion missing one registry
+ * is worth more to the player than no companion at all.
+ */
+export function gapSummary(unavailable: readonly string[], integrity: readonly string[]): string {
+  const clauses: string[] = [];
+  if (unavailable.length) clauses.push(`${unavailable.length} ${unavailable.length === 1 ? 'registry' : 'registries'} unavailable (${unavailable.join(', ')})`);
+  if (integrity.length) clauses.push(`${integrity.length} integrity ${integrity.length === 1 ? 'check' : 'checks'} failed (${integrity.join(', ')})`);
+  return clauses.join('; ');
+}
+
 function modelInfo(deps: CliDependencies, stdout: Output): void {
   const paths = modelPaths(deps);
   if (!existsSync(paths.pack) || !existsSync(paths.model)) {
@@ -173,8 +185,18 @@ function modelInfo(deps: CliDependencies, stdout: Output): void {
   if (!manifest || !model) throw new Error(`model unavailable (run refresh; invalid pack or model metadata)`);
   const buildId = manifest.build_id ?? model.build_id ?? 'unknown';
   const schemaVersion = model.schema_version ?? manifest.schema_version ?? 'unknown';
-  const lines = [`build_id: ${String(buildId)}`, `schema_version: ${String(schemaVersion)}`, 'registries:'];
+  const lines = [`build_id: ${String(buildId)}`, `schema_version: ${String(schemaVersion)}`];
+  const extraction = modelRecord(model.extraction);
+  if (!extraction) {
+    lines.push('extraction: unreported (run refresh)');
+  } else {
+    const unavailable = Array.isArray(extraction.unavailable) ? extraction.unavailable.map((gap) => String(modelRecord(gap)?.dataset ?? '')) : [];
+    const integrity = Array.isArray(extraction.integrity) ? extraction.integrity.map((finding) => String(modelRecord(finding)?.check ?? '')) : [];
+    lines.push(`extraction: ${gapSummary(unavailable, integrity) || 'complete'}`);
+  }
+  lines.push('registries:');
   for (const key of Object.keys(model).sort()) {
+    if (key === 'extraction') continue;
     const value = model[key];
     if (Array.isArray(value)) lines.push(`  ${key}: ${value.length}`);
     else if (typeof value === 'object' && value !== null) lines.push(`  ${key}: ${Object.keys(value).length}`);
@@ -227,6 +249,8 @@ export async function main(argv: readonly string[] = process.argv.slice(2), deps
       const refresh = deps.refreshCompanion ?? refreshCompanion;
       const result = await refresh({ ...common, noPatch: values['no-patch'] === true } as RefreshOptions);
       write(stdout, `Refreshed Fractured Realms build ${result.buildId}${result.changed ? ' (patched)' : ''}.\n`);
+      const gaps = gapSummary(result.unavailable ?? [], result.integrity ?? []);
+      if (gaps) write(stdout, `Incomplete game data for this build: ${gaps}. Run 'fractured-companion doctor' for detail.\n`);
       return 0;
     }
     if (command === 'restore') {
