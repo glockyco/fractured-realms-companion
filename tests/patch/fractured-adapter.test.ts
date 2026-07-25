@@ -210,10 +210,16 @@ test('transformed main preserves browser and native behavior', () => {
 });
 
 test('rejects main, preload and bundle anchor mutations without tree writes', () => {
-  for (const [file, anchor] of [['electron/main.cjs', 'const STEAM_APP_ID = 3789070;'], ['electron/preload.cjs', 'saveGame:'], ['dist/assets/index-test1234.js', '"skill_started"']] as const) {
+  for (const [file, anchor, named] of [
+    ['electron/main.cjs', 'const STEAM_APP_ID = 3789070;', /main anchor is missing or ambiguous \(const STEAM_APP_ID = 3789070;\)/],
+    ['electron/preload.cjs', 'saveGame:', /preload anchor is missing or ambiguous \(saveGame\)/],
+    ['dist/assets/index-test1234.js', '"skill_started"', /bundle anchor skill_started is ambiguous|bundle anchor startAction is missing/],
+  ] as const) {
     for (const duplicate of [false, true]) {
       const { root, pack } = createCase(); const path = join(root, file); let source = readFileSync(path, 'utf8'); source = duplicate ? `${source}\n${anchor}\n` : source.replace(anchor, ''); writeFileSync(path, source); const before = snapshot(root);
-      assert.throws(() => apply(root, pack)); assert.deepEqual(snapshot(root), before);
+      // The specific anchor must be named: a compatibility break is otherwise
+      // unreportable without bisecting the entry point by hand.
+      assert.throws(() => apply(root, pack), named, `${file} duplicate=${duplicate}`); assert.deepEqual(snapshot(root), before);
     }
   }
 });

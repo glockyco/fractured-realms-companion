@@ -365,18 +365,31 @@ function validateMainAndPreload(root: string, buildId: string): { entry: string;
   const preload = join(root, 'electron/preload.cjs');
   regular(entry, 'electron/main.cjs');
   regular(preload, 'electron/preload.cjs');
+  // Every branch below still refuses the build; naming the anchor is what makes a
+  // compatibility break reportable instead of a hand bisect.
+  const refuse = (cause: string, error?: unknown): never => fail(`${ERROR_PREFIX}${buildId}: ${cause}`, error);
   let source: string;
   let preloadSource: string;
   try {
     source = readFileSync(entry, 'utf8');
     preloadSource = readFileSync(preload, 'utf8');
-  } catch (error) { fail(`${ERROR_PREFIX}${buildId}`, error); }
-  if (MAIN_ANCHORS.some((anchor) => count(source!, anchor) !== 1)) fail(`${ERROR_PREFIX}${buildId}`);
-  if (count(source!, "const path = require('path');") !== 1 || count(source!, "const fs   = require('fs');") !== 1) fail(`${ERROR_PREFIX}${buildId}`);
-  if (source!.includes('companionBrowserMode') || source!.includes('companionNoOpen') || preloadSource!.includes('companionBrowserMode') || preloadSource!.includes('companionNoOpen') || source!.includes(FRACTURED_MARKER) || preloadSource!.includes(FRACTURED_MARKER) || source!.includes(FOREIGN_MARKER_PREFIX) || preloadSource!.includes(FOREIGN_MARKER_PREFIX)) fail(`${ERROR_PREFIX}${buildId}`);
-  if (count(preloadSource!, "contextBridge.exposeInMainWorld('electronAPI', {") !== 1 || PRELOAD_NAMES.some((name) => (preloadSource!.match(new RegExp(`^\\s*${name}\\s*:`, 'gm')) ?? []).length !== 1)) fail(`${ERROR_PREFIX}${buildId}`);
+  } catch (error) { refuse('could not read entry point', error); }
+  for (const text of MAIN_ANCHORS) {
+    if (count(source!, text) !== 1) refuse(`main anchor is missing or ambiguous (${text})`);
+  }
+  for (const text of ["const path = require('path');", "const fs   = require('fs');"]) {
+    if (count(source!, text) !== 1) refuse(`main require anchor is missing or ambiguous (${text})`);
+  }
+  for (const marker of ['companionBrowserMode', 'companionNoOpen', FRACTURED_MARKER, FOREIGN_MARKER_PREFIX]) {
+    if (source!.includes(marker)) refuse(`entry point already carries ${marker}`);
+    if (preloadSource!.includes(marker)) refuse(`preload already carries ${marker}`);
+  }
+  if (count(preloadSource!, "contextBridge.exposeInMainWorld('electronAPI', {") !== 1) refuse("preload anchor is missing or ambiguous (contextBridge.exposeInMainWorld('electronAPI', {)");
+  for (const name of PRELOAD_NAMES) {
+    if ((preloadSource!.match(new RegExp(`^\\s*${name}\\s*:`, 'gm')) ?? []).length !== 1) refuse(`preload anchor is missing or ambiguous (${name})`);
+  }
   const newline = source!.includes('\r\n') ? '\r\n' : '\n';
-  if (count(source!, NATIVE_UNLOCK_LINES.join(newline)) !== 1) fail(`${ERROR_PREFIX}${buildId}`);
+  if (count(source!, NATIVE_UNLOCK_LINES.join(newline)) !== 1) refuse('native steam:unlock handler block is missing or ambiguous');
   const ready = [
     'app.whenReady().then(() => {',
     '  initSteam();',
@@ -386,7 +399,7 @@ function validateMainAndPreload(root: string, buildId: string): { entry: string;
     '  });',
     '});',
   ].join(newline);
-  if (count(source!, ready) !== 1) fail(`${ERROR_PREFIX}${buildId}`);
+  if (count(source!, ready) !== 1) refuse('app.whenReady block is missing or ambiguous');
   return { entry, source: source!, newline };
 }
 
