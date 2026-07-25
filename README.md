@@ -42,19 +42,20 @@ Manual steps stay visible in the timeline with a "waiting on you" badge and a wa
 
 - **Items:** Search by item name for sources, uses, stats, requirements, and artwork.
 - **Skills:** Compare action levels, timings, tools, inputs, outputs, rare outputs, and locations.
-- **Planning:** Build typed targets for item totals or gains, skill levels or XP, action runs or minutes, unlocks, and gold. The engine resolves prerequisites into a prioritized step timeline against live state.
-- **Queue:** Review one prioritized timeline. Manual instruction cards remain visible with their wall-clock ready-at estimate; independent runnable steps continue while a manual or blocked step waits.
+- **Planning:** Build a typed target — reach an item total, gain items, reach a skill level, reach a skill XP value, run an action for a count or duration, or use current stock. The engine resolves prerequisites into a prioritized step timeline against live state.
+- **Plan timeline:** Review one prioritized timeline. Manual instruction cards remain visible with their wall-clock ready-at estimate; independent runnable steps continue while a manual or blocked step waits.
 - **Executor:** Run the highest-priority startable action, preempt it when a higher-priority step becomes startable, and surface running, waiting, blocked, complete, and error states without bypassing game checks.
-- **Local data:** `refresh` compiles the installed game's registries into one `model.json` (pack schema version 2) and writes a derived `model.db` projection in the state directory when a built-in SQLite driver is available.
+- **Local data:** `refresh` compiles the installed game's registries into one `model.json` and writes a derived `model.db` projection in the state directory when a built-in SQLite driver is available. The pack manifest is schema version 2; the model inside it is schema version 1.
 
 <details>
 <summary>Feature details</summary>
 
-- **Planning resolution:** Targets are typed as item, item-gain, level, XP, action, unlock, or gold goals. The engine resolves prerequisites and emits a prioritized timeline; each step reports its purpose, expected duration, and live scheduler status. Manual steps become instruction cards with a wall-clock ready-at estimate, while independent automatable steps continue.
+- **Planning resolution:** A target is one of six kinds — `item` (reach an item total), `item-gain` (gain items), `level`, `xp`, `action` (a run count or a duration), and `use-stock` (craft as much as current inputs allow). The engine resolves prerequisites and emits a prioritized timeline; each step reports what it produces, its expected duration, and its live scheduler status. Manual steps become instruction cards with a wall-clock ready-at estimate, while independent automatable steps continue.
 - **Stochastic sources:** Rare drops and other probabilistic outputs are estimates, not guarantees. Steps that depend on them stop from observed live state rather than predicted counts.
 - **Direct execution:** The executor checks live start requirements, runs the highest-priority action that is currently startable, preempts lower-priority work when needed, and surfaces refusals and stalls. Manual steps never block independent work and are never auto-completed by the companion.
 - **Live scheduler:** The queue preserves target priority while choosing the highest-priority action that is startable in the current live state. A newly available higher-priority action preempts lower-priority work; manual instruction cards do not pause independent actions.
-- **Local data:** `refresh` compiles the installed game's registries into one `model.json` (pack schema version 2) and writes a derived `model.db` projection in the state directory when a built-in SQLite driver is available.
+- **Local data:** `refresh` compiles the installed game's registries into one `model.json` and writes a derived `model.db` projection in the state directory when a built-in SQLite driver is available. The pack manifest is schema version 2; the model inside it is schema version 1.
+- **Incomplete builds:** If a game update reshapes a registry the companion cannot read, `refresh` still publishes everything else, names the gap, and exits successfully. `model.json` carries an `extraction` report listing unavailable registries and failed consistency checks.
 
 </details>
 
@@ -67,11 +68,11 @@ fractured-companion model info
 fractured-companion model sql "SELECT id, level_req FROM actions WHERE skill_id='woodcutting' ORDER BY level_req LIMIT 3"
 ```
 
-`model info` reports the build, schema version, registry counts, and paths. `model sql` accepts read-only `SELECT` statements and prints one JSON object per row from `<stateDir>/model.db`. The projection is derived from `<stateDir>/pack/data/model.json`; if the database or a built-in SQLite driver is unavailable, run `refresh` and check the reported error. The overlay serves the same model at `http://127.0.0.1:48766/companion/data/model.json` when the companion host is running.
+`model info` reports the build, the model schema version, an `extraction:` line stating whether the model is complete, registry counts, and paths. `model sql` accepts read-only `SELECT` statements and prints one JSON object per row from `<stateDir>/model.db`. The projection is derived from `<stateDir>/pack/data/model.json`; if the database or a built-in SQLite driver is unavailable, run `refresh` and check the reported error. The overlay serves the same model at `http://127.0.0.1:48766/companion/data/model.json` when the companion host is running.
 
 ## Publishing the data spreadsheet
 
-Maintainers can publish the compiled model to a Google Spreadsheet (one tab per model table, lossless) so others can theorycraft and build on the data. The `scripts/export-sheets.mjs` publisher reads `<stateDir>/model.db` (populated by `refresh`), signs a Google service-account JWT with `node:crypto`, and writes each table through the Google Sheets REST API. It adds no runtime dependency.
+Maintainers can publish the compiled model to a Google Spreadsheet so others can theorycraft and build on the data. The `scripts/export-sheets.mjs` publisher reads `<stateDir>/model.db` (populated by `refresh`), signs a Google service-account JWT with `node:crypto`, and writes a generated Overview tab plus one lossless tab per model table through the Google Sheets REST API. It adds no runtime dependency, but it does need `model.db` and a built-in SQLite driver — including for `--dry-run`. If `refresh` reported that `model.db` was unavailable, the exporter cannot run.
 
 Preview offline without any Google setup:
 
@@ -79,7 +80,7 @@ Preview offline without any Google setup:
 npm run export-sheets -- --dry-run
 ```
 
-This lists every tab with its row and cell counts and writes nothing.
+This lists each model-table tab with its row and cell counts, notes the Overview tab, and writes nothing.
 
 To publish, do the one-time Google setup:
 
@@ -96,7 +97,13 @@ FRACTURED_SHEETS_SPREADSHEET_ID=<spreadsheet-id> npm run export-sheets
 
 The id is remembered in the config dir (`~/.config/fractured-realms-companion/spreadsheet-id`), so subsequent publishes need only `npm run export-sheets`. Pass the env var again any time to target a different sheet.
 
-Each run creates any missing tabs, clears and rewrites every model table, and freezes plus bolds the header row. Tabs are only added or updated, never deleted, so your own analysis tabs survive a republish. Writes that hit Google's per-minute quota are retried with exponential backoff so every tab lands; any remaining per-tab failures are reported without aborting the batch.
+Each run creates any missing tabs, clears and rewrites every model table, and freezes plus bolds the header row.
+
+> **A republish mirrors the model exactly.** Any tab that is neither the Overview nor a current model table is **deleted** — including your own analysis tabs. The only exception is that the delete is skipped when it would empty the workbook, because Sheets requires one surviving tab. Keep private analysis in a separate spreadsheet, or reference this one with `IMPORTRANGE`.
+
+Writes that hit Google's per-minute quota are retried with exponential backoff, up to a bounded number of attempts. A tab whose writes never succeed is reported at the end without aborting the rest of the batch, so check the summary rather than assuming every tab landed.
+
+The published spreadsheet is also packaged as a Steam Community guide; see [docs/steam-guide/README.md](docs/steam-guide/README.md) for that source material.
 
 ## Requirements
 
@@ -144,7 +151,7 @@ fractured-companion doctor
 fractured-companion launch
 ```
 
-The first `doctor --json` is read-only. Before the first refresh it may report expected failures for missing extracted data, patch metadata, or companion state. `refresh` then extracts the current game data and patches the archive by default. Run `doctor` again and proceed to `launch` only when it reports no blocking failures.
+The first `doctor --json` is read-only. Before the first refresh it may report expected failures for missing extracted data, patch metadata, or companion state. `refresh` then extracts the current game data and patches the archive by default. If a game update left a registry unreadable, `refresh` still succeeds and prints an `Incomplete game data for this build: …` line naming the gap. Run `doctor` again and proceed to `launch` only when it reports no blocking failures; a `WARN` row is not blocking.
 
 `launch` runs the already-refreshed companion. It starts Fractured Realms with the companion flag, waits for the local host to become healthy, and opens `http://127.0.0.1:48766/`. It does not perform a refresh.
 
@@ -152,13 +159,17 @@ The first `doctor --json` is read-only. Before the first refresh it may report e
 
 | Command | Behavior | Command-specific option |
 | --- | --- | --- |
-| `doctor` | Read-only diagnostics for the install, state, patch, and local host | `--json` emits diagnostic rows as JSON |
+| `doctor` | Read-only diagnostics for the install, state, patch, model completeness, and local host | `--json` emits diagnostic rows as JSON |
 | `refresh` | Extract current game data and update the companion patch | `--no-patch` extracts and validates without changing the archive |
 | `restore` | Restore the verified original game archive | None |
 | `launch` | Run the already-refreshed companion | `--no-open` leaves the browser closed |
 | `relaunch` | Quit the project-owned running companion, refresh, and launch | `--no-open` leaves the browser closed |
+| `model info` | Print the build, model schema version, completeness, and registry counts | None |
+| `model sql "SELECT …"` | Run one read-only `SELECT` against `model.db` and print JSON rows | None |
 
-Common options must follow the command:
+Each `doctor` row is `PASS`, `WARN`, or `FAIL`. Only `FAIL` blocks; a `WARN` on the `model` row means the companion works but this game build did not yield every registry.
+
+`--json`, `--no-open`, and `--no-patch` must follow their command. `--steam-root` and `--bottle` may appear on either side of it:
 
 - `--steam-root PATH` selects an explicit Steam root.
 - `--bottle NAME` selects a CrossOver bottle on macOS. The default is `Steam`.
@@ -208,7 +219,7 @@ fractured-companion doctor
 fractured-companion launch
 ```
 
-If changed source anchors make the new build unsafe to patch, `refresh` stops before writing. Do not force the patch.
+If changed source anchors make the new build unsafe to patch, `refresh` refuses to touch the game archive and names the anchor it could not match. It may still have published refreshed data into the state directory by that point; the installed archive is what stays untouched. Do not force the patch.
 
 To restore the original archive:
 
@@ -231,7 +242,7 @@ Then return to this package and run `fractured-companion refresh`. This package 
 
 ## Safety and local state
 
-- The browser host binds only to `127.0.0.1:48766`. API requests require a per-process token and matching `Host` and `Origin` headers. Request bodies are limited to 64 KiB. A foreign service on that port is a blocking diagnostic failure.
+- The browser host binds only to `127.0.0.1:48766`. `/api/*` requests require a per-process token and an accepted `Host` header, and an `Origin` header is validated when one is present. `/health` is unauthenticated, and the project-owned quit route accepts a tokenized request without an `Origin`. Request bodies are limited to 64 KiB. A foreign service on that port is a blocking diagnostic failure.
 - Patching fails closed. The companion fingerprints the archive, rejects foreign markers and unexpected or ambiguous source anchors, stages changes, verifies installed bytes, and records exact metadata. Concurrent changes or metadata mismatches stop the operation.
 - The original archive backup is immutable and hash-named. `restore` revalidates metadata, fingerprints, marker ownership, Steam build identity, and backup bytes before writing.
 - State is separate from the game install. Windows uses `%LOCALAPPDATA%\fractured-realms-companion`. Other platforms use `$XDG_STATE_HOME/fractured-realms-companion` or `~/.local/state/fractured-realms-companion`.
@@ -241,7 +252,8 @@ Then return to this package and run `fractured-companion refresh`. This package 
 ## Limitations
 
 - Patching is build-sensitive. A changed entrypoint anchor requires a compatibility update before that build can be patched, and `refresh` names the anchor it could not match.
-- Extraction degrades instead of failing whole. If a game update reshapes one registry, `refresh` still publishes the model, `doctor` reports a non-blocking `model` warning naming the missing registries, and the overlay shows a banner. Plans may then omit bonuses that depend on the missing data.
+- Extraction degrades instead of failing whole, with one boundary: `items`, `actions`, `actionGates`, `skills`, and `xp` are required and still abort a refresh. If a game update reshapes any other registry, `refresh` still publishes the model, `doctor` reports a non-blocking `model` warning naming the missing registries, and the overlay shows a banner. Plans may then omit bonuses that depend on the missing data.
+- The compiled model is also checked for internal consistency (`item-refs`, `skill-refs`, `shop-prices`, `xp-curve`). A failure is reported the same non-blocking way and means the extracted data is suspect, not merely incomplete.
 - Rare-attempt counts and completion times are estimates, not guarantees. A multi-quantity rare drop may exceed the requested inventory target by one drop batch.
 - Required Shop tools are permanent unlocks and must already be purchased. The engine represents these as manual unlock steps; it does not auto-purchase them.
 - A new item target may be blocked when the bag has no free slot. A direct action may also be refused by the game. The scheduler waits only when no action is runnable, resumes on live-state changes, and surfaces these states rather than bypassing game checks.
@@ -271,9 +283,9 @@ npm run validate:live
 npm run screenshots
 ```
 
-- `npm run backup-saves` copies every existing save location (CrossOver bottle `Fractured Realms`, `Fractured Realms Demo`, `visseron-idle`, Steam `userdata`, and the Arc browser Local Storage that holds the real companion save) into a timestamped directory under `~/.local/state/fractured-realms-companion/backups/saves-<UTC>/` with a `manifest.json`. Quit Arc first, or pass `--allow-running-arc` to accept a possibly torn leveldb copy. To restore, copy each directory back to its `sourcePath` while the game and Arc are closed.
-- `npm run validate:live` refreshes and launches the companion, then drives the overlay through wiki lookup, plan-and-execute, waiting-phase, and persistence checks against an isolated fresh save. It requires a save backup newer than 24 hours and never opens the player's Arc browser. First failure writes a screenshot, storage dump, and console log to `~/.local/state/fractured-realms-companion/validation-artifacts/<ts>/`. Playwright is a devDependency; install its browser once with `npx playwright install chromium`.
-- `npm run screenshots` regenerates `docs/screenshots/*.webp` from the committed `docs/screenshots/fixture-save.json` with a frozen clock, so composition and ready-at times stay stable across runs. It requires an already-refreshed install.
+- `npm run backup-saves` copies every existing save location (CrossOver bottle `Fractured Realms`, `Fractured Realms Demo`, `visseron-idle`, Steam `userdata`, and the Arc browser Local Storage that holds the real companion save) into a timestamped `backups/saves-<UTC>/` directory with a `manifest.json`, under the state directory for your platform (`%LOCALAPPDATA%`, `$XDG_STATE_HOME`, or `~/.local/state`). Quit Arc first, or pass `--allow-running-arc` to accept a possibly torn leveldb copy. To restore, copy each directory back to its `sourcePath` while the game and Arc are closed.
+- `npm run validate:live` **refreshes and patches the install** before launching, then drives the overlay through wiki lookup, plan-and-execute, waiting-phase, and persistence checks against an isolated fresh save. It never opens the player's Arc browser. It does not take a backup: it only requires that a save-backup manifest newer than 24 hours already exists, which is why `backup-saves` comes first. Flags: `--no-refresh` skips the refresh and patch, `--keep-open` leaves the game running, `--skip-backup-check` bypasses the 24-hour gate, and `--fresh` discards the isolated profile. Once the browser phase has started, a failure writes a screenshot, storage dump, and console log to `validation-artifacts/<ts>/` in the state directory; earlier failures such as the backup gate just exit. Playwright is a devDependency, but `npm ci` does not install its browser — run `npx playwright install chromium` once.
+- `npm run screenshots` regenerates `docs/screenshots/*.webp` from the committed `docs/screenshots/fixture-save.json` with a frozen clock, so composition and ready-at times stay stable across runs. It requires an already-refreshed install and overwrites those committed images. Its `--export-save` mode replaces the committed fixture save itself.
 
 
 The source of truth for releases is [`.github/workflows/release.yml`](.github/workflows/release.yml). `v*` tags build four standalone targets and `SHA256SUMS`. npm publishing is conditional on `NPM_TOKEN` and uses provenance.
