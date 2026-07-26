@@ -73,27 +73,38 @@ Monospace is limited to item IDs, levels, quantities, intervals, progress, and o
 
 ## 4. Elevation and Layout
 
-The spacing scale is based on four pixels: `--fr-s1` through `--fr-s8` represent 4, 8, 12, 16, 20, 24, and 32 pixels. Radii are 4, 8, and 12 pixels. Controls share a 36-pixel compact height; the launcher is 44 pixels high.
+The spacing scale is based on four pixels: `--fr-s1` through `--fr-s6` represent 4, 8, 12, 16, 20, and 24 pixels, and `--fr-s8` represents 32 pixels. There is no `--fr-s7`. Radii are 4, 8, and 12 pixels. Controls share a 36-pixel compact height; the launcher is 44 pixels high.
 
-The panel is flat internally: dividers and three neutral tones establish hierarchy. Only the launcher and top-level panel receive structural shadows. Rows, source records, uses, and plan steps remain unboxed and separated by one-pixel rules. The desktop panel defaults to 48 by 42 rem, supports native two-axis resize, and cannot exceed the viewport. Below 40 rem, it becomes a one-column panel with vertical-only resize; at 320 pixels it retains an eight-pixel viewport inset and a complete usable width.
+The panel is flat internally: dividers and three neutral tones establish hierarchy. Structural shadows are limited to the launcher, the top-level panel, and the combobox popover that floats above panel content. Rows, source records, uses, and plan steps remain unboxed and separated by one-pixel rules. The desktop panel defaults to 48 by 42 rem, supports native two-axis resize, and cannot exceed the viewport. At or below 40 rem, it becomes a one-column panel with vertical-only resize. There is no separate 320-pixel breakpoint: the eight-pixel viewport inset at that width falls out of the `--fr-panel-gap` token and the panel's `calc(100vw - 2 * gap)` cap, which keeps a complete usable width down to 320 pixels.
 
 ## 5. Components and Interaction
 
 - **Launcher:** compact fixed button, persistent during loading and errors; `aria-expanded` reflects the panel. Timeout changes its icon and label instead of hiding the failure.
 - **Panel:** nonmodal, resizable Shadow DOM surface. Escape closes it and restores launcher focus.
 - **Tabs:** Items, Skills, and Plan use `tablist`, `tab`, and `tabpanel`; roving `tabindex` supports Arrow keys, Home, and End.
-- **Search:** native search input with a 140 ms debounce, label/ID matching, visible result count, and a 120-row initial cap.
+- **Search:** native search input with label/ID matching, a visible result count, and result caps of 120 unfiltered rows and 240 for a query. Filtering is applied directly on `input`.
 - **Item browser:** selected row and complete detail show description, value, healing, icon only when art exists, deterministic and rare sources, and action/building uses.
 - **Skill table:** native skill selector plus semantic captioned table for action level, interval, inputs, outputs, rare outputs, and tool requirements.
-- **Plan builder:** choose a typed target—item total, item gain, skill level, skill XP, action runs or minutes, unlock, or gold—then add it to the prioritized queue. The engine resolves prerequisites into one ordered timeline; each step shows its purpose, expected duration, and live status (`running`, `ready`, `blocked`, `waiting on you`, or `done`). Manual instruction cards identify the action the player must take and show a wall-clock “ready for you at” estimate. Manual or currently blocked steps never pause independent runnable work; the scheduler resumes them when live state makes them startable and preempts a lower-priority action when a higher-priority step becomes available. Run and Stop call the direct executor; phase, current step, and message use a polite atomic status region.
+- **Plan builder:** choose one of six typed targets — reach an item total, gain items, reach a skill level, reach a skill XP value, run an action for a count or duration, or use current stock — then add it to the prioritized queue. The engine resolves prerequisites into one ordered timeline; each step shows what it produces, its expected duration, and its live status (`Running`, `Ready`, `Later`, `Blocked`, `Needs you`, `Needs you later`, or `Done`). Manual instruction cards identify the action the player must take and show a wall-clock “ready for you at” estimate. Manual or currently blocked steps never pause independent runnable work; the scheduler resumes them when live state makes them startable and preempts a lower-priority action when a higher-priority step becomes available. Run and Stop call the direct executor; phase, current step, and message use a polite atomic status region.
 - **Buttons and controls:** one radius, height, border, focus ring, hover, active, disabled, and error vocabulary. Icons are stroked inline SVGs; no emoji or ornamental assets are used.
+- **Data-gap banner:** a warning banner below the header names the registries the installed game build did not yield, or the consistency checks that failed. The engine treats missing data as a zero bonus rather than an error, so the banner is what keeps an incomplete model from reading as a confident one.
+- **Compact mode:** a header toggle collapses the panel to a single strip carrying the executor phase, message, progress, and start/resume/stop controls.
+- **Placement:** launcher and panel are both draggable, and their positions persist across sessions.
 
 No component reads, writes, displays, or depends on the game's native queued-action system.
 
 ## 6. Motion, Responsiveness, and Accessibility
 
-State transitions use `180ms cubic-bezier(0.16, 1, 0.3, 1)`, within the product's 150–220 ms response window. They are limited to color, border, opacity, and small direct-manipulation transforms. The loading line conveys unresolved data state; there are no entrance sequences or decorative animations. `prefers-reduced-motion: reduce` makes transitions and animations effectively instant.
+State transitions use `180ms cubic-bezier(0.16, 1, 0.3, 1)`, within the product's 150–220 ms response window. They are limited to color, border, opacity, and small direct-manipulation transforms, plus the panel's own open and close transition. Motion is functional only: the loading line conveys unresolved data state, a spinner marks in-flight planning, and an attention pulse marks a state change that must not be missed. There are no decorative or ornamental animations. `prefers-reduced-motion: reduce` makes transitions and animations effectively instant.
 
-The panel remains usable from 320-pixel viewports through desktop widths. Mobile structure stacks item browser and detail, collapses the planner form, and makes executor controls full-width without becoming a HUD. Native table overflow preserves dense skill data. Keyboard order follows launcher, tabs, active panel controls, content actions, then executor controls. Every interactive element has a visible two-pixel Harbor 400 focus ring with offset, all form fields have explicit labels, loading/status/error announcements use appropriate live regions, and every icon-only button has an accessible name.
+The panel remains usable from 320-pixel viewports through desktop widths. At or below 40 rem the item browser and detail stack and the planner form fields go full width; the planner itself stays expanded and the executor controls keep their icon-button group rather than stretching. Native table overflow preserves dense skill data. Keyboard order follows launcher, header controls, then the tab bar — which holds the tabs and the executor controls together — then the active panel's content. Every interactive element has a visible two-pixel Harbor 400 focus ring with offset, all form fields have explicit labels, status and error announcements use appropriate live regions, and every icon-only button has an accessible name.
 
 The implementation deliberately excludes glass, gradients, colored side stripes, custom scrollbars, nested card grids, decorative motion, and oversized mobile-game controls.
+
+## 7. Known deviations
+
+These three points describe design intent the shipped overlay does not yet meet. They are recorded so the gap stays visible rather than being quietly rewritten away.
+
+- **Search is not debounced.** Filtering runs on every `input` event. A debounce near 140 ms was intended.
+- **The spacing scale skips 28 pixels.** `--fr-s7` was intended between `--fr-s6` and `--fr-s8` but is not declared, so no rule can use it.
+- **Mobile executor controls are not full-width.** Below 40 rem they stay an icon-button group; only the plan toolbar's actions widen.
