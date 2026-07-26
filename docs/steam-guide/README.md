@@ -24,12 +24,28 @@ data spreadsheet. Post it from the game's Community Hub → Guides → Create.
 | `assets/fractured-realms-banner-open-the-sheet.webp` | Header for the "Get the sheet" section |
 
 Numbers in the body are taken from the compiled model (`model.db`) and match the
-published sheet. Re-check them if the dataset changes.
+published sheet. Verify them against a refreshed model before republishing:
+
+```sh
+node dist/cli.js model sql "SELECT COUNT(*) AS n FROM items"
+node dist/cli.js model sql "SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table'"
+```
+
+The published sheet carries one tab per model table plus the generated Overview
+tab, so its tab count is the table count plus one.
 
 Assets are stored as webp to match the repo convention and keep the tree small.
-Steam guide uploads require PNG or JPG, so convert before uploading, e.g.
-`dwebp assets/fractured-realms-banner-whats-inside.webp -o whats-inside.png` (or
-`magick input.webp output.png`).
+Steam guide uploads require PNG or JPG, so convert before uploading. The BBCode
+body below references the converted files by their `.jpg` names, so convert to
+`.jpg` keeping each basename:
+
+```sh
+for f in assets/*.webp; do dwebp "$f" -o "${f%.webp}.png" && magick "${f%.webp}.png" "$(basename "${f%.webp}").jpg"; done
+```
+
+`magick input.webp output.jpg` in one step works too where ImageMagick has webp
+support. Upload the resulting `fractured-realms-*.jpg` files, then paste the ids
+Steam assigns into the body.
 
 ## Body (Steam BBCode)
 
@@ -47,7 +63,7 @@ it differs per upload; the ids below are from the current published guide.
 [previewimg=46888912;sizeFull,floatLeft;fractured-realms-banner-whats-inside.jpg][/previewimg]
 
 [h1]What's in it[/h1]
-[b]43 tabs, ~9,100 rows[/b], one tab per data table:
+[b]44 tabs, ~9,100 rows[/b] — an Overview landing tab plus one tab per data table:
 
 [list]
 [*][b]548 items[/b] with values, types, and icons
