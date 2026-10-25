@@ -1,148 +1,22 @@
-<p align="center">
-  <img src="overlay/logo.webp" width="112" alt="Fractured Realms Companion shard sigil">
-</p>
+# Fractured Realms Companion
 
-<h1 align="center">Fractured Realms Companion</h1>
+Fractured Realms Companion adds a local item wiki and action planner to [Fractured Realms](https://store.steampowered.com/app/3789070/Fractured_Realms/). This unofficial tool is for Steam installations on Windows and Linux, or Steam inside CrossOver on macOS.
 
-<p align="center">
-  A local item wiki and action planner for <strong><a href="https://store.steampowered.com/app/3789070/Fractured_Realms/">Fractured Realms</a></strong>.
-  Find what you need, understand the dependencies, and start the next valid action without leaving the game.
-</p>
+Search item sources and uses, plan crafting dependencies against your live inventory, and run the next available game action. You can interrupt execution, and steps that need a purchase or another manual action stay visible.
 
-<p align="center">
-  <a href="#installation">Install</a> ·
-  <a href="#quickstart">Try it</a> ·
-  <a href="docs/screenshots/action-planner.webp">See the planner</a>
-</p>
+[Download a standalone release](https://github.com/glockyco/fractured-realms-companion/releases/latest).
 
-<table>
-  <tr>
-    <td><strong>Item wiki</strong><br>Search for sources, uses, stats, requirements, and artwork.</td>
-    <td><strong>Dependency planning</strong><br>Turn a typed target into a visible, prioritized timeline from live inventory.</td>
-    <td><strong>Direct actions</strong><br>Run one game action at a time with progress, blockers, and stop controls.</td>
-  </tr>
-</table>
+![Action planner with running targets and queued dependency steps](docs/screenshots/action-planner.webp)
 
-### Companion preview
+The planner shows action progress, dependencies, and steps that need your attention.
 
-| Item wiki | Compiled skill actions |
-| --- | --- |
-| Search an item, then inspect its sources, uses, stats, and artwork. | Compare action levels, timings, tools, outputs, and drop rates. |
-| ![Item wiki detail panel showing an item's sources, value, and uses](docs/screenshots/item-wiki.webp) | ![Archaeology actions with levels, intervals, outputs, and tools](docs/screenshots/skill-actions.webp) |
+## Install and start
 
-### Planning preview
+Install Fractured Realms through Steam first. Download the binary for your platform and `SHA256SUMS` from the release page. Standalone binaries include their runtime and do not need Node.js or Bun.
 
-![Action planner timeline with a running item target and queued dependency steps](docs/screenshots/action-planner.webp)
+Verify the downloaded binary against its entry in `SHA256SUMS`. On Linux or macOS, give it executable permission. Rename it to `fractured-companion` (`fractured-companion.exe` on Windows) and put it on your `PATH` to use the commands below. Alternatively, replace `fractured-companion` with the downloaded binary's full path.
 
-Manual steps stay visible in the timeline with a "waiting on you" badge and a wall-clock ready-at estimate, so you know when to come back for a purchase or build.
-
-![Timeline manual instruction cards showing waiting-on-you badges and ready-for-you-at ETA times](docs/screenshots/manual-steps.webp)
-
-## What it does
-
-- **Items:** Search by item name for sources, uses, stats, requirements, and artwork.
-- **Skills:** Compare action levels, timings, tools, inputs, outputs, rare outputs, and locations.
-- **Planning:** Build a typed target — reach an item total, gain items, reach a skill level, reach a skill XP value, run an action for a count or duration, or use current stock. The engine resolves prerequisites into a prioritized step timeline against live state.
-- **Plan timeline:** Review one prioritized timeline. Manual instruction cards remain visible with their wall-clock ready-at estimate; independent runnable steps continue while a manual or blocked step waits.
-- **Executor:** Run the highest-priority startable action, preempt it when a higher-priority step becomes startable, and surface running, waiting, blocked, complete, and error states without bypassing game checks.
-- **Local data:** `refresh` compiles the installed game's registries into one `model.json` and writes a derived `model.db` projection in the state directory when a built-in SQLite driver is available. The pack manifest is schema version 2; the model inside it is schema version 1.
-
-<details>
-<summary>Feature details</summary>
-
-- **Planning resolution:** A target is one of six kinds — `item` (reach an item total), `item-gain` (gain items), `level`, `xp`, `action` (a run count or a duration), and `use-stock` (craft as much as current inputs allow). The engine resolves prerequisites and emits a prioritized timeline; each step reports what it produces, its expected duration, and its live scheduler status. Manual steps become instruction cards with a wall-clock ready-at estimate, while independent automatable steps continue.
-- **Stochastic sources:** Rare drops and other probabilistic outputs are estimates, not guarantees. Steps that depend on them stop from observed live state rather than predicted counts.
-- **Direct execution:** The executor checks live start requirements, runs the highest-priority action that is currently startable, preempts lower-priority work when needed, and surfaces refusals and stalls. Manual steps never block independent work and are never auto-completed by the companion.
-- **Live scheduler:** The queue preserves target priority while choosing the highest-priority action that is startable in the current live state. A newly available higher-priority action preempts lower-priority work; manual instruction cards do not pause independent actions.
-- **Local data:** `refresh` compiles the installed game's registries into one `model.json` and writes a derived `model.db` projection in the state directory when a built-in SQLite driver is available. The pack manifest is schema version 2; the model inside it is schema version 1.
-- **Incomplete builds:** If a game update reshapes a registry the companion cannot read, `refresh` still publishes everything else, names the gap, and exits successfully. `model.json` carries an `extraction` report listing unavailable registries and failed consistency checks.
-
-</details>
-
-## Inspecting the compiled game model
-
-After `refresh`, inspect the canonical model JSON and its optional SQLite projection without launching the game:
-
-```sh
-fractured-companion model info
-fractured-companion model sql "SELECT id, level_req FROM actions WHERE skill_id='woodcutting' ORDER BY level_req LIMIT 3"
-```
-
-`model info` reports the build, the model schema version, an `extraction:` line stating whether the model is complete, registry counts, and paths. `model sql` accepts read-only `SELECT` statements and prints one JSON object per row from `<stateDir>/model.db`. The projection is derived from `<stateDir>/pack/data/model.json`; if the database or a built-in SQLite driver is unavailable, run `refresh` and check the reported error. The overlay serves the same model at `http://127.0.0.1:48766/companion/data/model.json` when the companion host is running.
-
-## Publishing the data spreadsheet
-
-Maintainers can publish the compiled model to a Google Spreadsheet so others can theorycraft and build on the data. The `scripts/export-sheets.mjs` publisher reads `<stateDir>/model.db` (populated by `refresh`), signs a Google service-account JWT with `node:crypto`, and writes a generated Overview tab plus one lossless tab per model table through the Google Sheets REST API. It adds no runtime dependency, but it does need `model.db` and a built-in SQLite driver — including for `--dry-run`. If `refresh` reported that `model.db` was unavailable, the exporter cannot run.
-
-Preview offline without any Google setup:
-
-```sh
-npm run export-sheets -- --dry-run
-```
-
-This lists each model-table tab with its row and cell counts, notes the Overview tab, and writes nothing.
-
-To publish, do the one-time Google setup:
-
-1. In the [Google Cloud Console](https://console.cloud.google.com), create or select a project and enable the **Google Sheets API**.
-2. Create a **service account**, add a **JSON key**, and download it.
-3. Save the key at `~/.config/fractured-realms-companion/google-credentials.json` (or point `FRACTURED_SHEETS_CREDENTIALS` at another path).
-4. Create a spreadsheet and **share it (Editor) with the service-account email**.
-
-Then publish, passing the spreadsheet id from its URL the first time only:
-
-```sh
-FRACTURED_SHEETS_SPREADSHEET_ID=<spreadsheet-id> npm run export-sheets
-```
-
-The id is remembered in the config dir (`~/.config/fractured-realms-companion/spreadsheet-id`), so subsequent publishes need only `npm run export-sheets`. Pass the env var again any time to target a different sheet.
-
-Each run creates any missing tabs, clears and rewrites every model table, and freezes plus bolds the header row.
-
-> **A republish mirrors the model exactly.** Any tab that is neither the Overview nor a current model table is **deleted** — including your own analysis tabs. The only exception is that the delete is skipped when it would empty the workbook, because Sheets requires one surviving tab. Keep private analysis in a separate spreadsheet, or reference this one with `IMPORTRANGE`.
-
-Writes that hit Google's per-minute quota are retried with exponential backoff, up to a bounded number of attempts. A tab whose writes never succeed is reported at the end without aborting the rest of the batch, so check the summary rather than assuming every tab landed.
-
-The published spreadsheet is also packaged as a Steam Community guide; see [docs/steam-guide/README.md](docs/steam-guide/README.md) for that source material.
-
-## Requirements
-
-- Fractured Realms Steam app `3789070` must be installed in a Steam library the companion can discover.
-- The npm and npx paths require Node.js 20 or newer.
-- Standalone release binaries include their runtime and require neither Node.js nor Bun.
-- Linux launch support requires the `steam` command or a detected Flatpak Steam installation.
-- macOS discovery targets Steam in a CrossOver bottle and expects the CrossOver `wine` launcher at `/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/bin/wine`. Native macOS Fractured Realms installations are not a discovery target.
-
-## Installation
-
-Choose the npm package, npx, or one standalone release binary.
-
-| Path | Install or download | Run |
-| --- | --- | --- |
-| npm, global | `npm install --global fractured-realms-companion` | `fractured-companion <command>` |
-| npx, one-off | No installation | `npx --yes fractured-realms-companion <command>` |
-| Windows x64 | Download [`fractured-companion-windows-x64`](https://github.com/glockyco/fractured-realms-companion/releases/latest) | `fractured-companion-windows-x64.exe <command>` |
-| Linux x64 | Download [`fractured-companion-linux-x64`](https://github.com/glockyco/fractured-realms-companion/releases/latest) | `chmod +x ./fractured-companion-linux-x64` then `./fractured-companion-linux-x64 <command>` |
-| macOS Apple silicon | Download [`fractured-companion-darwin-arm64`](https://github.com/glockyco/fractured-realms-companion/releases/latest) | `chmod +x ./fractured-companion-darwin-arm64` then `./fractured-companion-darwin-arm64 <command>` |
-| macOS Intel | Download [`fractured-companion-darwin-x64`](https://github.com/glockyco/fractured-realms-companion/releases/latest) | `chmod +x ./fractured-companion-darwin-x64` then `./fractured-companion-darwin-x64 <command>` |
-
-Every release includes `SHA256SUMS`. Download it beside the binary, then verify before running:
-
-```sh
-# Linux
-sha256sum -c SHA256SUMS
-
-# macOS
-shasum -a 256 -c SHA256SUMS
-```
-
-The macOS binaries are unsigned. If macOS blocks one, try launching it once, open **System Settings → Privacy & Security**, and choose **Open Anyway** for that specific binary. Do not disable Gatekeeper globally or apply a permanent bypass. If local policy prohibits unsigned executables, use npm or npx instead.
-
-## Quickstart
-
-These examples use the globally installed command. An installed package, an npx invocation, or a downloaded binary invoked from `PATH` or by absolute path can be run from any directory.
-
-Treat the first check as a diagnostic sequence:
+The macOS binaries are unsigned. If macOS blocks one, use System Settings, Privacy & Security, Open Anyway for that binary. Do not disable Gatekeeper globally.
 
 ```sh
 fractured-companion doctor --json
@@ -151,67 +25,34 @@ fractured-companion doctor
 fractured-companion launch
 ```
 
-The first `doctor --json` is read-only. Before the first refresh it may report expected failures for missing extracted data, patch metadata, or companion state. `refresh` then extracts the current game data and patches the archive by default. If a game update left a registry unreadable, `refresh` still succeeds and prints an `Incomplete game data for this build: …` line naming the gap. Run `doctor` again and proceed to `launch` only when it reports no blocking failures; a `WARN` row is not blocking.
+The first diagnostic is read-only and can report missing companion state before your first refresh. `refresh` extracts game data and patches the installed game archive. Continue to `launch` only after `doctor` reports no blocking failures. A warning is not blocking, but missing game data can affect plans.
 
-`launch` runs the already-refreshed companion. It starts Fractured Realms with the companion flag, waits for the local host to become healthy, and opens `http://127.0.0.1:48766/`. It does not perform a refresh.
-
-## Commands and options
-
-| Command | Behavior | Command-specific option |
-| --- | --- | --- |
-| `doctor` | Read-only diagnostics for the install, state, patch, model completeness, and local host | `--json` emits diagnostic rows as JSON |
-| `refresh` | Extract current game data and update the companion patch | `--no-patch` extracts and validates without changing the archive |
-| `restore` | Restore the verified original game archive | None |
-| `launch` | Run the already-refreshed companion | `--no-open` leaves the browser closed |
-| `relaunch` | Quit the project-owned running companion, refresh, and launch | `--no-open` leaves the browser closed |
-| `model info` | Print the build, model schema version, completeness, and registry counts | None |
-| `model sql "SELECT …"` | Run one read-only `SELECT` against `model.db` and print JSON rows | None |
-
-Each `doctor` row is `PASS`, `WARN`, or `FAIL`. Only `FAIL` blocks; a `WARN` on the `model` row means the companion works but this game build did not yield every registry.
-
-`--json`, `--no-open`, and `--no-patch` must follow their command. `--steam-root` and `--bottle` may appear on either side of it:
-
-- `--steam-root PATH` selects an explicit Steam root.
-- `--bottle NAME` selects a CrossOver bottle on macOS. The default is `Steam`.
-
-Examples:
-
-```sh
-fractured-companion doctor --steam-root "/path/to/Steam" --json
-fractured-companion refresh --steam-root "/path/to/Steam" --no-patch
-fractured-companion launch --bottle MySteam --no-open
-```
-
-Global help and version output are also available:
-
-```sh
-fractured-companion --help
-fractured-companion --version
-```
+`launch` starts the refreshed game and opens the companion in your browser. It does not refresh or patch the game itself.
 
 ## Steam discovery
 
-The companion checks these default Steam roots, then follows additional libraries from `steamapps/libraryfolders.vdf`.
+The companion searches Steam installations and their library folders. Linux launch support needs the `steam` command or a detected Flatpak Steam installation. macOS support targets CrossOver, not a native macOS game installation, and expects CrossOver in its standard Applications location.
 
-| System | Steam installation searched |
-| --- | --- |
-| Windows | `%ProgramFiles(x86)%\Steam`, `%ProgramFiles%\Steam`, then the current user's Steam registry path |
-| Linux | `~/.local/share/Steam`, `~/.steam/steam`, and `~/.var/app/com.valvesoftware.Steam/.local/share/Steam` |
-| macOS | `~/Library/Application Support/CrossOver/Bottles/<bottle>/drive_c/Program Files (x86)/Steam` |
-
-Use `--steam-root PATH` for a non-standard root. On macOS, use `--bottle NAME` when Steam is not in the default `Steam` bottle.
-
-## Updating, relaunching, and restoring
-
-If `launch` reports that a companion with an outdated revision is running, use:
+If discovery does not find your installation, select the Steam root or CrossOver bottle explicitly:
 
 ```sh
-fractured-companion relaunch
+fractured-companion doctor --steam-root "/path/to/Steam" --json
+fractured-companion launch --bottle MySteam --no-open
 ```
 
-`relaunch` requests shutdown only from the project-owned companion, waits up to 30 seconds, refreshes, and launches. If the game does not exit within that shutdown window, close it manually and retry.
+See [the discovery implementation](src/platform/steam.ts) for searched locations and bottle defaults. Run `fractured-companion --help` for CLI options. Command-specific flags must follow their command.
 
-After a Steam update replaces the archive or build ID, run:
+## Find items and run a plan
+
+In the companion, search for an item to inspect sources, uses, stats, and requirements. The skill view compares actions and their inputs, outputs, tools, and timing.
+
+Add a target to the planner and review the dependency timeline before starting execution. The executor chooses the highest-priority action that can run now. Manual steps do not stop independent work. Use the stop controls to interrupt it.
+
+Rare-drop counts and completion times are estimates. Required shop unlocks need your intervention. Starting a planned action stops active combat, and game checks can refuse an action or block it when inventory space is unavailable.
+
+## Update or remove the patch
+
+After a Steam game update, close the game and run:
 
 ```sh
 fractured-companion refresh
@@ -219,50 +60,47 @@ fractured-companion doctor
 fractured-companion launch
 ```
 
-If changed source anchors make the new build unsafe to patch, `refresh` refuses to touch the game archive and names the anchor it could not match. It may still have published refreshed data into the state directory by that point; the installed archive is what stays untouched. Do not force the patch.
+To update an already-running companion session, use `fractured-companion relaunch`. It requests shutdown from the project-owned companion, refreshes, and launches again. If shutdown fails, close the game manually before retrying.
 
-To restore the original archive:
+To remove the patch:
 
 ```sh
 fractured-companion restore
 ```
 
-Restore is guarded by the Steam build metadata, companion marker, installed patched fingerprint, and verified immutable backup. It refuses mismatched or unknown state.
+Patching and restoration verify archive fingerprints, patch ownership, Steam build metadata, and the original backup. If a check refuses an unknown build or foreign patch, do not bypass it. If a separate tool previously patched the archive, restore it with that tool first.
 
-### External legacy prerequisite
+## What it changes
 
-If the separate `crossover-electron-bridge` project previously patched Fractured Realms, restore that archive from its own `crossover-browser-games` checkout before using this package:
+`refresh` patches the game's Electron ASAR archive and keeps a verified original backup. It writes extracted game data, the overlay pack, and patch metadata outside the game installation. [State-path selection](src/platform/state.ts) defines where these files live. `restore` uses the verified backup rather than downloading game files.
+
+The companion serves its browser UI on loopback only. Direct execution uses live game controls rather than bypassing game requirements. Game updates can make extraction incomplete or make patching unsafe. Read diagnostic warnings before relying on a plan.
+
+To extract data without patching the game, then inspect it:
 
 ```sh
-cd ~/Projects/crossover-browser-games
-PYTHONPATH=src python3 -m crossover_electron_bridge restore fractured-realms
+fractured-companion refresh --no-patch
+fractured-companion model info
+fractured-companion model sql "SELECT id, level_req FROM actions WHERE skill_id='woodcutting' ORDER BY level_req LIMIT 3"
 ```
 
-Then return to this package and run `fractured-companion refresh`. This package does not own the legacy command and intentionally refuses to overwrite an archive carrying the old bridge marker.
+The JSON model is canonical. The SQLite projection and SQL command require an available built-in SQLite driver. `model info` reports paths and extraction gaps.
 
-## Safety and local state
+### Publish a data spreadsheet
 
-- The browser host binds only to `127.0.0.1:48766`. `/api/*` requests require a per-process token and an accepted `Host` header, and an `Origin` header is validated when one is present. `/health` is unauthenticated, and the project-owned quit route accepts a tokenized request without an `Origin`. Request bodies are limited to 64 KiB. A foreign service on that port is a blocking diagnostic failure.
-- Patching fails closed. The companion fingerprints the archive, rejects foreign markers and unexpected or ambiguous source anchors, stages changes, verifies installed bytes, and records exact metadata. Concurrent changes or metadata mismatches stop the operation.
-- The original archive backup is immutable and hash-named. `restore` revalidates metadata, fingerprints, marker ownership, Steam build identity, and backup bytes before writing.
-- State is separate from the game install. Windows uses `%LOCALAPPDATA%\fractured-realms-companion`. Other platforms use `$XDG_STATE_HOME/fractured-realms-companion` or `~/.local/state/fractured-realms-companion`.
-- The local achievement route delegates to the native Steamworks client. It validates achievement names and reports missing-client or native failures instead of fabricating achievement state.
-- Direct execution uses only the game's current action controls and surfaces refusals and stalls instead of bypassing game checks.
+The optional publisher sends the compiled SQLite model to Google Sheets. It requires a built-in SQLite driver even for a dry run:
 
-## Limitations
+```sh
+npm run export-sheets -- --dry-run
+```
 
-- Patching is build-sensitive. A changed entrypoint anchor requires a compatibility update before that build can be patched, and `refresh` names the anchor it could not match.
-- Extraction degrades instead of failing whole, with one boundary: `items`, `actions`, `actionGates`, `skills`, and `xp` are required and still abort a refresh. If a game update reshapes any other registry, `refresh` still publishes the model, `doctor` reports a non-blocking `model` warning naming the missing registries, and the overlay shows a banner. Plans may then omit bonuses that depend on the missing data.
-- The compiled model is also checked for internal consistency (`item-refs`, `skill-refs`, `shop-prices`, `xp-curve`). A failure is reported the same non-blocking way and means the extracted data is suspect, not merely incomplete.
-- Rare-attempt counts and completion times are estimates, not guarantees. A multi-quantity rare drop may exceed the requested inventory target by one drop batch.
-- Required Shop tools are permanent unlocks and must already be purchased. The engine represents these as manual unlock steps; it does not auto-purchase them.
-- A new item target may be blocked when the bag has no free slot. A direct action may also be refused by the game. The scheduler waits only when no action is runnable, resumes on live-state changes, and surfaces these states rather than bypassing game checks.
-- Starting a planned action stops active combat.
-- macOS support targets Steam in CrossOver. The standalone macOS binaries are unsigned.
+To publish, enable the Google Sheets API, create a service-account JSON key, and share a spreadsheet with that account as Editor. Set `FRACTURED_SHEETS_CREDENTIALS` to the key's path and `FRACTURED_SHEETS_SPREADSHEET_ID` to the spreadsheet ID before running `npm run export-sheets`. The publisher remembers the spreadsheet ID for later runs. See [the publisher](scripts/export-sheets.mjs) for configuration and credential lookup.
 
-## Development
+Publishing clears and rewrites model tabs and deletes tabs not present in the model, except when deletion would empty the workbook. Keep analysis in a separate spreadsheet. Check the final summary for failed writes.
 
-Use Node.js 24 for development, matching CI:
+## Development and further reading
+
+Use the Node.js version in [CI](.github/workflows/ci.yml):
 
 ```sh
 npm ci
@@ -271,29 +109,10 @@ npm run build
 npx tsc --noEmit
 ```
 
-`npm test` and `npm run build` run `scripts/embed-runtime.mjs` first, which embeds the runtime and overlay sources. Runtime npm dependencies are intentionally absent. See [AGENTS.md](AGENTS.md) for the scoped coding-agent workflow and repository safety boundaries.
+Read [AGENTS.md](AGENTS.md) for architecture, scoped tests, generated-file rules, and live-game safety boundaries. [PRODUCT.md](PRODUCT.md) describes the product scope, and [DESIGN.md](DESIGN.md) covers the overlay UI. [The Steam guide source](docs/steam-guide/README.md) contains the public spreadsheet guide.
 
-### Live validation and screenshots
-
-These wrappers drive the real game and require an approved live session. Run them in order:
-
-```
-npm run backup-saves
-npm run validate:live
-npm run screenshots
-```
-
-- `npm run backup-saves` copies every existing save location (CrossOver bottle `Fractured Realms`, `Fractured Realms Demo`, `visseron-idle`, Steam `userdata`, and the Arc browser Local Storage that holds the real companion save) into a timestamped `backups/saves-<UTC>/` directory with a `manifest.json`, under the state directory for your platform (`%LOCALAPPDATA%`, `$XDG_STATE_HOME`, or `~/.local/state`). Quit Arc first, or pass `--allow-running-arc` to accept a possibly torn leveldb copy. To restore, copy each directory back to its `sourcePath` while the game and Arc are closed.
-- `npm run validate:live` **refreshes and patches the install** before launching, then drives the overlay through wiki lookup, plan-and-execute, waiting-phase, and persistence checks against an isolated fresh save. It never opens the player's Arc browser. It does not take a backup: it only requires that a save-backup manifest newer than 24 hours already exists, which is why `backup-saves` comes first. Flags: `--no-refresh` skips the refresh and patch, `--keep-open` leaves the game running, `--skip-backup-check` bypasses the 24-hour gate, and `--fresh` discards the isolated profile. Once the browser phase has started, a failure writes a screenshot, storage dump, and console log to `validation-artifacts/<ts>/` in the state directory; earlier failures such as the backup gate just exit. Playwright is a devDependency, but `npm ci` does not install its browser — run `npx playwright install chromium` once.
-- `npm run screenshots` regenerates `docs/screenshots/*.webp` from the committed `docs/screenshots/fixture-save.json` with a frozen clock, so composition and ready-at times stay stable across runs. It requires an already-refreshed install and overwrites those committed images. Its `--export-save` mode replaces the committed fixture save itself.
-
-
-The source of truth for releases is [`.github/workflows/release.yml`](.github/workflows/release.yml). `v*` tags build four standalone targets and `SHA256SUMS`. npm publishing is conditional on `NPM_TOKEN` and uses provenance.
-
-## Support
-
-If the companion is useful to you, you can [support its development on Ko-fi](https://ko-fi.com/wowmuch).
+Live validation is separate from the ordinary checks. It patches and drives a real installation. Read the safety instructions in AGENTS.md and take a save backup before running it. Screenshot tooling also drives the game and overwrites committed images. Release targets and publishing behavior live in [the release workflow](.github/workflows/release.yml).
 
 ## License
 
-Released under the [MIT License](LICENSE).
+[MIT](LICENSE).
